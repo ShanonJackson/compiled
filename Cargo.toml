@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "crates/compiled_swc_plugin",
+]
+resolver = "2"
