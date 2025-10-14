@@ -1,0 +1,11 @@
+[package]
+name = "compiled_css"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust CSS utilities for Compiled SWC plugin"
+
+[dependencies]
+compiled_hash = { path = "../compiled_hash" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

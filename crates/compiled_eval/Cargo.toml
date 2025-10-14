@@ -1,0 +1,12 @@
+[package]
+name = "compiled_eval"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Static evaluation and resolver helpers for the Compiled SWC plugin"
+
+[dependencies]
+oxc_resolver = "11.9.0"
+serde = { version = "1.0", features = ["derive"] }
+swc_core = { version = "0.91.24", features = ["ecma_ast"] }
+thiserror = "1.0"
