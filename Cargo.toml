@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/compiled_hash",
+    "crates/compiled_css",
+    "crates/compiled_eval",
+    "crates/compiled_swc_plugin",
+]
+resolver = "2"
