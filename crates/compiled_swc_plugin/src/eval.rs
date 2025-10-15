@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use oxc_resolver::{ResolveOptions, Resolver};
 use serde::{Deserialize, Serialize};
-use swc_ecma_ast::{Expr, Lit};
+use swc_core::ecma::ast::{Expr, Lit};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

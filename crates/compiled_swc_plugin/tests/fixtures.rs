@@ -2,32 +2,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use compiled_swc_plugin::{take_latest_artifacts, transform};
-use swc_common::{FileName, SourceMap};
-use swc_ecma_ast::Program;
-use swc_ecma_codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
-use swc_ecma_parser::{lexer::Lexer, EsConfig, EsVersion, Parser, StringInput, Syntax, TsConfig};
-use swc_plugin::{
+use swc_core::common::{FileName, SourceMap};
+use swc_core::ecma::ast::EsVersion;
+use swc_core::ecma::ast::Program;
+use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, text_writer::JsWriter};
+use swc_core::ecma::parser::{EsSyntax, TsSyntax};
+use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
+use swc_core::plugin::{
     metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
 };
 
 fn syntax_for_filename(path: &Path) -> Syntax {
     let name = path.to_string_lossy();
     if name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".cts") {
-        Syntax::Typescript(TsConfig {
+        Syntax::Typescript(TsSyntax {
             tsx: name.ends_with(".tsx"),
             decorators: true,
-            dynamic_import: true,
-            import_assertions: true,
             ..Default::default()
         })
     } else {
-        Syntax::Es(EsConfig {
+        Syntax::Es(EsSyntax {
             jsx: name.ends_with(".jsx") || name.ends_with(".tsx"),
             decorators: true,
             export_default_from: true,
-            import_assertions: true,
-            dynamic_import: true,
-            top_level_await: true,
+            import_attributes: true,
             ..Default::default()
         })
     }

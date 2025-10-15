@@ -404,7 +404,7 @@ pub fn atomicize_literal(css: &str, options: &CssOptions) -> CssArtifacts {
 
 #[cfg(test)]
 mod tests {
-    use super::{atomicize_literal, CssOptions};
+    use super::{CssOptions, atomicize_literal};
 
     #[test]
     fn generates_atomic_rules() {

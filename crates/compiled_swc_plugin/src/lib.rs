@@ -3,27 +3,29 @@ pub mod eval;
 pub mod hash;
 
 use crate::css::{
-    add_unit_if_needed, atomicize_literal, atomicize_rules, normalize_selector, AtRuleInput,
-    CssArtifacts, CssOptions, CssRuleInput,
+    AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, add_unit_if_needed, atomicize_literal,
+    atomicize_rules, normalize_selector,
 };
 use crate::hash::hash;
 use once_cell::sync::Lazy;
 use oxc_resolver::{ResolveOptions, Resolver};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use swc_atoms::JsWord;
-use swc_common::{FileName, SourceMap, SyntaxContext, DUMMY_SP};
-use swc_ecma_ast::*;
-use swc_ecma_codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
-use swc_ecma_parser::{EsConfig, EsVersion, Parser, StringInput, Syntax, TsConfig};
-use swc_ecma_utils::{private_ident, quote_ident};
-use swc_ecma_visit::{VisitMut, VisitMutWith};
-use swc_plugin::{
+use swc_core::atoms::JsWord;
+use swc_core::common::{DUMMY_SP, FileName, SourceMap, SyntaxContext};
+use swc_core::ecma::ast::EsVersion;
+use swc_core::ecma::ast::*;
+use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, text_writer::JsWriter};
+use swc_core::ecma::parser::{EsSyntax, TsSyntax};
+use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
+use swc_core::ecma::utils::{private_ident, quote_ident};
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
+use swc_core::plugin::{
     metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
 };
 use swc_plugin_macro::plugin_transform;
@@ -263,21 +265,17 @@ impl Default for PluginOptions {
 
 fn syntax_for_filename(name: &str) -> Syntax {
     if name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".cts") {
-        Syntax::Typescript(TsConfig {
+        Syntax::Typescript(TsSyntax {
             tsx: name.ends_with(".tsx"),
             decorators: true,
-            dynamic_import: true,
-            import_assertions: true,
             ..Default::default()
         })
     } else {
-        Syntax::Es(EsConfig {
+        Syntax::Es(EsSyntax {
             jsx: name.ends_with(".jsx") || name.ends_with(".tsx"),
             decorators: true,
             export_default_from: true,
-            import_assertions: true,
-            dynamic_import: true,
-            top_level_await: true,
+            import_attributes: true,
             ..Default::default()
         })
     }
@@ -640,12 +638,7 @@ fn parse_module_from_source(source: &str, path: &Path) -> Option<Module> {
     let cm: Arc<SourceMap> = Default::default();
     let fm = cm.new_source_file(FileName::Custom(filename.clone()), source.into());
     let syntax = syntax_for_filename(&filename);
-    let lexer = swc_ecma_parser::lexer::Lexer::new(
-        syntax,
-        EsVersion::Es2022,
-        StringInput::from(&*fm),
-        None,
-    );
+    let lexer = Lexer::new(syntax, EsVersion::Es2022, StringInput::from(&*fm), None);
     let mut parser = Parser::new_from(lexer);
     parser.parse_module().ok()
 }
@@ -1029,7 +1022,7 @@ fn normalize_content_value(raw: &str) -> String {
 
     match trimmed {
         "inherit" | "initial" | "none" | "normal" | "revert" | "unset" => {
-            return trimmed.to_string()
+            return trimmed.to_string();
         }
         _ => {}
     }
@@ -3434,33 +3427,24 @@ fn parse_transformed_source(code: &str, filename: &str) -> Program {
 
     let syntax_for_file = |name: &str| {
         if name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".cts") {
-            Syntax::Typescript(TsConfig {
+            Syntax::Typescript(TsSyntax {
                 tsx: name.ends_with(".tsx"),
                 decorators: true,
-                dynamic_import: true,
-                import_assertions: true,
                 ..Default::default()
             })
         } else {
-            Syntax::Es(EsConfig {
+            Syntax::Es(EsSyntax {
                 jsx: name.ends_with(".jsx") || name.ends_with(".tsx"),
                 decorators: true,
                 export_default_from: true,
-                import_assertions: true,
-                dynamic_import: true,
-                top_level_await: true,
+                import_attributes: true,
                 ..Default::default()
             })
         }
     };
 
     let make_parser = |syntax: Syntax| {
-        let lexer = swc_ecma_parser::lexer::Lexer::new(
-            syntax,
-            EsVersion::Es2022,
-            StringInput::from(&*fm),
-            None,
-        );
+        let lexer = Lexer::new(syntax, EsVersion::Es2022, StringInput::from(&*fm), None);
         Parser::new_from(lexer)
     };
 
@@ -3568,17 +3552,17 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        collect_static_bindings, program_to_source, take_latest_artifacts, transform_program,
         ExtractStylesToDirectoryOptions, ModuleEvaluator, PluginOptions, StyleArtifacts,
-        TransformVisitor,
+        TransformVisitor, collect_static_bindings, program_to_source, take_latest_artifacts,
+        transform_program,
     };
     use serde_json::Value;
-    use swc_common::{FileName, SourceMap};
-    use swc_ecma_ast::Program;
-    use swc_ecma_parser::EsVersion;
-    use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
-    use swc_ecma_visit::VisitMutWith;
-    use swc_plugin::{
+    use swc_core::common::{FileName, SourceMap};
+    use swc_core::ecma::ast::EsVersion;
+    use swc_core::ecma::ast::Program;
+    use swc_core::ecma::parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
+    use swc_core::ecma::visit::VisitMutWith;
+    use swc_core::plugin::{
         metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
     };
 
@@ -3588,7 +3572,7 @@ mod tests {
         let cm: Arc<SourceMap> = Default::default();
         let fm = cm.new_source_file(FileName::Custom("test.tsx".into()), code.into());
         let lexer = Lexer::new(
-            Syntax::Typescript(TsConfig {
+            Syntax::Typescript(TsSyntax {
                 tsx: true,
                 decorators: true,
                 ..Default::default()
@@ -3630,10 +3614,12 @@ mod tests {
             "import { css } from '@compiled/react';\nconst className = css`color: red;`;\n",
         );
         assert!(emitted.contains("const className = null"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -3643,10 +3629,12 @@ mod tests {
         );
         assert!(emitted.contains("const className = null"));
         assert!(!emitted.contains("CompiledCss"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -3654,10 +3642,12 @@ mod tests {
         let (_, artifacts) = transform_source(
             "import { css } from '@compiled/react';\nconst styles = css({ content: '' });\n",
         );
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule == "._1sb2b3bt{content:\"\"}"));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule == "._1sb2b3bt{content:\"\"}")
+        );
     }
 
     #[test]
@@ -3665,10 +3655,12 @@ mod tests {
         let (_, artifacts) = transform_source(
             "import { css } from '@compiled/react';\nconst styles = css({ content: 'hello' });\n",
         );
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule == "._1sb21e8g{content:\"hello\"}"));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule == "._1sb21e8g{content:\"hello\"}")
+        );
     }
 
     #[test]
@@ -3676,10 +3668,12 @@ mod tests {
         let (_, artifacts) = transform_source(
             "import { css } from '@compiled/react';\nconst styles = css({ content: \"'hello'\" });\n",
         );
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule == "._1sb25hbz{content:'hello'}"));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule == "._1sb25hbz{content:'hello'}")
+        );
     }
 
     #[test]
@@ -3779,14 +3773,18 @@ const className = css`color: ${brand};`;
         let name_tracker = NameTracker::from_module(&module);
         let mut visitor = TransformVisitor::new(&PluginOptions::default(), bindings, name_tracker);
         module.visit_mut_with(&mut visitor);
-        assert!(visitor
-            .collected_rules
-            .iter()
-            .any(|rule| rule.contains("color:green")));
+        assert!(
+            visitor
+                .collected_rules
+                .iter()
+                .any(|rule| rule.contains("color:green"))
+        );
         let included = evaluator.included_files();
-        assert!(included
-            .iter()
-            .any(|path| path.to_string_lossy().contains("tokens.ts")));
+        assert!(
+            included
+                .iter()
+                .any(|path| path.to_string_lossy().contains("tokens.ts"))
+        );
         let _ = fs::remove_dir_all(&temp_root);
     }
 
@@ -3829,10 +3827,12 @@ const className = css({ color: brand });
         assert!(emitted.contains("const className = null"));
 
         let artifacts = take_latest_artifacts();
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:green")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:green"))
+        );
 
         let _ = fs::remove_dir_all(&temp_root);
     }
@@ -3866,10 +3866,12 @@ const className = css({
         assert!(emitted.contains("import { ax, ix } from \"@compiled/react/runtime\";"));
         assert!(emitted.contains("forwardRef"));
         assert!(emitted.contains("Styled.displayName"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -3880,10 +3882,12 @@ const className = css({
         assert!(emitted.contains("import { ax, ix } from \"@compiled/react/runtime\";"));
         assert!(emitted.contains("forwardRef"));
         assert!(emitted.contains("Styled.displayName"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -3914,10 +3918,12 @@ const className = css({
         );
         assert!(emitted.contains("jsxs(CC,{"));
         assert!(emitted.contains("jsx(CS,{"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -3950,10 +3956,12 @@ const className = css({
             "import { keyframes } from '@compiled/react';\nconst fadeIn = keyframes`from { opacity: 0; } to { opacity: 1; }`;\n",
         );
         assert!(emitted.contains("const fadeIn = null"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("@keyframes")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("@keyframes"))
+        );
     }
 
     #[test]
@@ -3963,10 +3971,12 @@ const className = css({
         );
         assert!(emitted.contains("const fadeIn = null"));
         assert!(!emitted.contains("animation`"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("@keyframes")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("@keyframes"))
+        );
     }
 
     #[test]
@@ -3975,10 +3985,12 @@ const className = css({
             "import { cssMap } from '@compiled/react';\nconst map = cssMap({ primary: { backgroundColor: 'red' } });\n",
         );
         assert!(emitted.contains("primary"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("background-color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("background-color:red"))
+        );
     }
 
     #[test]
@@ -3988,10 +4000,12 @@ const className = css({
         );
         assert!(emitted.contains("primary"));
         assert!(!emitted.contains("compiledMap"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("background-color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("background-color:red"))
+        );
     }
 
     #[test]
@@ -4000,10 +4014,12 @@ const className = css({
             "import '@compiled/react';\nconst styles = { color: 'red' };\nconst Component = () => <div css={styles} />;\n",
         );
         assert!(emitted.contains("className"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -4012,18 +4028,24 @@ const className = css({
             "import '@compiled/react';\nconst Component = () => (\n  <div css={{\n    color: 'red',\n    '&:hover': { color: 'blue' },\n    '@media': {\n      'screen and (min-width: 500px)': {\n        color: 'green',\n      },\n    },\n    content: ''\n  }} />\n);\n",
         );
 
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule == "._syaz5scu{color:red}"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule == "._1sb2b3bt{content:\"\"}"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule == "._30l313q2:hover{color:blue}"));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule == "._syaz5scu{color:red}")
+        );
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule == "._1sb2b3bt{content:\"\"}")
+        );
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule == "._30l313q2:hover{color:blue}")
+        );
         assert!(artifacts.style_rules.iter().any(|rule| {
             rule.contains("@media") && rule.contains("_f8e2bf54") && rule.contains("color:green")
         }));
@@ -4041,10 +4063,12 @@ const className = css({
         assert!(emitted.contains("import { jsx, jsxs } from \"react/jsx-runtime\";"));
         assert!(emitted.contains("jsxs(CC,{"));
         assert!(emitted.contains("jsx(CS,{"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -4066,10 +4090,12 @@ const className = css({
         );
         assert!(!emitted.contains("ClassNames"));
         assert!(emitted.contains("ax(["));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -4106,10 +4132,12 @@ const className = css({
         );
         assert!(emitted.contains("forwardRef"));
         assert!(!emitted.contains("compileStyled"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -4122,10 +4150,12 @@ const className = css({
         );
         assert!(emitted.contains("jsxs(CC,{"));
         assert!(emitted.contains("jsx(CS,{"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -4134,10 +4164,12 @@ const className = css({
             "import { css } from '@compiled/react';\nconst styles = css({ selectors: { '&:hover': { color: 'red' } } });\n",
         );
         assert!(emitted.contains("const styles = null"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains(":hover{color:red}")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains(":hover{color:red}"))
+        );
     }
 
     #[test]
@@ -4146,10 +4178,12 @@ const className = css({
             "import { css } from '@compiled/react';\nconst styles = css({ '@media screen and (min-width: 500px)': { color: 'red' } });\n",
         );
         assert!(emitted.contains("const styles = null"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("@media")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("@media"))
+        );
     }
 
     #[test]
@@ -4160,10 +4194,12 @@ const className = css({
             "import { css } from '@compiled/react';\nconst styles = css({ color: 'red' });\n",
             options,
         );
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains(":not(#")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains(":not(#"))
+        );
     }
 
     #[test]
@@ -4195,19 +4231,27 @@ const className = css({
             .collect();
         assert_eq!(media_rules.len(), 6);
         assert!(media_rules.iter().any(|rule| rule.contains("color:red")));
-        assert!(media_rules
-            .iter()
-            .any(|rule| rule.contains("background-color:blue")));
+        assert!(
+            media_rules
+                .iter()
+                .any(|rule| rule.contains("background-color:blue"))
+        );
         assert!(media_rules.iter().any(|rule| rule.contains("padding:12px")));
-        assert!(media_rules
-            .iter()
-            .any(|rule| rule.contains("margin-top:4px")));
-        assert!(media_rules
-            .iter()
-            .any(|rule| rule.contains("border-color:black")));
-        assert!(media_rules
-            .iter()
-            .any(|rule| rule.contains("border-radius:2px")));
+        assert!(
+            media_rules
+                .iter()
+                .any(|rule| rule.contains("margin-top:4px"))
+        );
+        assert!(
+            media_rules
+                .iter()
+                .any(|rule| rule.contains("border-color:black"))
+        );
+        assert!(
+            media_rules
+                .iter()
+                .any(|rule| rule.contains("border-radius:2px"))
+        );
     }
 
     #[test]
@@ -4217,8 +4261,11 @@ const className = css({
         );
         assert!(emitted.contains("const styles = null"));
         assert_eq!(artifacts.style_rules.len(), 1);
-        assert!(artifacts.style_rules.iter().any(|rule| rule
-            .contains("@property --radius{syntax:\"<length>\";inherits:false;initial-value:0px}")));
+        assert!(artifacts.style_rules.iter().any(|rule| {
+            rule.contains(
+                "@property --radius{syntax:\"<length>\";inherits:false;initial-value:0px}",
+            )
+        }));
     }
 
     #[test]
@@ -4227,14 +4274,18 @@ const className = css({
             "import { css } from '@compiled/react';\nconst styles = css({ color: 'red' }, { backgroundColor: 'blue' });\n",
         );
         assert!(emitted.contains("const styles = null"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("background-color:blue")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("background-color:blue"))
+        );
     }
 
     #[test]
@@ -4243,14 +4294,18 @@ const className = css({
             "import { css } from '@compiled/react';\nconst styles = css([{ color: 'red' }, { backgroundColor: 'blue' }]);\n",
         );
         assert!(emitted.contains("const styles = null"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("background-color:blue")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("background-color:blue"))
+        );
     }
 
     #[test]
@@ -4259,14 +4314,18 @@ const className = css({
             "const Component = () => <div xcss={{ color: 'red', backgroundColor: 'blue' }} />;\n",
         );
         assert!(emitted.contains("_syaz5scu _bfhk13q2"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("background-color:blue")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("background-color:blue"))
+        );
     }
 
     #[test]
@@ -4283,10 +4342,12 @@ const className = css({
             "import { cssMap } from '@compiled/react';\nconst styles = cssMap({ primary: { color: 'red' } });\nconst Component = () => <div xcss={styles.primary} />;\n",
         );
         assert!(emitted.contains("xcss={styles.primary}"));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
@@ -4302,10 +4363,12 @@ const className = css({
         assert!(emitted.contains("ac(["));
         assert!(emitted.contains("import { ac, ix } from \"@compiled/react/runtime\";"));
         assert!(artifacts.style_rules.iter().any(|rule| rule.contains(".a")));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("font-size:12px")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("font-size:12px"))
+        );
     }
 
     #[test]
@@ -4317,10 +4380,12 @@ const className = css({
             options,
         );
         assert!(emitted.contains("require(\"./__compiled.css?style="));
-        assert!(artifacts
-            .style_rules
-            .iter()
-            .any(|rule| rule.contains("color:red")));
+        assert!(
+            artifacts
+                .style_rules
+                .iter()
+                .any(|rule| rule.contains("color:red"))
+        );
     }
 
     #[test]
