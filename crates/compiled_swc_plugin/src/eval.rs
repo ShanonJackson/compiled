@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use oxc_resolver::{ResolveOptions, Resolver};
 use serde::{Deserialize, Serialize};
-use swc_core::ecma::ast::{Expr, Lit};
+use swc_ecma_ast::{Expr, Lit};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -84,10 +84,8 @@ pub enum EvaluatedValue {
 mod tests {
     use std::path::PathBuf;
 
-    use swc_core::{
-        common::DUMMY_SP,
-        ecma::ast::{Expr, Lit, Str},
-    };
+    use swc_common::DUMMY_SP;
+    use swc_ecma_ast::{Expr, Lit, Str};
 
     use super::{EvaluatedValue, StaticEvaluator};
 

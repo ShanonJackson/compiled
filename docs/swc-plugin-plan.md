@@ -100,7 +100,7 @@ The plugin injects runtime helpers (`ax`/`ac`/`ix`/`CC`/`CS`) depending on wheth
 - Share resolver instances across files when running in watch mode to avoid re-reading the filesystem unnecessarily, similar to the Babel cache initialisation when `cache: true` is provided.【F:packages/babel-plugin/src/babel-plugin.ts†L71-L118】
 
 ## Next steps
-1. **Scaffold crates:** set up Cargo workspace entries, add dependencies (`swc_core`, `serde`, `oxc_resolver`, `murmur2` or custom implementation) and wire basic plugin entry that mirrors Babel’s no-op pass.
+1. **Scaffold crates:** set up Cargo workspace entries, add dependencies (`swc_common`, `swc_ecma_ast`, `swc_ecma_parser`, `swc_ecma_visit`, `swc_ecma_codegen`, `swc_plugin`, `serde`, `oxc_resolver`, `murmur2` or custom implementation) and wire basic plugin entry that mirrors Babel’s no-op pass.
 2. **Port hashing utilities:** implement the murmurhash helper in Rust and add regression tests comparing to the JS version using fixture data.【F:packages/utils/src/hash.ts†L1-L39】
 3. **Implement CSS transformer:** port atomicify, sorting, and sheet extraction logic; ensure outputs match existing fixtures.
 4. **Build evaluation/resolver layer:** translate `evaluateExpression`/`resolveBinding` features, integrate caching, and verify import traversal with Babel parity tests.

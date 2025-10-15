@@ -16,16 +16,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use swc_core::common::{FileName, DUMMY_SP};
-use swc_core::ecma::ast::*;
-use swc_core::ecma::atoms::JsWord;
-use swc_core::ecma::codegen::{text_writer::JsWriter, Emitter};
-use swc_core::ecma::parser::{EsConfig, EsVersion, Parser, StringInput, Syntax, TsConfig};
-use swc_core::ecma::utils::{private_ident, quote_ident};
-use swc_core::ecma::visit::{VisitMut, VisitMutWith};
-use swc_core::plugin::metadata::TransformPluginMetadataContext;
-use swc_core::plugin::plugin_transform;
-use swc_core::plugin::proxies::TransformPluginProgramMetadata;
+use swc_atoms::JsWord;
+use swc_common::{FileName, SourceMap, SyntaxContext, DUMMY_SP};
+use swc_ecma_ast::*;
+use swc_ecma_codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
+use swc_ecma_parser::{EsConfig, EsVersion, Parser, StringInput, Syntax, TsConfig};
+use swc_ecma_utils::{private_ident, quote_ident};
+use swc_ecma_visit::{VisitMut, VisitMutWith};
+use swc_plugin::{
+    metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
+};
+use swc_plugin_macro::plugin_transform;
 
 static LATEST_ARTIFACTS: Lazy<Mutex<StyleArtifacts>> =
     Lazy::new(|| Mutex::new(StyleArtifacts::default()));
@@ -285,12 +286,12 @@ fn syntax_for_filename(name: &str) -> Syntax {
 fn emit_expression(expr: &Expr) -> String {
     use std::sync::Arc;
 
-    let cm: Arc<swc_core::common::SourceMap> = Default::default();
+    let cm: Arc<SourceMap> = Default::default();
     let mut buf = Vec::new();
     {
         let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
         let mut emitter = Emitter {
-            cfg: swc_core::ecma::codegen::Config {
+            cfg: CodegenConfig {
                 minify: false,
                 target: Some(EsVersion::Es2022),
                 ascii_only: false,
@@ -309,12 +310,12 @@ fn emit_expression(expr: &Expr) -> String {
 fn program_to_source(program: &Program) -> Result<String, std::io::Error> {
     use std::sync::Arc;
 
-    let cm: Arc<swc_core::common::SourceMap> = Default::default();
+    let cm: Arc<SourceMap> = Default::default();
     let mut buf = Vec::new();
     {
         let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
         let mut emitter = Emitter {
-            cfg: swc_core::ecma::codegen::Config {
+            cfg: CodegenConfig {
                 minify: false,
                 target: Some(EsVersion::Es2022),
                 ascii_only: false,
@@ -394,7 +395,7 @@ impl StaticValue {
     }
 }
 
-fn to_id(ident: &Ident) -> (JsWord, swc_core::common::SyntaxContext) {
+fn to_id(ident: &Ident) -> (JsWord, SyntaxContext) {
     (ident.sym.clone(), ident.span.ctxt())
 }
 
@@ -402,14 +403,14 @@ fn collect_static_bindings(
     module: &Module,
     evaluator: Option<&ModuleEvaluator>,
     module_path: Option<&Path>,
-) -> HashMap<(JsWord, swc_core::common::SyntaxContext), StaticValue> {
+) -> HashMap<(JsWord, SyntaxContext), StaticValue> {
     let mut visiting = HashSet::new();
     collect_module_statics_from_ast(module, module_path, evaluator, &mut visiting).bindings
 }
 
 fn evaluate_static(
     expr: &Expr,
-    bindings: &HashMap<(JsWord, swc_core::common::SyntaxContext), StaticValue>,
+    bindings: &HashMap<(JsWord, SyntaxContext), StaticValue>,
 ) -> Option<StaticValue> {
     match expr {
         Expr::Lit(Lit::Str(str)) => Some(StaticValue::Str(str.value.to_string())),
@@ -532,7 +533,7 @@ fn evaluate_static(
 
 fn record_var_decl(
     var: &VarDecl,
-    bindings: &mut HashMap<(JsWord, swc_core::common::SyntaxContext), StaticValue>,
+    bindings: &mut HashMap<(JsWord, SyntaxContext), StaticValue>,
 ) -> Vec<(Ident, StaticValue)> {
     let mut recorded = Vec::new();
     if var.kind != VarDeclKind::Const {
@@ -555,7 +556,7 @@ const DEFAULT_RESOLVE_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mj
 
 #[derive(Clone, Default)]
 struct ModuleStaticResult {
-    bindings: HashMap<(JsWord, swc_core::common::SyntaxContext), StaticValue>,
+    bindings: HashMap<(JsWord, SyntaxContext), StaticValue>,
     exports: HashMap<String, StaticValue>,
 }
 
@@ -636,10 +637,10 @@ fn parse_module_from_source(source: &str, path: &Path) -> Option<Module> {
     use std::sync::Arc;
 
     let filename = path.to_string_lossy().to_string();
-    let cm: Arc<swc_core::common::SourceMap> = Default::default();
+    let cm: Arc<SourceMap> = Default::default();
     let fm = cm.new_source_file(FileName::Custom(filename.clone()), source.into());
     let syntax = syntax_for_filename(&filename);
-    let lexer = swc_core::ecma::parser::lexer::Lexer::new(
+    let lexer = swc_ecma_parser::lexer::Lexer::new(
         syntax,
         EsVersion::Es2022,
         StringInput::from(&*fm),
@@ -1437,8 +1438,8 @@ fn binding_ident_from_pat(pat: &Pat) -> Option<Ident> {
 
 struct ClassNamesBodyVisitor<'a, 'b> {
     parent: &'a mut TransformVisitor<'b>,
-    css_idents: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-    style_idents: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
+    css_idents: HashSet<(JsWord, SyntaxContext)>,
+    style_idents: HashSet<(JsWord, SyntaxContext)>,
     failed: bool,
     sheets: Vec<String>,
 }
@@ -1446,8 +1447,8 @@ struct ClassNamesBodyVisitor<'a, 'b> {
 impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
     fn new(
         parent: &'a mut TransformVisitor<'b>,
-        css_idents: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-        style_idents: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
+        css_idents: HashSet<(JsWord, SyntaxContext)>,
+        style_idents: HashSet<(JsWord, SyntaxContext)>,
     ) -> Self {
         Self {
             parent,
@@ -1615,13 +1616,13 @@ enum CompiledImportKind {
 
 struct TransformVisitor<'a> {
     options: &'a PluginOptions,
-    bindings: HashMap<(JsWord, swc_core::common::SyntaxContext), StaticValue>,
-    css_imports: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-    keyframes_imports: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-    styled_imports: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-    css_map_imports: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-    compiled_import_kinds: HashMap<(JsWord, swc_core::common::SyntaxContext), CompiledImportKind>,
-    retain_imports: HashSet<(JsWord, swc_core::common::SyntaxContext)>,
+    bindings: HashMap<(JsWord, SyntaxContext), StaticValue>,
+    css_imports: HashSet<(JsWord, SyntaxContext)>,
+    keyframes_imports: HashSet<(JsWord, SyntaxContext)>,
+    styled_imports: HashSet<(JsWord, SyntaxContext)>,
+    css_map_imports: HashSet<(JsWord, SyntaxContext)>,
+    compiled_import_kinds: HashMap<(JsWord, SyntaxContext), CompiledImportKind>,
+    retain_imports: HashSet<(JsWord, SyntaxContext)>,
     collected_rules: Vec<String>,
     seen_rules: HashSet<String>,
     needs_runtime_ax: bool,
@@ -1650,7 +1651,7 @@ struct TransformVisitor<'a> {
 impl<'a> TransformVisitor<'a> {
     fn new(
         options: &'a PluginOptions,
-        bindings: HashMap<(JsWord, swc_core::common::SyntaxContext), StaticValue>,
+        bindings: HashMap<(JsWord, SyntaxContext), StaticValue>,
         name_tracker: NameTracker,
     ) -> Self {
         Self {
@@ -1890,8 +1891,8 @@ impl<'a> TransformVisitor<'a> {
     fn collect_class_names_bindings(
         &self,
         pat: &Pat,
-        css_idents: &mut HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-        style_idents: &mut HashSet<(JsWord, swc_core::common::SyntaxContext)>,
+        css_idents: &mut HashSet<(JsWord, SyntaxContext)>,
+        style_idents: &mut HashSet<(JsWord, SyntaxContext)>,
     ) -> bool {
         match pat {
             Pat::Object(object) => {
@@ -1947,8 +1948,8 @@ impl<'a> TransformVisitor<'a> {
         &self,
         params: &[Pat],
     ) -> Option<(
-        HashSet<(JsWord, swc_core::common::SyntaxContext)>,
-        HashSet<(JsWord, swc_core::common::SyntaxContext)>,
+        HashSet<(JsWord, SyntaxContext)>,
+        HashSet<(JsWord, SyntaxContext)>,
     )> {
         let first = params.first()?;
         let mut css_idents = HashSet::new();
@@ -3428,7 +3429,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
 fn parse_transformed_source(code: &str, filename: &str) -> Program {
     use std::sync::Arc;
 
-    let cm: Arc<swc_core::common::SourceMap> = Default::default();
+    let cm: Arc<SourceMap> = Default::default();
     let fm = cm.new_source_file(FileName::Custom(filename.into()), code.into());
 
     let syntax_for_file = |name: &str| {
@@ -3454,7 +3455,7 @@ fn parse_transformed_source(code: &str, filename: &str) -> Program {
     };
 
     let make_parser = |syntax: Syntax| {
-        let lexer = swc_core::ecma::parser::lexer::Lexer::new(
+        let lexer = swc_ecma_parser::lexer::Lexer::new(
             syntax,
             EsVersion::Es2022,
             StringInput::from(&*fm),
@@ -3572,13 +3573,14 @@ mod tests {
         TransformVisitor,
     };
     use serde_json::Value;
-    use swc_core::common::{FileName, SourceMap};
-    use swc_core::ecma::ast::Program;
-    use swc_core::ecma::parser::EsVersion;
-    use swc_core::ecma::parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
-    use swc_core::ecma::visit::VisitMutWith;
-    use swc_core::plugin::metadata::TransformPluginMetadataContext;
-    use swc_core::plugin::proxies::TransformPluginProgramMetadata;
+    use swc_common::{FileName, SourceMap};
+    use swc_ecma_ast::Program;
+    use swc_ecma_parser::EsVersion;
+    use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
+    use swc_ecma_visit::VisitMutWith;
+    use swc_plugin::{
+        metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
+    };
 
     fn parse(code: &str) -> Program {
         use std::sync::Arc;

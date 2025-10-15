@@ -2,14 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use compiled_swc_plugin::{take_latest_artifacts, transform};
-use swc_core::common::{FileName, SourceMap};
-use swc_core::ecma::ast::Program;
-use swc_core::ecma::codegen::{text_writer::JsWriter, Emitter};
-use swc_core::ecma::parser::{
-    lexer::Lexer, EsConfig, EsVersion, Parser, StringInput, Syntax, TsConfig,
+use swc_common::{FileName, SourceMap};
+use swc_ecma_ast::Program;
+use swc_ecma_codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
+use swc_ecma_parser::{lexer::Lexer, EsConfig, EsVersion, Parser, StringInput, Syntax, TsConfig};
+use swc_plugin::{
+    metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
 };
-use swc_core::plugin::metadata::TransformPluginMetadataContext;
-use swc_core::plugin::proxies::TransformPluginProgramMetadata;
 
 fn syntax_for_filename(path: &Path) -> Syntax {
     let name = path.to_string_lossy();
@@ -58,7 +57,7 @@ fn emit_program(program: &Program) -> String {
     {
         let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
         let mut emitter = Emitter {
-            cfg: swc_core::ecma::codegen::Config {
+            cfg: CodegenConfig {
                 minify: false,
                 target: Some(EsVersion::Es2022),
                 ascii_only: false,
