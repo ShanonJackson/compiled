@@ -1,61 +1,56 @@
-import { forwardRef } from 'react';
-import * as React from 'react';
+import { ClassNames } from '@compiled/react';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
-const _14 = "._syaz14zx{color:crimson}";
-const _13 = "._syazxbvz{color:#1e90ff}";
-const _12 = "@media (min-width:600px){._72bc18cn:hover{content:\"hover\"}._1qiwr3uz:hover{background-color:#000}}";
-const _11 = "._1wybdlk8{font-size:14px}";
-const _10 = "._aetr1vm8:after{content:\"!\"}";
-const _9 = "._y44v65d0{animation:k17e8rkr 2s linear}";
-const _8 = "@keyframes k17e8rkr{0%{opacity:0}to{opacity:1}}";
-const _7 = "._d7ut1o36:focus ._d7ut1o36{outline-width:medium}";
-const _6 = "._cwctglyw:focus ._cwctglyw{outline-style:none}";
-const _5 = "._1l201r31:focus ._1l201r31{outline-color:currentColor}";
-const _4 = "._19bvftgi{padding-left:8px}";
-const _3 = "._n3tdftgi{padding-bottom:8px}";
-const _2 = "._u5f3ftgi{padding-right:8px}";
-const _ = "._ca0qftgi{padding-top:8px}";
+import * as React from "react";
+import { forwardRef } from "react";
+const _ = ":focus ._f1qk14u1{outline:none}";
+const _1 = "._gq7jriy3{padding:8px}";
 const fade = null;
 const toneMap = {
-  primary: "_syazxbvz",
-  danger: "_syaz14zx"
+    danger: "_9ad03wth",
+    primary: "_9ad0j63n"
 };
 const baseStyles = null;
-const Wrapper = forwardRef(({
-  as: C = "div",
-  style: __cmpls,
-  ...__cmplp
-}, __cmplr) => {
-  if (__cmplp.innerRef) {
-    throw new Error("Please use 'ref' instead of 'innerRef'.");
-  }
-  return jsxs(CC, {
-    children: [jsx(CS, {
-      children: [_, _2, _3, _4, _5, _6, _7]
-    }), jsx(C, {
-      ...__cmplp,
-      style: __cmpls,
-      ref: __cmplr,
-      className: ax(["_ca0qftgi _u5f3ftgi _n3tdftgi _19bvftgi _1l201r31 _cwctglyw _d7ut1o36", __cmplp.className])
-    })]
-  });
+const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=>{
+    if (__cmplp.innerRef) {
+        throw new Error("Please use 'ref' instead of 'innerRef'.");
+    }
+    return jsxs(CC, {
+        children: [
+            jsx(CS, {
+                children: [
+                    _,
+                    _1
+                ]
+            }),
+            jsx(C, {
+                ...__cmplp,
+                style: __cmpls,
+                ref: __cmplr,
+                className: ax([
+                    "_f1qk14u1",
+                    "_gq7jriy3",
+                    __cmplp.className
+                ])
+            })
+        ]
+    });
 });
-if (process.env.NODE_ENV !== 'production') {
-  Wrapper.displayName = 'Wrapper';
+export const Component = ()=>(<ClassNames>
+    {({ css })=>(<Wrapper css={[
+            baseStyles,
+            toneMap.primary
+        ]}>
+        <span className={css({
+            animation: `${fade} 2s linear`,
+            ':after': {
+                content: '"!"'
+            }
+        })}>
+          combo
+        </span>
+      </Wrapper>)}
+  </ClassNames>);
+if (!process.env.NODE_ENV === "production") {
+    Wrapper.displayName = "Wrapper";
 }
-export const Component = () => jsxs(CC, {
-  children: [jsx(CS, {
-    children: [_8, _9, _10]
-  }), jsxs(CC, {
-    children: [jsx(CS, {
-      children: [_11, _12, _13, _14]
-    }), jsx(Wrapper, {
-      className: ax(["_1wybdlk8 _72bc18cn _1qiwr3uz", toneMap.primary]),
-      children: jsx("span", {
-        className: ax(["_y44v65d0 _aetr1vm8"]),
-        children: "combo"
-      })
-    })]
-  })]
-});

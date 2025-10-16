@@ -237,7 +237,7 @@ fn apply_increase_specificity(selector: &str) -> String {
     result
 }
 
-fn wrap_at_rules(mut css: String, at_rules: &[AtRuleInput]) -> String {
+pub(crate) fn wrap_at_rules(mut css: String, at_rules: &[AtRuleInput]) -> String {
     for at_rule in at_rules.iter().rev() {
         let name = at_rule.name.trim();
         let params = at_rule.params.trim();
@@ -418,11 +418,11 @@ mod tests {
         let mut options = CssOptions::default();
         options
             .class_name_compression_map
-            .insert("syaz13q2".into(), "a".into());
+            .insert("1ylx13q2".into(), "a".into());
         let artifacts = atomicize_literal("color: blue;", &options);
         assert_eq!(artifacts.rules.len(), 1);
         let rule = &artifacts.rules[0];
-        assert_eq!(rule.class_name, "_syaz_a");
+        assert_eq!(rule.class_name, "_1ylx_a");
         assert!(rule.css.contains(".a{"));
     }
 }

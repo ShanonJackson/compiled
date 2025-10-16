@@ -1,16 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use compiled_swc_plugin::{take_latest_artifacts, transform};
-use swc_core::common::{FileName, SourceMap};
+use compiled_swc_plugin::{take_latest_artifacts, transform_program_for_testing};
+use swc_core::common::{FileName, GLOBALS, Globals, SourceMap};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::Program;
 use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, text_writer::JsWriter};
 use swc_core::ecma::parser::{EsSyntax, TsSyntax};
 use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
-use swc_core::plugin::{
-    metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
-};
 
 fn syntax_for_filename(path: &Path) -> Syntax {
     let name = path.to_string_lossy();
@@ -36,7 +33,7 @@ fn parse_program(path: &Path, source: &str) -> Program {
 
     let cm: Arc<SourceMap> = Default::default();
     let filename = FileName::Real(path.to_path_buf());
-    let fm = cm.new_source_file(filename, source.into());
+    let fm = cm.new_source_file(filename.into(), source.into());
     let lexer = Lexer::new(
         syntax_for_filename(path),
         EsVersion::Es2022,
@@ -54,14 +51,10 @@ fn emit_program(program: &Program) -> String {
     let mut buf = Vec::new();
     {
         let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
+        let mut cfg = CodegenConfig::default();
+        cfg.target = EsVersion::Es2022;
         let mut emitter = Emitter {
-            cfg: CodegenConfig {
-                minify: false,
-                target: Some(EsVersion::Es2022),
-                ascii_only: false,
-                omit_last_semi: false,
-                inline_script: false,
-            },
+            cfg,
             comments: None,
             cm,
             wr: writer,
@@ -74,17 +67,17 @@ fn emit_program(program: &Program) -> String {
 }
 
 fn run_transform(input_path: &Path, source: &str) -> String {
-    let program = parse_program(input_path, source);
-    let mut metadata = TransformPluginProgramMetadata::default();
-    metadata.context = Some(TransformPluginMetadataContext {
-        filename: Some(input_path.to_string_lossy().to_string()),
-        ..Default::default()
-    });
-    metadata.transform_plugin_config = Some("{\"extract\":false}".to_string());
-    let transformed = transform(program, metadata);
-    // drain artifacts so subsequent fixtures start from a clean state
-    let _ = take_latest_artifacts();
-    emit_program(&transformed)
+    GLOBALS.set(&Globals::new(), || {
+        let program = parse_program(input_path, source);
+        let transformed = transform_program_for_testing(
+            program,
+            input_path.to_string_lossy().to_string(),
+            Some("{\"extract\":false}"),
+        );
+        // drain artifacts so subsequent fixtures start from a clean state
+        let _ = take_latest_artifacts();
+        emit_program(&transformed)
+    })
 }
 
 fn fixtures_dir() -> PathBuf {

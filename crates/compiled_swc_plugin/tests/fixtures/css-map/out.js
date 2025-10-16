@@ -1,16 +1,8 @@
-import * as React from 'react';
-import { ax, ix, CC, CS } from "@compiled/react/runtime";
-import { jsx, jsxs } from "react/jsx-runtime";
 const styles = {
-  primary: "_syazso35",
-  secondary: "_syaz1iu8"
+    primary: "_9ad0152v",
+    secondary: "_9ad0zr9i"
 };
-export const Component = () => jsxs("div", {
-  children: [jsx("span", {
-    className: styles.primary(),
-    children: "Primary"
-  }), jsx("span", {
-    className: styles.secondary(),
-    children: "Secondary"
-  })]
-});
+export const Component = ()=>(<div>
+    <span className={styles.primary()}>Primary</span>
+    <span className={styles.secondary()}>Secondary</span>
+  </div>);

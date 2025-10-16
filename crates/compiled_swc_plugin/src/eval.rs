@@ -29,7 +29,8 @@ impl StaticEvaluator {
         if !options.extensions.is_empty() {
             resolve_options.extensions = options.extensions.clone();
         }
-        let resolver = Resolver::new(cwd.to_path_buf(), resolve_options);
+        resolve_options.cwd = Some(cwd.to_path_buf());
+        let resolver = Resolver::new(resolve_options);
         Self {
             resolver,
             _options: options,
@@ -37,10 +38,11 @@ impl StaticEvaluator {
     }
 
     pub fn resolve(&self, from: &Path, request: &str) -> Option<PathBuf> {
+        let from_dir = from.parent().unwrap_or(from);
         self.resolver
-            .resolve(from, request)
+            .resolve(from_dir, request)
             .ok()
-            .map(|res| res.full_path)
+            .map(|res| res.full_path())
     }
 
     pub fn evaluate(&self, expr: &Expr) -> Result<Option<EvaluatedValue>, EvaluationError> {
@@ -59,9 +61,8 @@ impl StaticEvaluator {
                     .map(|q| {
                         q.cooked
                             .as_ref()
-                            .or_else(|| q.raw.as_ref())
                             .map(|atom| atom.to_string())
-                            .unwrap_or_default()
+                            .unwrap_or_else(|| q.raw.to_string())
                     })
                     .collect::<String>();
                 Ok(Some(EvaluatedValue::String(cooked)))
@@ -84,8 +85,8 @@ pub enum EvaluatedValue {
 mod tests {
     use std::path::PathBuf;
 
-    use swc_common::DUMMY_SP;
-    use swc_ecma_ast::{Expr, Lit, Str};
+    use swc_core::common::DUMMY_SP;
+    use swc_core::ecma::ast::{Expr, Lit, Str};
 
     use super::{EvaluatedValue, StaticEvaluator};
 

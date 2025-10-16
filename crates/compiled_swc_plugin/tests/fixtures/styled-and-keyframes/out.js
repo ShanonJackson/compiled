@@ -1,32 +1,16 @@
-import { forwardRef } from 'react';
-import * as React from 'react';
-import { ax, ix, CC, CS } from "@compiled/react/runtime";
-import { jsx, jsxs } from "react/jsx-runtime";
-const _2 = "@keyframes k1poetz8{0%{transform:scale(1)}50%{transform:scale(1.1)}to{transform:scale(1)}}";
-const _ = "._y44v1mmd{animation:k1poetz8 2s infinite}";
-const pulse = null;
-const StyledDiv = forwardRef(({
-  as: C = "div",
-  style: __cmpls,
-  ...__cmplp
-}, __cmplr) => {
-  if (__cmplp.innerRef) {
-    throw new Error("Please use 'ref' instead of 'innerRef'.");
-  }
-  return jsxs(CC, {
-    children: [jsx(CS, {
-      children: [_, _2]
-    }), jsx(C, {
-      ...__cmplp,
-      style: __cmpls,
-      ref: __cmplr,
-      className: ax(["_y44v1mmd", __cmplp.className])
-    })]
-  });
+import { keyframes, styled } from '@compiled/react';
+const pulse = keyframes({
+    '0%': {
+        transform: 'scale(1)'
+    },
+    '50%': {
+        transform: 'scale(1.1)'
+    },
+    '100%': {
+        transform: 'scale(1)'
+    }
 });
-if (process.env.NODE_ENV !== 'production') {
-  StyledDiv.displayName = 'StyledDiv';
-}
-export const Component = () => jsx(StyledDiv, {
-  children: "Pulse"
+const StyledDiv = styled.div({
+    animation: `${pulse} 2s infinite`
 });
+export const Component = ()=><StyledDiv>Pulse</StyledDiv>;

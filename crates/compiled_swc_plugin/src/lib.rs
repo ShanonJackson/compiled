@@ -4,10 +4,10 @@ pub mod hash;
 
 use crate::css::{
     AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, add_unit_if_needed, atomicize_literal,
-    atomicize_rules, normalize_selector,
+    atomicize_rules, normalize_selector, wrap_at_rules,
 };
 use crate::hash::hash;
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use oxc_resolver::{ResolveOptions, Resolver};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -16,22 +16,21 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use swc_core::atoms::JsWord;
-use swc_core::common::{DUMMY_SP, FileName, SourceMap, SyntaxContext};
+use std::thread::ThreadId;
+use swc_atoms::Atom;
+use swc_core::common::plugin::metadata::TransformPluginMetadataContextKind;
+use swc_core::common::{DUMMY_SP, FileName, Mark, SourceMap, SyntaxContext};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::*;
-use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, text_writer::JsWriter};
-use swc_core::ecma::parser::{EsSyntax, TsSyntax};
-use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
-use swc_core::ecma::utils::{private_ident, quote_ident};
+use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, Node, text_writer::JsWriter};
+use swc_core::ecma::parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
+use swc_core::ecma::utils::quote_ident;
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
-use swc_core::plugin::{
-    metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
-};
+use swc_core::plugin::proxies::{PluginSourceMapProxy, TransformPluginProgramMetadata};
 use swc_plugin_macro::plugin_transform;
 
-static LATEST_ARTIFACTS: Lazy<Mutex<StyleArtifacts>> =
-    Lazy::new(|| Mutex::new(StyleArtifacts::default()));
+static LATEST_ARTIFACTS: Lazy<Mutex<HashMap<ThreadId, StyleArtifacts>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StyleArtifacts {
@@ -43,7 +42,9 @@ pub struct StyleArtifacts {
 
 pub fn take_latest_artifacts() -> StyleArtifacts {
     let mut guard = LATEST_ARTIFACTS.lock().expect("artifacts lock poisoned");
-    std::mem::take(&mut *guard)
+    guard
+        .remove(&std::thread::current().id())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -133,7 +134,11 @@ impl NameTracker {
                 TsModuleName::Ident(ident) => self.mark_ident(ident),
                 TsModuleName::Str(_) => {}
             },
-            Decl::Using(using_decl) => self.collect_pat(&using_decl.id),
+            Decl::Using(using_decl) => {
+                for decl in &using_decl.decls {
+                    self.collect_pat(&decl.name);
+                }
+            }
         }
     }
 
@@ -176,7 +181,7 @@ impl NameTracker {
     fn fresh_ident(&mut self, base: &str) -> Ident {
         if !self.used.contains(base) {
             self.used.insert(base.to_string());
-            return Ident::new(base.into(), DUMMY_SP);
+            return Ident::new(base.into(), DUMMY_SP, SyntaxContext::empty());
         }
 
         if base == "_" {
@@ -184,7 +189,7 @@ impl NameTracker {
             loop {
                 let candidate = format!("_{}", index);
                 if self.used.insert(candidate.clone()) {
-                    return Ident::new(candidate.into(), DUMMY_SP);
+                    return Ident::new(candidate.into(), DUMMY_SP, SyntaxContext::empty());
                 }
                 index += 1;
             }
@@ -198,20 +203,20 @@ impl NameTracker {
                 format!("_{}{}", base, index + 1)
             };
             if self.used.insert(candidate.clone()) {
-                return Ident::new(candidate.into(), DUMMY_SP);
+                return Ident::new(candidate.into(), DUMMY_SP, SyntaxContext::empty());
             }
             index += 1;
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ExtractStylesToDirectoryOptions {
     source: String,
     dest: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 struct PluginOptions {
     extract: bool,
@@ -288,19 +293,16 @@ fn emit_expression(expr: &Expr) -> String {
     let mut buf = Vec::new();
     {
         let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
+        let mut cfg = CodegenConfig::default();
+        cfg.target = EsVersion::Es2022;
         let mut emitter = Emitter {
-            cfg: CodegenConfig {
-                minify: false,
-                target: Some(EsVersion::Es2022),
-                ascii_only: false,
-                omit_last_semi: false,
-                inline_script: false,
-            },
+            cfg,
             comments: None,
             cm,
             wr: writer,
         };
-        emitter.emit_expr(expr).expect("failed to emit expression");
+        expr.emit_with(&mut emitter)
+            .expect("failed to emit expression");
     }
     String::from_utf8(buf).expect("expression emitted as utf8")
 }
@@ -312,19 +314,15 @@ fn program_to_source(program: &Program) -> Result<String, std::io::Error> {
     let mut buf = Vec::new();
     {
         let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
+        let mut cfg = CodegenConfig::default();
+        cfg.target = EsVersion::Es2022;
         let mut emitter = Emitter {
-            cfg: CodegenConfig {
-                minify: false,
-                target: Some(EsVersion::Es2022),
-                ascii_only: false,
-                omit_last_semi: false,
-                inline_script: false,
-            },
+            cfg,
             comments: None,
             cm,
             wr: writer,
         };
-        emitter.emit_program(program)?;
+        program.emit_with(&mut emitter)?;
     }
     Ok(String::from_utf8(buf).expect("emitted source to be utf8"))
 }
@@ -393,22 +391,22 @@ impl StaticValue {
     }
 }
 
-fn to_id(ident: &Ident) -> (JsWord, SyntaxContext) {
-    (ident.sym.clone(), ident.span.ctxt())
+fn to_id(ident: &Ident) -> (Atom, SyntaxContext) {
+    (ident.sym.clone(), ident.ctxt)
 }
 
 fn collect_static_bindings(
     module: &Module,
     evaluator: Option<&ModuleEvaluator>,
     module_path: Option<&Path>,
-) -> HashMap<(JsWord, SyntaxContext), StaticValue> {
+) -> HashMap<(Atom, SyntaxContext), StaticValue> {
     let mut visiting = HashSet::new();
     collect_module_statics_from_ast(module, module_path, evaluator, &mut visiting).bindings
 }
 
 fn evaluate_static(
     expr: &Expr,
-    bindings: &HashMap<(JsWord, SyntaxContext), StaticValue>,
+    bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
 ) -> Option<StaticValue> {
     match expr {
         Expr::Lit(Lit::Str(str)) => Some(StaticValue::Str(str.value.to_string())),
@@ -422,9 +420,8 @@ fn evaluate_static(
                     quasi
                         .cooked
                         .as_ref()
-                        .or_else(|| quasi.raw.as_ref())
                         .map(|atom| atom.to_string())
-                        .unwrap_or_default()
+                        .unwrap_or_else(|| quasi.raw.to_string())
                         .as_str(),
                 );
                 if let Some(expr) = template.exprs.get(index) {
@@ -439,11 +436,9 @@ fn evaluate_static(
         Expr::TsTypeAssertion(assert) => evaluate_static(&assert.expr, bindings),
         Expr::TsConstAssertion(assert) => evaluate_static(&assert.expr, bindings),
         Expr::TsNonNull(non_null) => evaluate_static(&non_null.expr, bindings),
+        Expr::SuperProp(_) => None,
         Expr::Member(member) => {
-            let object = match &member.obj {
-                ExprOrSuper::Expr(expr) => evaluate_static(expr, bindings)?,
-                ExprOrSuper::Super(_) => return None,
-            };
+            let object = evaluate_static(&member.obj, bindings)?;
 
             let key = match &member.prop {
                 MemberProp::Ident(ident) => ident.sym.to_string(),
@@ -531,7 +526,7 @@ fn evaluate_static(
 
 fn record_var_decl(
     var: &VarDecl,
-    bindings: &mut HashMap<(JsWord, SyntaxContext), StaticValue>,
+    bindings: &mut HashMap<(Atom, SyntaxContext), StaticValue>,
 ) -> Vec<(Ident, StaticValue)> {
     let mut recorded = Vec::new();
     if var.kind != VarDeclKind::Const {
@@ -554,7 +549,7 @@ const DEFAULT_RESOLVE_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mj
 
 #[derive(Clone, Default)]
 struct ModuleStaticResult {
-    bindings: HashMap<(JsWord, SyntaxContext), StaticValue>,
+    bindings: HashMap<(Atom, SyntaxContext), StaticValue>,
     exports: HashMap<String, StaticValue>,
 }
 
@@ -584,7 +579,8 @@ impl ModuleEvaluator {
                 })
                 .collect();
         }
-        let resolver = Resolver::new(cwd.to_path_buf(), options);
+        options.cwd = Some(cwd.to_path_buf());
+        let resolver = Resolver::new(options);
         Self {
             resolver,
             cache: RefCell::new(HashMap::new()),
@@ -593,15 +589,11 @@ impl ModuleEvaluator {
     }
 
     fn resolve(&self, from: &Path, request: &str) -> Option<PathBuf> {
+        let from_dir = from.parent().unwrap_or(from);
         self.resolver
-            .resolve(from, request)
+            .resolve(from_dir, request)
             .ok()
-            .map(|result| result.full_path)
-    }
-
-    fn statics_for(&self, path: &Path) -> Option<ModuleStaticResult> {
-        let mut visiting = HashSet::new();
-        self.statics_for_inner(path, &mut visiting)
+            .map(|result| result.full_path())
     }
 
     fn statics_for_inner(
@@ -636,7 +628,7 @@ fn parse_module_from_source(source: &str, path: &Path) -> Option<Module> {
 
     let filename = path.to_string_lossy().to_string();
     let cm: Arc<SourceMap> = Default::default();
-    let fm = cm.new_source_file(FileName::Custom(filename.clone()), source.into());
+    let fm = cm.new_source_file(FileName::Custom(filename.clone()).into(), source.into());
     let syntax = syntax_for_filename(&filename);
     let lexer = Lexer::new(syntax, EsVersion::Es2022, StringInput::from(&*fm), None);
     let mut parser = Parser::new_from(lexer);
@@ -664,7 +656,6 @@ fn collect_module_statics_from_ast(
                                             ident.sym.to_string()
                                         }
                                         Some(ModuleExportName::Str(str)) => str.value.to_string(),
-                                        Some(ModuleExportName::Num(_)) => continue,
                                         None => named.local.sym.to_string(),
                                     };
                                     if let Some(value) = imported.exports.get(&export_name) {
@@ -713,7 +704,6 @@ fn collect_module_statics_from_ast(
                                         let orig_name = match &named_spec.orig {
                                             ModuleExportName::Ident(ident) => ident.sym.to_string(),
                                             ModuleExportName::Str(str) => str.value.to_string(),
-                                            ModuleExportName::Num(_) => continue,
                                         };
                                         let export_name = match &named_spec.exported {
                                             Some(ModuleExportName::Ident(ident)) => {
@@ -722,7 +712,6 @@ fn collect_module_statics_from_ast(
                                             Some(ModuleExportName::Str(str)) => {
                                                 str.value.to_string()
                                             }
-                                            Some(ModuleExportName::Num(_)) => continue,
                                             None => orig_name.clone(),
                                         };
                                         if let Some(value) = exported.exports.get(&orig_name) {
@@ -739,11 +728,9 @@ fn collect_module_statics_from_ast(
                             let export_name = match &named_spec.exported {
                                 Some(ModuleExportName::Ident(ident)) => ident.sym.to_string(),
                                 Some(ModuleExportName::Str(str)) => str.value.to_string(),
-                                Some(ModuleExportName::Num(_)) => continue,
                                 None => match &named_spec.orig {
                                     ModuleExportName::Ident(ident) => ident.sym.to_string(),
                                     ModuleExportName::Str(str) => str.value.to_string(),
-                                    ModuleExportName::Num(_) => continue,
                                 },
                             };
                             match &named_spec.orig {
@@ -760,7 +747,6 @@ fn collect_module_statics_from_ast(
                                         result.exports.insert(export_name, value);
                                     }
                                 }
-                                ModuleExportName::Num(_) => {}
                             }
                         }
                     }
@@ -847,7 +833,8 @@ fn append_stylesheet_requires(module: &mut Module, path: &str, rules: &[String])
         let request = format!("{}?style={}", path, encode_uri_component(rule));
         let call = Expr::Call(CallExpr {
             span: DUMMY_SP,
-            callee: Callee::Expr(Box::new(Expr::Ident(quote_ident!("require")))),
+            ctxt: SyntaxContext::empty(),
+            callee: Callee::Expr(Box::new(Expr::Ident(quote_ident!("require").into()))),
             args: vec![ExprOrSpread {
                 spread: None,
                 expr: Box::new(Expr::Lit(Lit::Str(Str::from(request)))),
@@ -886,6 +873,7 @@ fn prepend_module_import(module: &mut Module, import_src: &str) {
             src: Box::new(Str::from(import_src)),
             type_only: false,
             with: None,
+            phase: ImportPhase::Evaluation,
         })),
     );
 }
@@ -1431,8 +1419,8 @@ fn binding_ident_from_pat(pat: &Pat) -> Option<Ident> {
 
 struct ClassNamesBodyVisitor<'a, 'b> {
     parent: &'a mut TransformVisitor<'b>,
-    css_idents: HashSet<(JsWord, SyntaxContext)>,
-    style_idents: HashSet<(JsWord, SyntaxContext)>,
+    css_idents: HashSet<(Atom, SyntaxContext)>,
+    style_idents: HashSet<(Atom, SyntaxContext)>,
     failed: bool,
     sheets: Vec<String>,
 }
@@ -1440,8 +1428,8 @@ struct ClassNamesBodyVisitor<'a, 'b> {
 impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
     fn new(
         parent: &'a mut TransformVisitor<'b>,
-        css_idents: HashSet<(JsWord, SyntaxContext)>,
-        style_idents: HashSet<(JsWord, SyntaxContext)>,
+        css_idents: HashSet<(Atom, SyntaxContext)>,
+        style_idents: HashSet<(Atom, SyntaxContext)>,
     ) -> Self {
         Self {
             parent,
@@ -1516,6 +1504,7 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
                             });
                             *expr = Expr::Call(CallExpr {
                                 span: call.span,
+                                ctxt: call.ctxt,
                                 callee: Callee::Expr(Box::new(Expr::Ident(
                                     self.parent.runtime_class_ident(),
                                 ))),
@@ -1573,6 +1562,7 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
                         });
                         *expr = Expr::Call(CallExpr {
                             span: tagged.span,
+                            ctxt: tagged.ctxt,
                             callee: Callee::Expr(Box::new(Expr::Ident(
                                 self.parent.runtime_class_ident(),
                             ))),
@@ -1589,7 +1579,11 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
             }
             Expr::Ident(ident) => {
                 if self.style_idents.contains(&to_id(ident)) {
-                    *expr = Expr::Ident(Ident::new("undefined".into(), DUMMY_SP));
+                    *expr = Expr::Ident(Ident::new(
+                        "undefined".into(),
+                        DUMMY_SP,
+                        SyntaxContext::empty(),
+                    ));
                     return;
                 }
             }
@@ -1609,13 +1603,13 @@ enum CompiledImportKind {
 
 struct TransformVisitor<'a> {
     options: &'a PluginOptions,
-    bindings: HashMap<(JsWord, SyntaxContext), StaticValue>,
-    css_imports: HashSet<(JsWord, SyntaxContext)>,
-    keyframes_imports: HashSet<(JsWord, SyntaxContext)>,
-    styled_imports: HashSet<(JsWord, SyntaxContext)>,
-    css_map_imports: HashSet<(JsWord, SyntaxContext)>,
-    compiled_import_kinds: HashMap<(JsWord, SyntaxContext), CompiledImportKind>,
-    retain_imports: HashSet<(JsWord, SyntaxContext)>,
+    bindings: HashMap<(Atom, SyntaxContext), StaticValue>,
+    css_imports: HashSet<(Atom, SyntaxContext)>,
+    keyframes_imports: HashSet<(Atom, SyntaxContext)>,
+    styled_imports: HashSet<(Atom, SyntaxContext)>,
+    css_map_imports: HashSet<(Atom, SyntaxContext)>,
+    compiled_import_kinds: HashMap<(Atom, SyntaxContext), CompiledImportKind>,
+    retain_imports: HashSet<(Atom, SyntaxContext)>,
     collected_rules: Vec<String>,
     seen_rules: HashSet<String>,
     needs_runtime_ax: bool,
@@ -1644,7 +1638,7 @@ struct TransformVisitor<'a> {
 impl<'a> TransformVisitor<'a> {
     fn new(
         options: &'a PluginOptions,
-        bindings: HashMap<(JsWord, SyntaxContext), StaticValue>,
+        bindings: HashMap<(Atom, SyntaxContext), StaticValue>,
         name_tracker: NameTracker,
     ) -> Self {
         Self {
@@ -1822,7 +1816,11 @@ impl<'a> TransformVisitor<'a> {
             imported: if local.sym.as_ref() == export {
                 None
             } else {
-                Some(ModuleExportName::Ident(Ident::new(export.into(), DUMMY_SP)))
+                Some(ModuleExportName::Ident(Ident::new(
+                    export.into(),
+                    DUMMY_SP,
+                    SyntaxContext::empty(),
+                )))
             },
             is_type_only: false,
         })
@@ -1846,17 +1844,16 @@ impl<'a> TransformVisitor<'a> {
 
     fn evaluate_template(&self, template: &TaggedTpl) -> Option<String> {
         let mut result = String::new();
-        for (index, quasi) in template.quasis.iter().enumerate() {
+        for (index, quasi) in template.tpl.quasis.iter().enumerate() {
             result.push_str(
                 quasi
                     .cooked
                     .as_ref()
-                    .or_else(|| quasi.raw.as_ref())
                     .map(|atom| atom.to_string())
-                    .unwrap_or_default()
+                    .unwrap_or_else(|| quasi.raw.to_string())
                     .as_str(),
             );
-            if let Some(expr) = template.exprs.get(index) {
+            if let Some(expr) = template.tpl.exprs.get(index) {
                 let value = evaluate_static(expr, &self.bindings)?;
                 result.push_str(value.as_str()?);
             }
@@ -1884,8 +1881,8 @@ impl<'a> TransformVisitor<'a> {
     fn collect_class_names_bindings(
         &self,
         pat: &Pat,
-        css_idents: &mut HashSet<(JsWord, SyntaxContext)>,
-        style_idents: &mut HashSet<(JsWord, SyntaxContext)>,
+        css_idents: &mut HashSet<(Atom, SyntaxContext)>,
+        style_idents: &mut HashSet<(Atom, SyntaxContext)>,
     ) -> bool {
         match pat {
             Pat::Object(object) => {
@@ -1941,8 +1938,8 @@ impl<'a> TransformVisitor<'a> {
         &self,
         params: &[Pat],
     ) -> Option<(
-        HashSet<(JsWord, SyntaxContext)>,
-        HashSet<(JsWord, SyntaxContext)>,
+        HashSet<(Atom, SyntaxContext)>,
+        HashSet<(Atom, SyntaxContext)>,
     )> {
         let first = params.first()?;
         let mut css_idents = HashSet::new();
@@ -1967,7 +1964,7 @@ impl<'a> TransformVisitor<'a> {
         }
 
         let function_expr = element.children.iter().find_map(|child| {
-            if let JSXChild::JSXExprContainer(container) = child {
+            if let JSXElementChild::JSXExprContainer(container) = child {
                 match &container.expr {
                     JSXExpr::Expr(expr) => Some(expr.as_ref().clone()),
                     _ => None,
@@ -1988,14 +1985,16 @@ impl<'a> TransformVisitor<'a> {
         let (params, body_expr) = match expr {
             Expr::Arrow(arrow) => {
                 let params = arrow.params.clone();
-                let body = match &arrow.body {
-                    BlockStmtOrExpr::Expr(expr) => (*expr.clone()),
+                let body = match &*arrow.body {
+                    BlockStmtOrExpr::Expr(expr) => expr.as_ref().clone(),
                     BlockStmtOrExpr::BlockStmt(block) => Expr::Call(CallExpr {
                         span: block.span,
+                        ctxt: block.ctxt,
                         callee: Callee::Expr(Box::new(Expr::Arrow(ArrowExpr {
                             span: DUMMY_SP,
+                            ctxt: arrow.ctxt,
                             params: vec![],
-                            body: BlockStmtOrExpr::BlockStmt(block.clone()),
+                            body: Box::new(BlockStmtOrExpr::BlockStmt(block.clone())),
                             is_async: arrow.is_async,
                             is_generator: arrow.is_generator,
                             type_params: None,
@@ -2016,6 +2015,7 @@ impl<'a> TransformVisitor<'a> {
                     .collect();
                 let body = Expr::Call(CallExpr {
                     span: fn_expr.function.span,
+                    ctxt: fn_expr.function.ctxt,
                     callee: Callee::Expr(Box::new(Expr::Fn(fn_expr.clone()))),
                     args: vec![],
                     type_args: None,
@@ -2037,37 +2037,37 @@ impl<'a> TransformVisitor<'a> {
         };
 
         let mut rewritten = body_expr;
-        {
-            let mut visitor = ClassNamesBodyVisitor::new(self, css_idents, style_idents);
-            rewritten.visit_mut_with(&mut visitor);
-            if visitor.failed {
-                self.retain_imports.insert(id);
-                return None;
-            }
-            if !self.options.extract && !visitor.sheets.is_empty() {
-                let key_expr = element
-                    .opening
-                    .attrs
-                    .iter()
-                    .find_map(|attr| match attr {
-                        JSXAttrOrSpread::JSXAttr(attr)
-                            if matches!(attr.name, JSXAttrName::Ident(ref ident) if ident.sym.as_ref() == "key") =>
-                        {
-                            attr.value.as_ref().and_then(|value| match value {
-                                JSXAttrValue::JSXExprContainer(container) => match &container.expr {
-                                    JSXExpr::Expr(expr) => Some((**expr).clone()),
-                                    _ => None,
-                                },
-                                JSXAttrValue::Lit(Lit::Str(str)) => {
-                                    Some(Expr::Lit(Lit::Str(str.clone())))
-                                }
+        let mut visitor = ClassNamesBodyVisitor::new(self, css_idents, style_idents);
+        rewritten.visit_mut_with(&mut visitor);
+        if visitor.failed {
+            self.retain_imports.insert(id);
+            return None;
+        }
+        let sheets = std::mem::take(&mut visitor.sheets);
+        drop(visitor);
+        if !self.options.extract && !sheets.is_empty() {
+            let key_expr = element
+                .opening
+                .attrs
+                .iter()
+                .find_map(|attr| match attr {
+                    JSXAttrOrSpread::JSXAttr(attr)
+                        if matches!(attr.name, JSXAttrName::Ident(ref ident) if ident.sym.as_ref() == "key") =>
+                    {
+                        attr.value.as_ref().and_then(|value| match value {
+                            JSXAttrValue::JSXExprContainer(container) => match &container.expr {
+                                JSXExpr::Expr(expr) => Some((**expr).clone()),
                                 _ => None,
-                            })
-                        }
-                        _ => None,
-                    });
-                rewritten = self.build_runtime_component(rewritten, visitor.sheets, key_expr);
-            }
+                            },
+                            JSXAttrValue::Lit(Lit::Str(str)) => {
+                                Some(Expr::Lit(Lit::Str(str.clone())))
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                });
+            rewritten = self.build_runtime_component(rewritten, sheets, key_expr);
         }
 
         Some(rewritten)
@@ -2285,6 +2285,7 @@ impl<'a> TransformVisitor<'a> {
                     src: Box::new(Str::from(runtime_source)),
                     type_only: false,
                     with: None,
+                    phase: ImportPhase::Evaluation,
                 })));
             }
         }
@@ -2365,6 +2366,7 @@ impl<'a> TransformVisitor<'a> {
                     src: Box::new(Str::from(jsx_runtime_source)),
                     type_only: false,
                     with: None,
+                    phase: ImportPhase::Evaluation,
                 })));
             }
         }
@@ -2380,6 +2382,7 @@ impl<'a> TransformVisitor<'a> {
                     src: Box::new(Str::from("react")),
                     type_only: false,
                     with: None,
+                    phase: ImportPhase::Evaluation,
                 })));
                 self.has_react_namespace_binding = true;
             }
@@ -2392,6 +2395,7 @@ impl<'a> TransformVisitor<'a> {
                 src: Box::new(Str::from("react")),
                 type_only: false,
                 with: None,
+                phase: ImportPhase::Evaluation,
             })));
             self.has_forward_ref_binding = true;
         }
@@ -2405,12 +2409,12 @@ impl<'a> TransformVisitor<'a> {
         for (ident, display_name) in self.styled_display_names.drain(..) {
             let condition = Expr::Bin(BinExpr {
                 span: DUMMY_SP,
-                op: BinaryOp::StrictEqEq,
+                op: BinaryOp::EqEqEq,
                 left: Box::new(Expr::Member(MemberExpr {
                     span: DUMMY_SP,
                     obj: Box::new(Expr::Member(MemberExpr {
                         span: DUMMY_SP,
-                        obj: Box::new(Expr::Ident(quote_ident!("process"))),
+                        obj: Box::new(Expr::Ident(quote_ident!("process").into())),
                         prop: MemberProp::Ident(quote_ident!("env")),
                     })),
                     prop: MemberProp::Ident(quote_ident!("NODE_ENV")),
@@ -2427,16 +2431,18 @@ impl<'a> TransformVisitor<'a> {
                 test: Box::new(test),
                 cons: Box::new(Stmt::Block(BlockStmt {
                     span: DUMMY_SP,
+                    ctxt: SyntaxContext::empty(),
                     stmts: vec![Stmt::Expr(ExprStmt {
                         span: DUMMY_SP,
                         expr: Box::new(Expr::Assign(AssignExpr {
                             span: DUMMY_SP,
                             op: AssignOp::Assign,
-                            left: PatOrExpr::Expr(Box::new(Expr::Member(MemberExpr {
+                            left: SimpleAssignTarget::Member(MemberExpr {
                                 span: DUMMY_SP,
                                 obj: Box::new(Expr::Ident(ident.clone())),
                                 prop: MemberProp::Ident(quote_ident!("displayName")),
-                            }))),
+                            })
+                            .into(),
                             right: Box::new(Expr::Lit(Lit::Str(Str::from(display_name)))),
                         })),
                     })],
@@ -2444,667 +2450,6 @@ impl<'a> TransformVisitor<'a> {
                 alt: None,
             });
             module.body.push(ModuleItem::Stmt(stmt));
-        }
-    }
-}
-
-impl<'a> VisitMut for TransformVisitor<'a> {
-    fn visit_mut_module(&mut self, module: &mut Module) {
-        self.css_imports.clear();
-        self.keyframes_imports.clear();
-        self.styled_imports.clear();
-        self.css_map_imports.clear();
-        self.compiled_import_kinds.clear();
-        self.retain_imports.clear();
-        for item in &module.body {
-            if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
-                let source = import.src.value.to_string();
-                if source == "react" {
-                    for specifier in &import.specifiers {
-                        match specifier {
-                            ImportSpecifier::Named(named) => {
-                                let imported_name = named
-                                    .imported
-                                    .as_ref()
-                                    .map(|name| match name {
-                                        ModuleExportName::Ident(ident) => ident.sym.as_ref(),
-                                        ModuleExportName::Str(str) => str.value.as_ref(),
-                                        ModuleExportName::Num(_) => "",
-                                    })
-                                    .unwrap_or_else(|| named.local.sym.as_ref());
-                                if imported_name == "forwardRef" {
-                                    self.has_forward_ref_binding = true;
-                                    if self.forward_ref_ident.is_none() {
-                                        self.forward_ref_ident = Some(named.local.clone());
-                                    }
-                                }
-                            }
-                            ImportSpecifier::Namespace(namespace) => {
-                                self.has_react_namespace_binding = true;
-                                if self.react_namespace_ident.is_none() {
-                                    self.react_namespace_ident = Some(namespace.local.clone());
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                if source == "@compiled/react/runtime" {
-                    for specifier in &import.specifiers {
-                        if let ImportSpecifier::Named(named) = specifier {
-                            let imported_name = named
-                                .imported
-                                .as_ref()
-                                .map(|name| match name {
-                                    ModuleExportName::Ident(ident) => ident.sym.as_ref(),
-                                    ModuleExportName::Str(str) => str.value.as_ref(),
-                                    ModuleExportName::Num(_) => "",
-                                })
-                                .unwrap_or_else(|| named.local.sym.as_ref());
-
-                            match imported_name {
-                                "ax" | "ac" => {
-                                    if imported_name == self.runtime_class_helper()
-                                        && self.runtime_class_ident.is_none()
-                                    {
-                                        self.runtime_class_ident = Some(named.local.clone());
-                                    }
-                                }
-                                "ix" => {
-                                    if self.runtime_ix_ident.is_none() {
-                                        self.runtime_ix_ident = Some(named.local.clone());
-                                    }
-                                }
-                                "CC" => {
-                                    if self.runtime_cc_ident.is_none() {
-                                        self.runtime_cc_ident = Some(named.local.clone());
-                                    }
-                                }
-                                "CS" => {
-                                    if self.runtime_cs_ident.is_none() {
-                                        self.runtime_cs_ident = Some(named.local.clone());
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                if source == "react/jsx-runtime" {
-                    for specifier in &import.specifiers {
-                        if let ImportSpecifier::Named(named) = specifier {
-                            let imported_name = named
-                                .imported
-                                .as_ref()
-                                .map(|name| match name {
-                                    ModuleExportName::Ident(ident) => ident.sym.as_ref(),
-                                    ModuleExportName::Str(str) => str.value.as_ref(),
-                                    ModuleExportName::Num(_) => "",
-                                })
-                                .unwrap_or_else(|| named.local.sym.as_ref());
-
-                            match imported_name {
-                                "jsx" => {
-                                    if self.jsx_ident.is_none() {
-                                        self.jsx_ident = Some(named.local.clone());
-                                    }
-                                }
-                                "jsxs" => {
-                                    if self.jsxs_ident.is_none() {
-                                        self.jsxs_ident = Some(named.local.clone());
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                if self.options.import_sources.contains(&source) {
-                    for specifier in &import.specifiers {
-                        match specifier {
-                            ImportSpecifier::Named(named) => {
-                                let imported_name = named
-                                    .imported
-                                    .as_ref()
-                                    .map(|name| match name {
-                                        ModuleExportName::Ident(ident) => ident.sym.as_ref(),
-                                        ModuleExportName::Str(str) => str.value.as_ref(),
-                                        ModuleExportName::Num(_) => "",
-                                    })
-                                    .unwrap_or_else(|| named.local.sym.as_ref());
-                                let id = to_id(&named.local);
-                                match imported_name {
-                                    "css" => {
-                                        self.css_imports.insert(id.clone());
-                                        self.compiled_import_kinds
-                                            .insert(id, CompiledImportKind::Css);
-                                    }
-                                    "keyframes" => {
-                                        self.keyframes_imports.insert(id.clone());
-                                        self.compiled_import_kinds
-                                            .insert(id, CompiledImportKind::Keyframes);
-                                    }
-                                    "styled" => {
-                                        self.styled_imports.insert(id.clone());
-                                        self.compiled_import_kinds
-                                            .insert(id, CompiledImportKind::Styled);
-                                    }
-                                    "cssMap" => {
-                                        self.css_map_imports.insert(id.clone());
-                                        self.compiled_import_kinds
-                                            .insert(id, CompiledImportKind::CssMap);
-                                    }
-                                    "ClassNames" => {
-                                        self.compiled_import_kinds
-                                            .insert(id, CompiledImportKind::ClassNames);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            ImportSpecifier::Default(spec) => {
-                                if source == "@compiled/react" {
-                                    let id = to_id(&spec.local);
-                                    self.styled_imports.insert(id.clone());
-                                    self.compiled_import_kinds
-                                        .insert(id, CompiledImportKind::Styled);
-                                }
-                            }
-                            ImportSpecifier::Namespace(_) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        module.visit_mut_children_with(self);
-
-        let mut new_body = Vec::with_capacity(module.body.len());
-        for item in module.body.drain(..) {
-            match item {
-                ModuleItem::ModuleDecl(ModuleDecl::Import(mut import)) => {
-                    let source = import.src.value.to_string();
-                    if self.options.import_sources.contains(&source) {
-                        import.specifiers.retain(|specifier| match specifier {
-                            ImportSpecifier::Named(named) => {
-                                let id = to_id(&named.local);
-                                if self.compiled_import_kinds.contains_key(&id) {
-                                    self.retain_imports.contains(&id)
-                                } else {
-                                    true
-                                }
-                            }
-                            ImportSpecifier::Default(spec) => {
-                                let id = to_id(&spec.local);
-                                if self.compiled_import_kinds.contains_key(&id) {
-                                    self.retain_imports.contains(&id)
-                                } else {
-                                    true
-                                }
-                            }
-                            ImportSpecifier::Namespace(_) => true,
-                        });
-                        if import.specifiers.is_empty()
-                            && !import.type_only
-                            && import.with.is_none()
-                        {
-                            continue;
-                        }
-                    }
-                    new_body.push(ModuleItem::ModuleDecl(ModuleDecl::Import(import)));
-                }
-                other => new_body.push(other),
-            }
-        }
-        module.body = new_body;
-        if !self.options.extract && !self.hoisted_sheet_order.is_empty() {
-            let mut insertion_index = 0usize;
-            for (index, item) in module.body.iter().enumerate() {
-                if matches!(item, ModuleItem::ModuleDecl(ModuleDecl::Import(_))) {
-                    insertion_index = index + 1;
-                } else {
-                    break;
-                }
-            }
-
-            let mut declarations = Vec::new();
-            for css in &self.hoisted_sheet_order {
-                if let Some(ident) = self.hoisted_sheets.get(css) {
-                    declarations.push(ModuleItem::Stmt(Stmt::Decl(Decl::Var(VarDecl {
-                        span: DUMMY_SP,
-                        kind: VarDeclKind::Const,
-                        decls: vec![VarDeclarator {
-                            span: DUMMY_SP,
-                            name: Pat::Ident(BindingIdent::from(ident.clone())),
-                            init: Some(Box::new(Expr::Lit(Lit::Str(Str::from(css.clone()))))),
-                            definite: false,
-                        }],
-                    }))));
-                }
-            }
-
-            module
-                .body
-                .splice(insertion_index..insertion_index, declarations);
-        }
-        self.inject_imports(module);
-        self.append_display_names(module);
-        self.hoisted_sheet_order.clear();
-        self.hoisted_sheets.clear();
-    }
-
-    fn visit_mut_expr(&mut self, expr: &mut Expr) {
-        if let Expr::JSXElement(element) = expr {
-            if let Some(mut replacement) = self.handle_class_names_element(element) {
-                replacement.visit_mut_with(self);
-                *expr = replacement;
-                return;
-            }
-
-            let css_info = self.process_css_prop(element);
-            element.visit_mut_with(self);
-
-            if let Some((sheets, key)) = css_info {
-                if !self.options.extract && !sheets.is_empty() {
-                    let inner = element.clone();
-                    let wrapper = self.build_runtime_component(
-                        Expr::JSXElement(Box::new(inner)),
-                        sheets,
-                        key,
-                    );
-                    *expr = wrapper;
-                }
-            }
-            return;
-        }
-        expr.visit_mut_children_with(self);
-
-        if let Expr::TaggedTpl(template) = expr.clone() {
-            if self.is_css_ident(&template.tag) {
-                if let Some(replacement) = self.handle_css_template(&template) {
-                    *expr = replacement;
-                } else {
-                    self.preserve_import_for_expr(&template.tag);
-                }
-                return;
-            }
-            if self.is_keyframes_ident(&template.tag) {
-                if let Some(replacement) = self.handle_keyframes_template(&template) {
-                    *expr = replacement;
-                } else {
-                    self.preserve_import_for_expr(&template.tag);
-                }
-                return;
-            }
-        }
-
-        if let Expr::Call(call) = expr.clone() {
-            if let Callee::Expr(callee_expr) = &call.callee {
-                if self.is_css_ident(callee_expr) {
-                    if let Some(replacement) = self.handle_css_call(&call) {
-                        *expr = replacement;
-                    } else {
-                        self.preserve_import_for_expr(callee_expr);
-                    }
-                    return;
-                }
-                if self.is_keyframes_ident(callee_expr) {
-                    if let Some(replacement) = self.handle_keyframes_call(&call) {
-                        *expr = replacement;
-                    } else {
-                        self.preserve_import_for_expr(callee_expr);
-                    }
-                    return;
-                }
-                if let Expr::Ident(ident) = &**callee_expr {
-                    if self.css_map_imports.contains(&to_id(ident)) {
-                        if let Some(value) = self.evaluate_call_argument(&call) {
-                            if let StaticValue::Object(object) = value {
-                                let mut props = Vec::new();
-                                for (key, value) in &object {
-                                    let variant_object = match value.as_object() {
-                                        Some(inner) => inner,
-                                        None => {
-                                            self.retain_imports.insert(to_id(ident));
-                                            return;
-                                        }
-                                    };
-                                    let artifacts = match css_artifacts_from_static_object(
-                                        variant_object,
-                                        &self.css_options(),
-                                    ) {
-                                        Some(artifacts) => artifacts,
-                                        None => {
-                                            self.retain_imports.insert(to_id(ident));
-                                            return;
-                                        }
-                                    };
-                                    let mut class_names = Vec::new();
-                                    for rule in &artifacts.rules {
-                                        self.register_rule(rule.css.clone());
-                                        class_names.push(rule.class_name.clone());
-                                    }
-                                    for css in &artifacts.raw_rules {
-                                        self.register_rule(css.clone());
-                                    }
-                                    drop(artifacts);
-                                    let joined = class_names.join(" ");
-                                    props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(
-                                        KeyValueProp {
-                                            key: PropName::Ident(Ident::new(
-                                                key.clone().into(),
-                                                DUMMY_SP,
-                                            )),
-                                            value: Box::new(Expr::Lit(Lit::Str(Str::from(joined)))),
-                                        },
-                                    ))));
-                                }
-                                *expr = Expr::Object(ObjectLit {
-                                    span: DUMMY_SP,
-                                    props,
-                                });
-                                return;
-                            }
-                        }
-                        self.retain_imports.insert(to_id(ident));
-                    }
-                }
-            }
-        }
-    }
-
-    fn visit_mut_var_declarator(&mut self, declarator: &mut VarDeclarator) {
-        declarator.visit_mut_children_with(self);
-        let init_expr = match &mut declarator.init {
-            Some(init) => &mut **init,
-            None => return,
-        };
-        let tagged = match init_expr {
-            Expr::TaggedTpl(tagged) => tagged,
-            other => {
-                self.preserve_styled_usage_in_expr(other);
-                return;
-            }
-        };
-        let mut styled_source_ident: Option<Ident> = None;
-        let default_component_expr = match &mut tagged.tag {
-            Expr::Member(member) => {
-                let styled_ident = match &*member.obj {
-                    Expr::Ident(ident) => ident.clone(),
-                    _ => return,
-                };
-                if !self.styled_imports.contains(&to_id(&styled_ident)) {
-                    return;
-                }
-                styled_source_ident = Some(styled_ident.clone());
-                match &member.prop {
-                    MemberProp::Ident(ident) => {
-                        Some(Expr::Lit(Lit::Str(Str::from(ident.sym.to_string()))))
-                    }
-                    MemberProp::Str(str) => Some(Expr::Lit(Lit::Str(str.clone()))),
-                    MemberProp::Computed(comp) => {
-                        if let Expr::Lit(Lit::Str(str)) = &*comp.expr {
-                            Some(Expr::Lit(Lit::Str(str.clone())))
-                        } else {
-                            self.preserve_import_for_ident(&styled_ident);
-                            None
-                        }
-                    }
-                    _ => {
-                        self.preserve_import_for_ident(&styled_ident);
-                        None
-                    }
-                }
-            }
-            Expr::Call(call) => {
-                let styled_ident = match &call.callee {
-                    Callee::Expr(expr) => match &**expr {
-                        Expr::Ident(ident) => ident.clone(),
-                        _ => return,
-                    },
-                    _ => return,
-                };
-                if !self.styled_imports.contains(&to_id(&styled_ident)) {
-                    return;
-                }
-                styled_source_ident = Some(styled_ident.clone());
-                let first = match call.args.get(0) {
-                    Some(arg) => arg,
-                    None => {
-                        self.preserve_import_for_ident(&styled_ident);
-                        return;
-                    }
-                };
-                if first.spread.is_some() {
-                    self.preserve_import_for_ident(&styled_ident);
-                    return;
-                }
-                Some((*first.expr).clone())
-            }
-            _ => return,
-        };
-        let default_component_expr = match default_component_expr {
-            Some(expr) => expr,
-            None => {
-                if let Some(ident) = &styled_source_ident {
-                    self.preserve_import_for_ident(ident);
-                }
-                return;
-            }
-        };
-        let css = match self.evaluate_template(tagged) {
-            Some(css) => css,
-            None => {
-                if let Some(ident) = &styled_source_ident {
-                    self.preserve_import_for_ident(ident);
-                }
-                return;
-            }
-        };
-        let component_name = match &declarator.name {
-            Pat::Ident(binding) => Some(binding.id.sym.to_string()),
-            _ => None,
-        };
-        let artifacts = atomicize_literal(&css, &self.css_options());
-        for rule in &artifacts.rules {
-            self.register_rule(rule.css.clone());
-        }
-        for css in &artifacts.raw_rules {
-            self.register_rule(css.clone());
-        }
-        let mut runtime_sheets = Vec::new();
-        for rule in &artifacts.rules {
-            runtime_sheets.push(rule.css.clone());
-        }
-        for css in &artifacts.raw_rules {
-            runtime_sheets.push(css.clone());
-        }
-        self.needs_react_namespace = true;
-        self.needs_jsx_runtime = true;
-        self.needs_runtime_ax = true;
-        self.needs_forward_ref = true;
-
-        let mut class_strings: Vec<ExprOrSpread> = Vec::new();
-        if let Some(name) = component_name.as_ref() {
-            if self.should_emit_component_class_name() {
-                class_strings.push(ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(Expr::Lit(Lit::Str(Str::from(format!("c_{}", name))))),
-                });
-            }
-        }
-        class_strings.extend(artifacts.rules.iter().map(|rule| ExprOrSpread {
-            spread: None,
-            expr: Box::new(Expr::Lit(Lit::Str(Str::from(rule.class_name.clone())))),
-        }));
-
-        let props_ident = self.name_tracker.fresh_ident("__cmplp");
-        let style_ident = self.name_tracker.fresh_ident("__cmpls");
-        let ref_ident = self.name_tracker.fresh_ident("__cmplr");
-        let component_ident = self.name_tracker.fresh_ident("C");
-
-        let mut object_props = Vec::new();
-        object_props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
-            key: PropName::Ident(quote_ident!("as")),
-            value: Box::new(Pat::Assign(AssignPat {
-                span: DUMMY_SP,
-                left: Box::new(Pat::Ident(BindingIdent::from(component_ident.clone()))),
-                right: Box::new(default_component_expr),
-                type_ann: None,
-            })),
-        }));
-        object_props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
-            key: PropName::Ident(quote_ident!("style")),
-            value: Box::new(Pat::Ident(BindingIdent::from(style_ident.clone()))),
-        }));
-        object_props.push(ObjectPatProp::Rest(RestPat {
-            span: DUMMY_SP,
-            dot3_token: DUMMY_SP,
-            arg: Box::new(Pat::Ident(BindingIdent::from(props_ident.clone()))),
-            type_ann: None,
-        }));
-
-        let params = vec![
-            Pat::Object(ObjectPat {
-                span: DUMMY_SP,
-                props: object_props,
-                optional: false,
-                type_ann: None,
-            }),
-            Pat::Ident(BindingIdent::from(ref_ident.clone())),
-        ];
-
-        let class_array = Expr::Array(ArrayLit {
-            span: DUMMY_SP,
-            elems: class_strings
-                .into_iter()
-                .chain(std::iter::once(ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(Expr::Member(MemberExpr {
-                        span: DUMMY_SP,
-                        obj: Box::new(Expr::Ident(props_ident.clone())),
-                        prop: MemberProp::Ident(quote_ident!("className")),
-                    })),
-                }))
-                .map(Some)
-                .collect(),
-        });
-
-        let jsx_call = Expr::Call(CallExpr {
-            span: DUMMY_SP,
-            callee: Callee::Expr(Box::new(Expr::Ident(self.jsx_ident()))),
-            args: vec![
-                ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(Expr::Ident(component_ident.clone())),
-                },
-                ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(Expr::Object(ObjectLit {
-                        span: DUMMY_SP,
-                        props: vec![
-                            PropOrSpread::Spread(SpreadElement {
-                                dot3_token: DUMMY_SP,
-                                expr: Box::new(Expr::Ident(props_ident.clone())),
-                                span: DUMMY_SP,
-                            }),
-                            PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                                key: PropName::Ident(quote_ident!("style")),
-                                value: Box::new(Expr::Ident(style_ident.clone())),
-                            }))),
-                            PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                                key: PropName::Ident(quote_ident!("ref")),
-                                value: Box::new(Expr::Ident(ref_ident.clone())),
-                            }))),
-                            PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                                key: PropName::Ident(quote_ident!("className")),
-                                value: Box::new(Expr::Call(CallExpr {
-                                    span: DUMMY_SP,
-                                    callee: Callee::Expr(Box::new(Expr::Ident(
-                                        self.runtime_class_ident(),
-                                    ))),
-                                    args: vec![ExprOrSpread {
-                                        spread: None,
-                                        expr: Box::new(class_array),
-                                    }],
-                                    type_args: None,
-                                })),
-                            }))),
-                        ],
-                    })),
-                },
-            ],
-            type_args: None,
-        });
-
-        let render_expr = if self.options.extract {
-            jsx_call
-        } else {
-            self.build_runtime_component(jsx_call, runtime_sheets, None)
-        };
-
-        let guard = Stmt::If(IfStmt {
-            span: DUMMY_SP,
-            test: Box::new(Expr::Member(MemberExpr {
-                span: DUMMY_SP,
-                obj: Box::new(Expr::Ident(props_ident.clone())),
-                prop: MemberProp::Ident(quote_ident!("innerRef")),
-            })),
-            cons: Box::new(Stmt::Block(BlockStmt {
-                span: DUMMY_SP,
-                stmts: vec![Stmt::Throw(ThrowStmt {
-                    span: DUMMY_SP,
-                    arg: Box::new(Expr::New(NewExpr {
-                        span: DUMMY_SP,
-                        callee: Box::new(Expr::Ident(quote_ident!("Error"))),
-                        args: Some(vec![ExprOrSpread {
-                            spread: None,
-                            expr: Box::new(Expr::Lit(Lit::Str(Str::from(
-                                "Please use 'ref' instead of 'innerRef'.",
-                            )))),
-                        }]),
-                        type_args: None,
-                    })),
-                })],
-            })),
-            alt: None,
-        });
-
-        let arrow = Expr::Arrow(ArrowExpr {
-            span: DUMMY_SP,
-            params,
-            body: BlockStmtOrExpr::BlockStmt(BlockStmt {
-                span: DUMMY_SP,
-                stmts: {
-                    let mut stmts = Vec::new();
-                    if self.is_development_env() {
-                        stmts.push(guard);
-                    }
-                    stmts.push(Stmt::Return(ReturnStmt {
-                        span: DUMMY_SP,
-                        arg: Some(Box::new(render_expr)),
-                    }));
-                    stmts
-                },
-            }),
-            is_async: false,
-            is_generator: false,
-            type_params: None,
-            return_type: None,
-        });
-
-        *init = Box::new(Expr::Call(CallExpr {
-            span: DUMMY_SP,
-            callee: Callee::Expr(Box::new(Expr::Ident(self.forward_ref_ident()))),
-            args: vec![ExprOrSpread {
-                spread: None,
-                expr: Box::new(arrow),
-            }],
-            type_args: None,
-        }));
-
-        if let Pat::Ident(BindingIdent { id, .. }) = &declarator.name {
-            self.styled_display_names
-                .push((id.clone(), id.sym.to_string()));
         }
     }
 
@@ -3156,11 +2501,64 @@ impl<'a> VisitMut for TransformVisitor<'a> {
             }
 
             if class_names.is_empty() {
-                **expr = Expr::Ident(quote_ident!("undefined"));
+                **expr = Expr::Ident(quote_ident!("undefined").into());
             } else {
                 let joined = class_names.join(" ");
                 **expr = Expr::Lit(Lit::Str(Str::from(joined)));
             }
+        }
+    }
+
+    fn resolve_styled_target(&mut self, expr: &Expr) -> Option<(Option<Expr>, Ident)> {
+        match expr {
+            Expr::Member(member) => {
+                let styled_ident = match &*member.obj {
+                    Expr::Ident(ident) => ident.clone(),
+                    _ => return None,
+                };
+                if !self.styled_imports.contains(&to_id(&styled_ident)) {
+                    return None;
+                }
+                let component_expr = match &member.prop {
+                    MemberProp::Ident(ident) => {
+                        Some(Expr::Lit(Lit::Str(Str::from(ident.sym.to_string()))))
+                    }
+                    MemberProp::Computed(computed) => {
+                        if let Expr::Lit(Lit::Str(str)) = &*computed.expr {
+                            Some(Expr::Lit(Lit::Str(str.clone())))
+                        } else {
+                            self.preserve_import_for_ident(&styled_ident);
+                            return None;
+                        }
+                    }
+                    _ => {
+                        self.preserve_import_for_ident(&styled_ident);
+                        return None;
+                    }
+                };
+                Some((component_expr, styled_ident))
+            }
+            Expr::Call(call) => {
+                let styled_ident = match &call.callee {
+                    Callee::Expr(expr) => match &**expr {
+                        Expr::Ident(ident) => ident.clone(),
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                if !self.styled_imports.contains(&to_id(&styled_ident)) {
+                    return None;
+                }
+                let first = match call.args.get(0) {
+                    Some(arg) if arg.spread.is_none() => arg,
+                    _ => {
+                        self.preserve_import_for_ident(&styled_ident);
+                        return None;
+                    }
+                };
+                Some((Some((*first.expr).clone()), styled_ident))
+            }
+            _ => None,
         }
     }
 
@@ -3274,6 +2672,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                 span: DUMMY_SP,
                 expr: JSXExpr::Expr(Box::new(Expr::Call(CallExpr {
                     span: DUMMY_SP,
+                    ctxt: SyntaxContext::empty(),
                     callee: Callee::Expr(Box::new(Expr::Ident(self.runtime_class_ident()))),
                     args: vec![ExprOrSpread {
                         spread: None,
@@ -3332,7 +2731,11 @@ impl<'a> VisitMut for TransformVisitor<'a> {
         if let Some(nonce) = &self.options.nonce {
             cs_props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                 key: PropName::Ident(quote_ident!("nonce")),
-                value: Box::new(Expr::Ident(Ident::new(nonce.clone().into(), DUMMY_SP))),
+                value: Box::new(Expr::Ident(Ident::new(
+                    nonce.clone().into(),
+                    DUMMY_SP,
+                    SyntaxContext::empty(),
+                ))),
             }))));
         }
         cs_props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
@@ -3342,6 +2745,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
 
         let cs_call = Expr::Call(CallExpr {
             span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
             callee: Callee::Expr(Box::new(Expr::Ident(self.jsx_ident()))),
             args: vec![
                 ExprOrSpread {
@@ -3407,10 +2811,660 @@ impl<'a> VisitMut for TransformVisitor<'a> {
 
         Expr::Call(CallExpr {
             span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
             callee: Callee::Expr(Box::new(Expr::Ident(self.jsxs_ident()))),
             args,
             type_args: None,
         })
+    }
+}
+
+impl<'a> VisitMut for TransformVisitor<'a> {
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        self.css_imports.clear();
+        self.keyframes_imports.clear();
+        self.styled_imports.clear();
+        self.css_map_imports.clear();
+        self.compiled_import_kinds.clear();
+        self.retain_imports.clear();
+        for item in &module.body {
+            if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
+                let source = import.src.value.to_string();
+                if source == "react" {
+                    for specifier in &import.specifiers {
+                        match specifier {
+                            ImportSpecifier::Named(named) => {
+                                let imported_name = named
+                                    .imported
+                                    .as_ref()
+                                    .map(|name| match name {
+                                        ModuleExportName::Ident(ident) => ident.sym.as_ref(),
+                                        ModuleExportName::Str(str) => str.value.as_ref(),
+                                    })
+                                    .unwrap_or_else(|| named.local.sym.as_ref());
+                                if imported_name == "forwardRef" {
+                                    self.has_forward_ref_binding = true;
+                                    if self.forward_ref_ident.is_none() {
+                                        self.forward_ref_ident = Some(named.local.clone());
+                                    }
+                                }
+                            }
+                            ImportSpecifier::Namespace(namespace) => {
+                                self.has_react_namespace_binding = true;
+                                if self.react_namespace_ident.is_none() {
+                                    self.react_namespace_ident = Some(namespace.local.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if source == "@compiled/react/runtime" {
+                    for specifier in &import.specifiers {
+                        if let ImportSpecifier::Named(named) = specifier {
+                            let imported_name = named
+                                .imported
+                                .as_ref()
+                                .map(|name| match name {
+                                    ModuleExportName::Ident(ident) => ident.sym.as_ref(),
+                                    ModuleExportName::Str(str) => str.value.as_ref(),
+                                })
+                                .unwrap_or_else(|| named.local.sym.as_ref());
+
+                            match imported_name {
+                                "ax" | "ac" => {
+                                    if imported_name == self.runtime_class_helper()
+                                        && self.runtime_class_ident.is_none()
+                                    {
+                                        self.runtime_class_ident = Some(named.local.clone());
+                                    }
+                                }
+                                "ix" => {
+                                    if self.runtime_ix_ident.is_none() {
+                                        self.runtime_ix_ident = Some(named.local.clone());
+                                    }
+                                }
+                                "CC" => {
+                                    if self.runtime_cc_ident.is_none() {
+                                        self.runtime_cc_ident = Some(named.local.clone());
+                                    }
+                                }
+                                "CS" => {
+                                    if self.runtime_cs_ident.is_none() {
+                                        self.runtime_cs_ident = Some(named.local.clone());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                if source == "react/jsx-runtime" {
+                    for specifier in &import.specifiers {
+                        if let ImportSpecifier::Named(named) = specifier {
+                            let imported_name = named
+                                .imported
+                                .as_ref()
+                                .map(|name| match name {
+                                    ModuleExportName::Ident(ident) => ident.sym.as_ref(),
+                                    ModuleExportName::Str(str) => str.value.as_ref(),
+                                })
+                                .unwrap_or_else(|| named.local.sym.as_ref());
+
+                            match imported_name {
+                                "jsx" => {
+                                    if self.jsx_ident.is_none() {
+                                        self.jsx_ident = Some(named.local.clone());
+                                    }
+                                }
+                                "jsxs" => {
+                                    if self.jsxs_ident.is_none() {
+                                        self.jsxs_ident = Some(named.local.clone());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                if self.options.import_sources.contains(&source) {
+                    for specifier in &import.specifiers {
+                        match specifier {
+                            ImportSpecifier::Named(named) => {
+                                let imported_name = named
+                                    .imported
+                                    .as_ref()
+                                    .map(|name| match name {
+                                        ModuleExportName::Ident(ident) => ident.sym.as_ref(),
+                                        ModuleExportName::Str(str) => str.value.as_ref(),
+                                    })
+                                    .unwrap_or_else(|| named.local.sym.as_ref());
+                                let id = to_id(&named.local);
+                                match imported_name {
+                                    "css" => {
+                                        self.css_imports.insert(id.clone());
+                                        self.compiled_import_kinds
+                                            .insert(id, CompiledImportKind::Css);
+                                    }
+                                    "keyframes" => {
+                                        self.keyframes_imports.insert(id.clone());
+                                        self.compiled_import_kinds
+                                            .insert(id, CompiledImportKind::Keyframes);
+                                    }
+                                    "styled" => {
+                                        self.styled_imports.insert(id.clone());
+                                        self.compiled_import_kinds
+                                            .insert(id, CompiledImportKind::Styled);
+                                    }
+                                    "cssMap" => {
+                                        self.css_map_imports.insert(id.clone());
+                                        self.compiled_import_kinds
+                                            .insert(id, CompiledImportKind::CssMap);
+                                    }
+                                    "ClassNames" => {
+                                        self.compiled_import_kinds
+                                            .insert(id, CompiledImportKind::ClassNames);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            ImportSpecifier::Default(spec) => {
+                                if source == "@compiled/react" {
+                                    let id = to_id(&spec.local);
+                                    self.styled_imports.insert(id.clone());
+                                    self.compiled_import_kinds
+                                        .insert(id, CompiledImportKind::Styled);
+                                }
+                            }
+                            ImportSpecifier::Namespace(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        module.visit_mut_children_with(self);
+
+        let mut new_body = Vec::with_capacity(module.body.len());
+        for item in module.body.drain(..) {
+            match item {
+                ModuleItem::ModuleDecl(ModuleDecl::Import(mut import)) => {
+                    let source = import.src.value.to_string();
+                    if self.options.import_sources.contains(&source) {
+                        import.specifiers.retain(|specifier| match specifier {
+                            ImportSpecifier::Named(named) => {
+                                let id = to_id(&named.local);
+                                if self.compiled_import_kinds.contains_key(&id) {
+                                    self.retain_imports.contains(&id)
+                                } else {
+                                    true
+                                }
+                            }
+                            ImportSpecifier::Default(spec) => {
+                                let id = to_id(&spec.local);
+                                if self.compiled_import_kinds.contains_key(&id) {
+                                    self.retain_imports.contains(&id)
+                                } else {
+                                    true
+                                }
+                            }
+                            ImportSpecifier::Namespace(_) => true,
+                        });
+                        if import.specifiers.is_empty()
+                            && !import.type_only
+                            && import.with.is_none()
+                        {
+                            continue;
+                        }
+                    }
+                    new_body.push(ModuleItem::ModuleDecl(ModuleDecl::Import(import)));
+                }
+                other => new_body.push(other),
+            }
+        }
+        module.body = new_body;
+        if !self.options.extract && !self.hoisted_sheet_order.is_empty() {
+            let mut insertion_index = 0usize;
+            for (index, item) in module.body.iter().enumerate() {
+                if matches!(item, ModuleItem::ModuleDecl(ModuleDecl::Import(_))) {
+                    insertion_index = index + 1;
+                } else {
+                    break;
+                }
+            }
+
+            let mut declarations = Vec::new();
+            for css in &self.hoisted_sheet_order {
+                if let Some(ident) = self.hoisted_sheets.get(css) {
+                    declarations.push(ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                        span: DUMMY_SP,
+                        ctxt: SyntaxContext::empty(),
+                        kind: VarDeclKind::Const,
+                        declare: false,
+                        decls: vec![VarDeclarator {
+                            span: DUMMY_SP,
+                            name: Pat::Ident(BindingIdent::from(ident.clone())),
+                            init: Some(Box::new(Expr::Lit(Lit::Str(Str::from(css.clone()))))),
+                            definite: false,
+                        }],
+                    })))));
+                }
+            }
+
+            module
+                .body
+                .splice(insertion_index..insertion_index, declarations);
+        }
+        self.inject_imports(module);
+        self.append_display_names(module);
+        self.hoisted_sheet_order.clear();
+        self.hoisted_sheets.clear();
+    }
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if let Expr::JSXElement(element) = expr {
+            if let Some(mut replacement) = self.handle_class_names_element(element) {
+                replacement.visit_mut_with(self);
+                *expr = replacement;
+                return;
+            }
+
+            let css_info = self.process_css_prop(element);
+            element.visit_mut_with(self);
+
+            if let Some((sheets, key)) = css_info {
+                if !self.options.extract && !sheets.is_empty() {
+                    let inner = (**element).clone();
+                    let wrapper = self.build_runtime_component(
+                        Expr::JSXElement(Box::new(inner)),
+                        sheets,
+                        key,
+                    );
+                    *expr = wrapper;
+                }
+            }
+            return;
+        }
+        expr.visit_mut_children_with(self);
+
+        if let Expr::TaggedTpl(template) = expr.clone() {
+            if self.is_css_ident(&template.tag) {
+                if let Some(replacement) = self.handle_css_template(&template) {
+                    *expr = replacement;
+                } else {
+                    self.preserve_import_for_expr(&template.tag);
+                }
+                return;
+            }
+            if self.is_keyframes_ident(&template.tag) {
+                if let Some(replacement) = self.handle_keyframes_template(&template) {
+                    *expr = replacement;
+                } else {
+                    self.preserve_import_for_expr(&template.tag);
+                }
+                return;
+            }
+        }
+
+        if let Expr::Call(call) = expr.clone() {
+            if let Callee::Expr(callee_expr) = &call.callee {
+                if self.is_css_ident(callee_expr) {
+                    if let Some(replacement) = self.handle_css_call(&call) {
+                        *expr = replacement;
+                    } else {
+                        self.preserve_import_for_expr(callee_expr);
+                    }
+                    return;
+                }
+                if self.is_keyframes_ident(callee_expr) {
+                    if let Some(replacement) = self.handle_keyframes_call(&call) {
+                        *expr = replacement;
+                    } else {
+                        self.preserve_import_for_expr(callee_expr);
+                    }
+                    return;
+                }
+                if let Expr::Ident(ident) = &**callee_expr {
+                    if self.css_map_imports.contains(&to_id(ident)) {
+                        if let Some(value) = self.evaluate_call_argument(&call) {
+                            if let StaticValue::Object(object) = value {
+                                let mut props = Vec::new();
+                                for (key, value) in &object {
+                                    let variant_object = match value.as_object() {
+                                        Some(inner) => inner,
+                                        None => {
+                                            self.retain_imports.insert(to_id(ident));
+                                            return;
+                                        }
+                                    };
+                                    let artifacts = match css_artifacts_from_static_object(
+                                        variant_object,
+                                        &self.css_options(),
+                                    ) {
+                                        Some(artifacts) => artifacts,
+                                        None => {
+                                            self.retain_imports.insert(to_id(ident));
+                                            return;
+                                        }
+                                    };
+                                    let mut class_names = Vec::new();
+                                    for rule in &artifacts.rules {
+                                        self.register_rule(rule.css.clone());
+                                        class_names.push(rule.class_name.clone());
+                                    }
+                                    for css in &artifacts.raw_rules {
+                                        self.register_rule(css.clone());
+                                    }
+                                    drop(artifacts);
+                                    let joined = class_names.join(" ");
+                                    props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(
+                                        KeyValueProp {
+                                            key: PropName::Ident(IdentName::new(
+                                                key.clone().into(),
+                                                DUMMY_SP,
+                                            )),
+                                            value: Box::new(Expr::Lit(Lit::Str(Str::from(joined)))),
+                                        },
+                                    ))));
+                                }
+                                *expr = Expr::Object(ObjectLit {
+                                    span: DUMMY_SP,
+                                    props,
+                                });
+                                return;
+                            }
+                        }
+                        self.retain_imports.insert(to_id(ident));
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_mut_var_declarator(&mut self, declarator: &mut VarDeclarator) {
+        declarator.visit_mut_children_with(self);
+        let init_expr = match &mut declarator.init {
+            Some(init) => &mut **init,
+            None => return,
+        };
+        let (default_component_expr, artifacts) = match &*init_expr {
+            Expr::TaggedTpl(tagged) => {
+                let (component_expr, styled_ident) = match self.resolve_styled_target(&tagged.tag) {
+                    Some(res) => res,
+                    None => return,
+                };
+                let css = match self.evaluate_template(tagged) {
+                    Some(css) => css,
+                    None => {
+                        self.preserve_import_for_ident(&styled_ident);
+                        return;
+                    }
+                };
+                let default_expr = match component_expr {
+                    Some(expr) => expr,
+                    None => {
+                        self.preserve_import_for_ident(&styled_ident);
+                        return;
+                    }
+                };
+                (default_expr, atomicize_literal(&css, &self.css_options()))
+            }
+            Expr::Call(call) => {
+                let callee_expr = match &call.callee {
+                    Callee::Expr(expr) => &**expr,
+                    _ => {
+                        self.preserve_styled_usage_in_expr(&Expr::Call(call.clone()));
+                        return;
+                    }
+                };
+                let (component_expr, styled_ident) = match self.resolve_styled_target(callee_expr) {
+                    Some(res) => res,
+                    None => {
+                        self.preserve_styled_usage_in_expr(&Expr::Call(call.clone()));
+                        return;
+                    }
+                };
+                let values = match self.evaluate_call_arguments(call) {
+                    Some(values) => values,
+                    None => {
+                        self.preserve_import_for_ident(&styled_ident);
+                        return;
+                    }
+                };
+                let mut combined = CssArtifacts::default();
+                for value in &values {
+                    match css_artifacts_from_static_value(value, &self.css_options()) {
+                        Some(artifacts) => combined.merge(artifacts),
+                        None => {
+                            self.preserve_import_for_ident(&styled_ident);
+                            return;
+                        }
+                    }
+                }
+                let default_expr = match component_expr {
+                    Some(expr) => expr,
+                    None => {
+                        self.preserve_import_for_ident(&styled_ident);
+                        return;
+                    }
+                };
+                (default_expr, combined)
+            }
+            other => {
+                self.preserve_styled_usage_in_expr(other);
+                return;
+            }
+        };
+        let component_name = match &declarator.name {
+            Pat::Ident(binding) => Some(binding.id.sym.to_string()),
+            _ => None,
+        };
+        for rule in &artifacts.rules {
+            self.register_rule(rule.css.clone());
+        }
+        for css in &artifacts.raw_rules {
+            self.register_rule(css.clone());
+        }
+        let mut runtime_sheets = Vec::new();
+        for rule in &artifacts.rules {
+            runtime_sheets.push(rule.css.clone());
+        }
+        for css in &artifacts.raw_rules {
+            runtime_sheets.push(css.clone());
+        }
+        self.needs_react_namespace = true;
+        self.needs_jsx_runtime = true;
+        self.needs_runtime_ax = true;
+        self.needs_forward_ref = true;
+
+        let mut class_strings: Vec<ExprOrSpread> = Vec::new();
+        if let Some(name) = component_name.as_ref() {
+            if self.should_emit_component_class_name() {
+                class_strings.push(ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Lit(Lit::Str(Str::from(format!("c_{}", name))))),
+                });
+            }
+        }
+        class_strings.extend(artifacts.rules.iter().map(|rule| ExprOrSpread {
+            spread: None,
+            expr: Box::new(Expr::Lit(Lit::Str(Str::from(rule.class_name.clone())))),
+        }));
+
+        let props_ident = self.name_tracker.fresh_ident("__cmplp");
+        let style_ident = self.name_tracker.fresh_ident("__cmpls");
+        let ref_ident = self.name_tracker.fresh_ident("__cmplr");
+        let component_ident = self.name_tracker.fresh_ident("C");
+
+        let mut object_props = Vec::new();
+        object_props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
+            key: PropName::Ident(quote_ident!("as")),
+            value: Box::new(Pat::Assign(AssignPat {
+                span: DUMMY_SP,
+                left: Box::new(Pat::Ident(BindingIdent::from(component_ident.clone()))),
+                right: Box::new(default_component_expr),
+            })),
+        }));
+        object_props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
+            key: PropName::Ident(quote_ident!("style")),
+            value: Box::new(Pat::Ident(BindingIdent::from(style_ident.clone()))),
+        }));
+        object_props.push(ObjectPatProp::Rest(RestPat {
+            span: DUMMY_SP,
+            dot3_token: DUMMY_SP,
+            arg: Box::new(Pat::Ident(BindingIdent::from(props_ident.clone()))),
+            type_ann: None,
+        }));
+
+        let params = vec![
+            Pat::Object(ObjectPat {
+                span: DUMMY_SP,
+                props: object_props,
+                optional: false,
+                type_ann: None,
+            }),
+            Pat::Ident(BindingIdent::from(ref_ident.clone())),
+        ];
+
+        let class_array = Expr::Array(ArrayLit {
+            span: DUMMY_SP,
+            elems: class_strings
+                .into_iter()
+                .chain(std::iter::once(ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Member(MemberExpr {
+                        span: DUMMY_SP,
+                        obj: Box::new(Expr::Ident(props_ident.clone())),
+                        prop: MemberProp::Ident(quote_ident!("className")),
+                    })),
+                }))
+                .map(Some)
+                .collect(),
+        });
+
+        let jsx_call = Expr::Call(CallExpr {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            callee: Callee::Expr(Box::new(Expr::Ident(self.jsx_ident()))),
+            args: vec![
+                ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Ident(component_ident.clone())),
+                },
+                ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Object(ObjectLit {
+                        span: DUMMY_SP,
+                        props: vec![
+                            PropOrSpread::Spread(SpreadElement {
+                                dot3_token: DUMMY_SP,
+                                expr: Box::new(Expr::Ident(props_ident.clone())),
+                            }),
+                            PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                                key: PropName::Ident(quote_ident!("style")),
+                                value: Box::new(Expr::Ident(style_ident.clone())),
+                            }))),
+                            PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                                key: PropName::Ident(quote_ident!("ref")),
+                                value: Box::new(Expr::Ident(ref_ident.clone())),
+                            }))),
+                            PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                                key: PropName::Ident(quote_ident!("className")),
+                                value: Box::new(Expr::Call(CallExpr {
+                                    span: DUMMY_SP,
+                                    ctxt: SyntaxContext::empty(),
+                                    callee: Callee::Expr(Box::new(Expr::Ident(
+                                        self.runtime_class_ident(),
+                                    ))),
+                                    args: vec![ExprOrSpread {
+                                        spread: None,
+                                        expr: Box::new(class_array),
+                                    }],
+                                    type_args: None,
+                                })),
+                            }))),
+                        ],
+                    })),
+                },
+            ],
+            type_args: None,
+        });
+
+        let render_expr = if self.options.extract {
+            jsx_call
+        } else {
+            self.build_runtime_component(jsx_call, runtime_sheets, None)
+        };
+
+        let guard = Stmt::If(IfStmt {
+            span: DUMMY_SP,
+            test: Box::new(Expr::Member(MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(Expr::Ident(props_ident.clone())),
+                prop: MemberProp::Ident(quote_ident!("innerRef")),
+            })),
+            cons: Box::new(Stmt::Block(BlockStmt {
+                span: DUMMY_SP,
+                ctxt: SyntaxContext::empty(),
+                stmts: vec![Stmt::Throw(ThrowStmt {
+                    span: DUMMY_SP,
+                    arg: Box::new(Expr::New(NewExpr {
+                        span: DUMMY_SP,
+                        ctxt: SyntaxContext::empty(),
+                        callee: Box::new(Expr::Ident(quote_ident!("Error").into())),
+                        args: Some(vec![ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(Expr::Lit(Lit::Str(Str::from(
+                                "Please use 'ref' instead of 'innerRef'.",
+                            )))),
+                        }]),
+                        type_args: None,
+                    })),
+                })],
+            })),
+            alt: None,
+        });
+
+        let arrow = Expr::Arrow(ArrowExpr {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            params,
+            body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                span: DUMMY_SP,
+                ctxt: SyntaxContext::empty(),
+                stmts: {
+                    let mut stmts = Vec::new();
+                    if self.is_development_env() {
+                        stmts.push(guard);
+                    }
+                    stmts.push(Stmt::Return(ReturnStmt {
+                        span: DUMMY_SP,
+                        arg: Some(Box::new(render_expr)),
+                    }));
+                    stmts
+                },
+            })),
+            is_async: false,
+            is_generator: false,
+            type_params: None,
+            return_type: None,
+        });
+
+        *init_expr = Expr::Call(CallExpr {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            callee: Callee::Expr(Box::new(Expr::Ident(self.forward_ref_ident()))),
+            args: vec![ExprOrSpread {
+                spread: None,
+                expr: Box::new(arrow),
+            }],
+            type_args: None,
+        });
+
+        if let Pat::Ident(BindingIdent { id, .. }) = &declarator.name {
+            self.styled_display_names
+                .push((id.clone(), id.sym.to_string()));
+        }
     }
 
     fn visit_mut_jsx_opening_element(&mut self, element: &mut JSXOpeningElement) {
@@ -3423,7 +3477,7 @@ fn parse_transformed_source(code: &str, filename: &str) -> Program {
     use std::sync::Arc;
 
     let cm: Arc<SourceMap> = Default::default();
-    let fm = cm.new_source_file(FileName::Custom(filename.into()), code.into());
+    let fm = cm.new_source_file(FileName::Custom(filename.into()).into(), code.into());
 
     let syntax_for_file = |name: &str| {
         if name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".cts") {
@@ -3456,30 +3510,19 @@ fn parse_transformed_source(code: &str, filename: &str) -> Program {
             match parser.parse_script() {
                 Ok(script) => Program::Script(script),
                 Err(script_err) => panic!(
-                    "failed to parse emitted output as module ({module_err}), and as script ({script_err})"
+                    "failed to parse emitted output as module ({module_err:?}), and as script ({script_err:?})"
                 ),
             }
         }
     }
 }
 
-fn transform_program(program: Program, metadata: TransformPluginProgramMetadata) -> Program {
-    let config_value = metadata
-        .get_transform_plugin_config()
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .unwrap_or(Value::Object(serde_json::Map::new()));
-
-    let mut options: PluginOptions = serde_json::from_value(config_value).unwrap_or_default();
-    if options.import_sources.is_empty() {
-        options.import_sources.push("@compiled/react".into());
-    }
-
-    let context: Option<TransformPluginMetadataContext> = metadata.get_context();
-    let filename = context
-        .as_ref()
-        .and_then(|ctx| ctx.filename.clone())
-        .unwrap_or_else(|| "unknown.js".to_string());
-
+fn transform_program_with_options(
+    program: Program,
+    _metadata: TransformPluginProgramMetadata,
+    options: PluginOptions,
+    filename: String,
+) -> Program {
     let mut program = program;
     if let Program::Module(mut module) = program {
         let file_path = PathBuf::from(&filename);
@@ -3525,11 +3568,17 @@ fn transform_program(program: Program, metadata: TransformPluginProgramMetadata)
             .collect();
 
         if let Ok(mut guard) = LATEST_ARTIFACTS.lock() {
-            guard.style_rules = collected_rules.clone();
-            guard.metadata = json!({
-                "styleRules": guard.style_rules,
-                "includedFiles": included_files,
-            });
+            let metadata_rules = collected_rules.clone();
+            guard.insert(
+                std::thread::current().id(),
+                StyleArtifacts {
+                    style_rules: collected_rules,
+                    metadata: json!({
+                        "styleRules": metadata_rules,
+                        "includedFiles": included_files,
+                    }),
+                },
+            );
         }
         program = Program::Module(module);
     }
@@ -3538,6 +3587,50 @@ fn transform_program(program: Program, metadata: TransformPluginProgramMetadata)
         &program_to_source(&program).expect("failed to emit program"),
         &filename,
     )
+}
+
+fn transform_program(program: Program, metadata: TransformPluginProgramMetadata) -> Program {
+    let config_value = metadata
+        .get_transform_plugin_config()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or(Value::Object(serde_json::Map::new()));
+
+    let mut options: PluginOptions = serde_json::from_value(config_value).unwrap_or_default();
+    if options.import_sources.is_empty() {
+        options.import_sources.push("@compiled/react".into());
+    }
+
+    let filename = metadata
+        .get_context(&TransformPluginMetadataContextKind::Filename)
+        .unwrap_or_else(|| "unknown.js".to_string());
+
+    transform_program_with_options(program, metadata, options, filename)
+}
+
+#[doc(hidden)]
+pub fn transform_program_for_testing(
+    program: Program,
+    filename: String,
+    config_json: Option<&str>,
+) -> Program {
+    let config_value = config_json
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+    let mut options: PluginOptions = serde_json::from_value(config_value).unwrap_or_default();
+    if options.import_sources.is_empty() {
+        options.import_sources.push("@compiled/react".into());
+    }
+
+    let metadata = TransformPluginProgramMetadata {
+        comments: None,
+        source_map: PluginSourceMapProxy {
+            source_file: OnceCell::new(),
+        },
+        unresolved_mark: Mark::new(),
+    };
+
+    transform_program_with_options(program, metadata, options, filename)
 }
 
 #[plugin_transform]
@@ -3552,25 +3645,24 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        ExtractStylesToDirectoryOptions, ModuleEvaluator, PluginOptions, StyleArtifacts,
-        TransformVisitor, collect_static_bindings, program_to_source, take_latest_artifacts,
-        transform_program,
+        ExtractStylesToDirectoryOptions, ModuleEvaluator, NameTracker, PluginOptions,
+        StyleArtifacts, TransformVisitor, collect_static_bindings, program_to_source,
+        take_latest_artifacts, transform_program_with_options,
     };
+    use once_cell::sync::OnceCell;
     use serde_json::Value;
-    use swc_core::common::{FileName, SourceMap};
+    use swc_core::common::{FileName, GLOBALS, Globals, Mark, SourceMap};
     use swc_core::ecma::ast::EsVersion;
     use swc_core::ecma::ast::Program;
-    use swc_core::ecma::parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
+    use swc_core::ecma::parser::{Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
     use swc_core::ecma::visit::VisitMutWith;
-    use swc_core::plugin::{
-        metadata::TransformPluginMetadataContext, proxies::TransformPluginProgramMetadata,
-    };
+    use swc_core::plugin::proxies::{PluginSourceMapProxy, TransformPluginProgramMetadata};
 
     fn parse(code: &str) -> Program {
         use std::sync::Arc;
 
         let cm: Arc<SourceMap> = Default::default();
-        let fm = cm.new_source_file(FileName::Custom("test.tsx".into()), code.into());
+        let fm = cm.new_source_file(FileName::Custom("test.tsx".into()).into(), code.into());
         let lexer = Lexer::new(
             Syntax::Typescript(TsSyntax {
                 tsx: true,
@@ -3585,27 +3677,45 @@ mod tests {
         Program::Module(parser.parse_module().expect("module"))
     }
 
+    fn empty_metadata() -> TransformPluginProgramMetadata {
+        TransformPluginProgramMetadata {
+            comments: None,
+            source_map: PluginSourceMapProxy {
+                source_file: OnceCell::new(),
+            },
+            unresolved_mark: Mark::new(),
+        }
+    }
+
     fn transform_source(input: &str) -> (String, StyleArtifacts) {
-        let program = parse(input);
-        let metadata = TransformPluginProgramMetadata::default();
-        let transformed = transform_program(program, metadata);
-        let emitted = program_to_source(&transformed).expect("emit program");
-        let artifacts = take_latest_artifacts();
-        (emitted, artifacts)
+        GLOBALS.set(&Globals::new(), || {
+            let program = parse(input);
+            let metadata = empty_metadata();
+            let transformed = transform_program_with_options(
+                program,
+                metadata,
+                PluginOptions::default(),
+                "test.tsx".into(),
+            );
+            let emitted = program_to_source(&transformed).expect("emit program");
+            let artifacts = take_latest_artifacts();
+            (emitted, artifacts)
+        })
     }
 
     fn transform_source_with_options(
         input: &str,
         options: PluginOptions,
     ) -> (String, StyleArtifacts) {
-        let program = parse(input);
-        let mut metadata = TransformPluginProgramMetadata::default();
-        metadata.transform_plugin_config =
-            Some(serde_json::to_string(&options).expect("serialize options"));
-        let transformed = transform_program(program, metadata);
-        let emitted = program_to_source(&transformed).expect("emit program");
-        let artifacts = take_latest_artifacts();
-        (emitted, artifacts)
+        GLOBALS.set(&Globals::new(), || {
+            let program = parse(input);
+            let metadata = empty_metadata();
+            let transformed =
+                transform_program_with_options(program, metadata, options, "test.tsx".into());
+            let emitted = program_to_source(&transformed).expect("emit program");
+            let artifacts = take_latest_artifacts();
+            (emitted, artifacts)
+        })
     }
 
     #[test]
@@ -3642,11 +3752,11 @@ mod tests {
         let (_, artifacts) = transform_source(
             "import { css } from '@compiled/react';\nconst styles = css({ content: '' });\n",
         );
+        let rules = &artifacts.style_rules;
         assert!(
-            artifacts
-                .style_rules
-                .iter()
-                .any(|rule| rule == "._1sb2b3bt{content:\"\"}")
+            rules.iter().any(|rule| rule == "._1ss81q6m{content:\"\"}"),
+            "rules: {:?}",
+            rules
         );
     }
 
@@ -3655,11 +3765,13 @@ mod tests {
         let (_, artifacts) = transform_source(
             "import { css } from '@compiled/react';\nconst styles = css({ content: 'hello' });\n",
         );
+        let rules = &artifacts.style_rules;
         assert!(
-            artifacts
-                .style_rules
+            rules
                 .iter()
-                .any(|rule| rule == "._1sb21e8g{content:\"hello\"}")
+                .any(|rule| rule == "._1ss8156a{content:\"hello\"}"),
+            "rules: {:?}",
+            rules
         );
     }
 
@@ -3668,11 +3780,13 @@ mod tests {
         let (_, artifacts) = transform_source(
             "import { css } from '@compiled/react';\nconst styles = css({ content: \"'hello'\" });\n",
         );
+        let rules = &artifacts.style_rules;
         assert!(
-            artifacts
-                .style_rules
+            rules
                 .iter()
-                .any(|rule| rule == "._1sb25hbz{content:'hello'}")
+                .any(|rule| rule == "._1ss81s0w{content:'hello'}"),
+            "rules: {:?}",
+            rules
         );
     }
 
@@ -3723,21 +3837,23 @@ const styles = cssMap({
 
 const Element = (variant) => <div css={styles[variant]} />;"#;
         let (_, artifacts) = transform_source(source);
+        let rules = &artifacts.style_rules;
         for expected in [
-            "._syazjafr{color:#0b0}",
-            "._30l3aebp:hover{color:#060}",
-            "@media screen and (min-width:500px){._1takoyl8{font-size:10vw}}",
-            "._1tjq1v9d span{color:lightgreen}",
-            "._yzbcy77s span:hover{color:#090}",
-            "._syaz5scu{color:red}",
-            "._30l3qaj3:hover{color:darkred}",
-            "@media screen and (min-width:500px){._1taki9ra{font-size:20vw}}",
-            "._1tjqruxl span{color:orange}",
-            "._yzbc32ev span:hover{color:pink}",
+            "._9ad01jil{color:#0b0}",
+            "._1ez81l3g:hover{color:#060}",
+            "@media{._1jjg1cns screen and (min-width: 500px){font-size:10vw}}",
+            "._1do5v34r span{color:lightgreen}",
+            "._alfb1f0q span:hover{color:#090}",
+            "._9ad0jpi6{color:red}",
+            "._1ez8vjb6:hover{color:darkred}",
+            "@media{._1jjgjshv screen and (min-width: 500px){font-size:20vw}}",
+            "._1do51sln span{color:orange}",
+            "._alfbfdu6 span:hover{color:pink}",
         ] {
             assert!(
-                artifacts.style_rules.iter().any(|rule| rule == expected),
-                "missing expected rule {expected}"
+                rules.iter().any(|rule| rule == expected),
+                "missing expected rule {expected}; rules: {:?}",
+                rules
             );
         }
     }
@@ -3762,23 +3878,28 @@ const className = css`color: ${brand};`;
 "#;
         fs::write(&entry_path, source).expect("write entry");
 
-        let program = parse(source);
-        let mut module = match program {
-            Program::Module(module) => module,
-            _ => panic!("expected module"),
-        };
         let evaluator = ModuleEvaluator::new(&temp_root, &Vec::new());
-        let bindings =
-            collect_static_bindings(&module, Some(&evaluator), Some(entry_path.as_path()));
-        let name_tracker = NameTracker::from_module(&module);
-        let mut visitor = TransformVisitor::new(&PluginOptions::default(), bindings, name_tracker);
-        module.visit_mut_with(&mut visitor);
-        assert!(
-            visitor
-                .collected_rules
-                .iter()
-                .any(|rule| rule.contains("color:green"))
-        );
+        GLOBALS.set(&Globals::new(), || {
+            let program = parse(source);
+            let mut module = match program {
+                Program::Module(module) => module,
+                _ => panic!("expected module"),
+            };
+            let bindings =
+                collect_static_bindings(&module, Some(&evaluator), Some(entry_path.as_path()));
+            let name_tracker = NameTracker::from_module(&module);
+            let plugin_options = PluginOptions::default();
+            let mut visitor = TransformVisitor::new(&plugin_options, bindings, name_tracker);
+            module.visit_mut_with(&mut visitor);
+            assert!(
+                visitor
+                    .collected_rules
+                    .iter()
+                    .any(|rule| rule.contains("color:green")),
+                "collected rules: {:?}",
+                visitor.collected_rules
+            );
+        });
         let included = evaluator.included_files();
         assert!(
             included
@@ -3811,22 +3932,22 @@ const className = css({ color: brand });
         fs::write(&entry_path, source).expect("write entry");
 
         let program = parse(source);
-        let mut metadata = TransformPluginProgramMetadata::default();
         let mut options = PluginOptions::default();
         options.extensions = vec![".custom".into()];
-        metadata.transform_plugin_config =
-            Some(serde_json::to_string(&options).expect("serialize options"));
-        metadata.context = Some(TransformPluginMetadataContext {
-            filename: Some(entry_path.to_string_lossy().to_string()),
-            cwd: Some(temp_root.to_string_lossy().to_string()),
-            ..Default::default()
-        });
 
-        let transformed = transform_program(program, metadata);
-        let emitted = program_to_source(&transformed).expect("emit program");
+        let (emitted, artifacts) = GLOBALS.set(&Globals::new(), || {
+            let transformed = transform_program_with_options(
+                program,
+                empty_metadata(),
+                options,
+                entry_path.to_string_lossy().to_string(),
+            );
+            let emitted = program_to_source(&transformed).expect("emit program");
+            let artifacts = take_latest_artifacts();
+            (emitted, artifacts)
+        });
         assert!(emitted.contains("const className = null"));
 
-        let artifacts = take_latest_artifacts();
         assert!(
             artifacts
                 .style_rules
@@ -3851,11 +3972,16 @@ const className = css({
 
         let (emitted, artifacts) = transform_source(source);
         assert!(emitted.contains("const className = null"));
-        assert!(artifacts.style_rules.iter().any(|rule| {
-            let has_media = rule.contains("@media screen and (min-width:30rem)")
-                || rule.contains("@media screen and (min-width: 30rem)");
-            has_media && rule.contains("color:green")
-        }));
+        let rules = &artifacts.style_rules;
+        assert!(
+            rules.iter().any(|rule| {
+                let has_media = rule.contains("@media screen and (min-width:30rem)")
+                    || rule.contains("@media screen and (min-width: 30rem)");
+                has_media && rule.contains("color:green")
+            }),
+            "rules: {:?}",
+            rules
+        );
     }
 
     #[test]
@@ -3893,7 +4019,9 @@ const className = css({
     #[test]
     fn styled_adds_component_class_when_enabled() {
         let prev = std::env::var("NODE_ENV").ok();
-        std::env::remove_var("NODE_ENV");
+        unsafe {
+            std::env::remove_var("NODE_ENV");
+        }
         let mut options = PluginOptions::default();
         options.add_component_name = Some(true);
         let (emitted, _) = transform_source_with_options(
@@ -3901,9 +4029,13 @@ const className = css({
             options,
         );
         if let Some(prev) = prev {
-            std::env::set_var("NODE_ENV", prev);
+            unsafe {
+                std::env::set_var("NODE_ENV", prev);
+            }
         } else {
-            std::env::remove_var("NODE_ENV");
+            unsafe {
+                std::env::remove_var("NODE_ENV");
+            }
         }
         assert!(emitted.contains("\"c_MyDiv\""));
     }
@@ -3916,8 +4048,8 @@ const className = css({
             "import { styled } from '@compiled/react';\nconst Styled = styled.div({ color: 'red' });\n",
             options,
         );
-        assert!(emitted.contains("jsxs(CC,{"));
-        assert!(emitted.contains("jsx(CS,{"));
+        assert!(emitted.contains("jsxs(CC, {"), "emitted: {emitted}");
+        assert!(emitted.contains("jsx(CS, {"));
         assert!(
             artifacts
                 .style_rules
@@ -3932,20 +4064,26 @@ const className = css({
             "import { forwardRef as useForwardRef } from 'react';\nimport { styled } from '@compiled/react';\nconst Styled = styled.div`color: red;`;\n",
         );
         assert!(emitted.contains("useForwardRef("));
-        assert!(!emitted.contains("import { forwardRef"));
+        assert!(!emitted.contains("import { forwardRef } from 'react';"));
     }
 
     #[test]
     fn styled_skips_inner_ref_guard_in_production() {
         let prev = std::env::var("NODE_ENV").ok();
-        std::env::set_var("NODE_ENV", "production");
+        unsafe {
+            std::env::set_var("NODE_ENV", "production");
+        }
         let (emitted, _) = transform_source(
             "import { styled } from '@compiled/react';\nconst Styled = styled.div`color: red;`;\n",
         );
         if let Some(prev) = prev {
-            std::env::set_var("NODE_ENV", prev);
+            unsafe {
+                std::env::set_var("NODE_ENV", prev);
+            }
         } else {
-            std::env::remove_var("NODE_ENV");
+            unsafe {
+                std::env::remove_var("NODE_ENV");
+            }
         }
         assert!(!emitted.contains("innerRef"));
     }
@@ -4028,27 +4166,33 @@ const className = css({
             "import '@compiled/react';\nconst Component = () => (\n  <div css={{\n    color: 'red',\n    '&:hover': { color: 'blue' },\n    '@media': {\n      'screen and (min-width: 500px)': {\n        color: 'green',\n      },\n    },\n    content: ''\n  }} />\n);\n",
         );
 
+        let rules = &artifacts.style_rules;
         assert!(
-            artifacts
-                .style_rules
-                .iter()
-                .any(|rule| rule == "._syaz5scu{color:red}")
+            rules.iter().any(|rule| rule == "._9ad0jpi6{color:red}"),
+            "rules: {:?}",
+            rules
         );
         assert!(
-            artifacts
-                .style_rules
-                .iter()
-                .any(|rule| rule == "._1sb2b3bt{content:\"\"}")
+            rules.iter().any(|rule| rule == "._1ss81q6m{content:\"\"}"),
+            "rules: {:?}",
+            rules
         );
         assert!(
-            artifacts
-                .style_rules
+            rules
                 .iter()
-                .any(|rule| rule == "._30l313q2:hover{color:blue}")
+                .any(|rule| rule == "._1ez81yoo:hover{color:blue}"),
+            "rules: {:?}",
+            rules
         );
-        assert!(artifacts.style_rules.iter().any(|rule| {
-            rule.contains("@media") && rule.contains("_f8e2bf54") && rule.contains("color:green")
-        }));
+        assert!(
+            rules.iter().any(|rule| {
+                rule.contains("@media")
+                    && rule.contains("_19jf1ulw")
+                    && rule.contains("color:green")
+            }),
+            "rules: {:?}",
+            rules
+        );
     }
 
     #[test]
@@ -4061,8 +4205,8 @@ const className = css({
         );
         assert!(emitted.contains("import { ax, ix, CC, CS } from \"@compiled/react/runtime\";"));
         assert!(emitted.contains("import { jsx, jsxs } from \"react/jsx-runtime\";"));
-        assert!(emitted.contains("jsxs(CC,{"));
-        assert!(emitted.contains("jsx(CS,{"));
+        assert!(emitted.contains("jsxs(CC, {"), "emitted: {emitted}");
+        assert!(emitted.contains("jsx(CS, {"));
         assert!(
             artifacts
                 .style_rules
@@ -4080,7 +4224,10 @@ const className = css({
             "import '@compiled/react';\nconst Component = () => <div css={{ color: 'red' }} />;\n",
             options,
         );
-        assert!(emitted.contains("nonce:__webpack_nonce__"));
+        assert!(
+            emitted.contains("nonce: __webpack_nonce__"),
+            "emitted: {emitted}"
+        );
     }
 
     #[test]
@@ -4122,7 +4269,10 @@ const className = css({
             options,
         );
         assert!(emitted.contains("const _ = 'keep'") || emitted.contains("const _ = \"keep\""));
-        assert!(emitted.contains("const _1 = \"") || emitted.contains("const _1 = '"));
+        assert!(
+            emitted.contains("const _1 = \"") || emitted.contains("const _1 = '"),
+            "emitted: {emitted}"
+        );
     }
 
     #[test]
@@ -4148,8 +4298,8 @@ const className = css({
             "import { ClassNames } from '@compiled/react';\nconst Component = () => (\n  <ClassNames>{({ css }) => <div className={css({ color: 'red' })} />}</ClassNames>\n);\n",
             options,
         );
-        assert!(emitted.contains("jsxs(CC,{"));
-        assert!(emitted.contains("jsx(CS,{"));
+        assert!(emitted.contains("jsxs(CC, {"), "emitted: {emitted}");
+        assert!(emitted.contains("jsx(CS, {"));
         assert!(
             artifacts
                 .style_rules
@@ -4164,11 +4314,11 @@ const className = css({
             "import { css } from '@compiled/react';\nconst styles = css({ selectors: { '&:hover': { color: 'red' } } });\n",
         );
         assert!(emitted.contains("const styles = null"));
+        let rules = &artifacts.style_rules;
         assert!(
-            artifacts
-                .style_rules
-                .iter()
-                .any(|rule| rule.contains(":hover{color:red}"))
+            rules.iter().any(|rule| rule.contains(":hover{color:red}")),
+            "rules: {:?}",
+            rules
         );
     }
 
@@ -4261,11 +4411,17 @@ const className = css({
         );
         assert!(emitted.contains("const styles = null"));
         assert_eq!(artifacts.style_rules.len(), 1);
-        assert!(artifacts.style_rules.iter().any(|rule| {
-            rule.contains(
-                "@property --radius{syntax:\"<length>\";inherits:false;initial-value:0px}",
-            )
-        }));
+        let rules = &artifacts.style_rules;
+        assert!(
+            rules.iter().any(|rule| {
+                rule.contains("@property --radius{")
+                    && rule.contains("syntax:\"<length>\"")
+                    && rule.contains("inherits:false")
+                    && rule.contains("initial-value:0px")
+            }),
+            "rules: {:?}",
+            rules
+        );
     }
 
     #[test]
@@ -4313,7 +4469,7 @@ const className = css({
         let (emitted, artifacts) = transform_source(
             "const Component = () => <div xcss={{ color: 'red', backgroundColor: 'blue' }} />;\n",
         );
-        assert!(emitted.contains("_syaz5scu _bfhk13q2"));
+        assert!(emitted.contains("_1n55qhg1 _9ad0jpi6"));
         assert!(
             artifacts
                 .style_rules
@@ -4355,7 +4511,7 @@ const className = css({
         let mut options = PluginOptions::default();
         options
             .class_name_compression_map
-            .insert("1wyb1fwx".into(), "a".into());
+            .insert("1knu1gs9".into(), "a".into());
         let (emitted, artifacts) = transform_source_with_options(
             "import { ClassNames } from '@compiled/react';\nconst Component = () => (\n  <ClassNames>{({ css }) => <div className={css({ fontSize: 12 })} />}</ClassNames>\n);\n",
             options,
@@ -4420,20 +4576,18 @@ const className = css({
             dest: dest_dir.to_string_lossy().to_string(),
         });
 
-        let mut metadata = TransformPluginProgramMetadata::default();
-        metadata.transform_plugin_config =
-            Some(serde_json::to_string(&options).expect("serialize options"));
-        metadata.context = Some(TransformPluginMetadataContext {
-            filename: Some(filename.to_string_lossy().to_string()),
-            cwd: Some(temp_root.to_string_lossy().to_string()),
-            ..Default::default()
-        });
-
         let program = parse(
             "import { css } from '@compiled/react';\nconst styles = css({ color: 'red' });\n",
         );
-        let transformed = transform_program(program, metadata);
-        let emitted = program_to_source(&transformed).expect("emit program");
+        let emitted = GLOBALS.set(&Globals::new(), || {
+            let transformed = transform_program_with_options(
+                program,
+                empty_metadata(),
+                options,
+                filename.to_string_lossy().to_string(),
+            );
+            program_to_source(&transformed).expect("emit program")
+        });
         assert!(emitted.contains("import \"./component.compiled.css\""));
 
         let css_path = dest_dir.join("component.compiled.css");

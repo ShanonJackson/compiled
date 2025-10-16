@@ -4,7 +4,7 @@
 /// `@compiled` packages. The resulting hash is returned as a base36 string to match the
 /// Babel plugin output.
 pub fn hash(input: &str, seed: u32) -> String {
-    let mut units: Vec<u16> = input.encode_utf16().collect();
+    let units: Vec<u16> = input.encode_utf16().collect();
     if units.is_empty() {
         return to_base36(murmur2_gc(&units, seed));
     }
@@ -23,8 +23,8 @@ fn murmur2_gc(units: &[u16], seed: u32) -> u32 {
             | (((units[index + 2] as u32) & 0xff) << 16)
             | (((units[index + 3] as u32) & 0xff) << 24);
 
-        k = mix(k);
-        h = mix(h) ^ k;
+        k = mix_k(k);
+        h = mul_mix(h) ^ k;
 
         index += 4;
         len -= 4;
@@ -35,32 +35,38 @@ fn murmur2_gc(units: &[u16], seed: u32) -> u32 {
             h ^= ((units[index + 2] as u32) & 0xff) << 16;
             h ^= ((units[index + 1] as u32) & 0xff) << 8;
             h ^= (units[index] as u32) & 0xff;
-            h = mix(h);
+            h = mul_mix(h);
         }
         2 => {
             h ^= ((units[index + 1] as u32) & 0xff) << 8;
             h ^= (units[index] as u32) & 0xff;
-            h = mix(h);
+            h = mul_mix(h);
         }
         1 => {
             h ^= (units[index] as u32) & 0xff;
-            h = mix(h);
+            h = mul_mix(h);
         }
         _ => {}
     }
 
     h ^= h >> 13;
-    h = mix(h);
+    h = mul_mix(h);
     h ^= h >> 15;
     h
 }
 
 #[inline]
-fn mix(value: u32) -> u32 {
-    let mut v = value.wrapping_mul(0x5bd1e995);
+fn mix_k(value: u32) -> u32 {
+    let mut v = mul_mix(value);
     v ^= v >> 24;
-    v = v.wrapping_mul(0x5bd1e995);
-    v
+    mul_mix(v)
+}
+
+#[inline]
+fn mul_mix(value: u32) -> u32 {
+    let low = (value & 0xffff).wrapping_mul(0x5bd1e995);
+    let high = ((value >> 16) & 0xffff).wrapping_mul(0x5bd1e995);
+    low.wrapping_add(high << 16)
 }
 
 fn to_base36(mut value: u32) -> String {
