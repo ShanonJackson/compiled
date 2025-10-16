@@ -1,0 +1,54 @@
+[workspace]
+members = [
+    "crates/*",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+assert_cmd = "2.0.16"
+async-trait = "0.1.88"
+cargo-llvm-cov = "0.6.16"
+clap = { version = "4.5.35", features = ["derive"] }
+env_logger = "0.11.8"
+error-stack = "0.5.0"
+git2 = "0.20.1"
+image = "0.25"
+indicatif = "0.17.11"
+insta = { version = "1.42.2", features = ["json"] }
+lazy_static = "1.5.0"
+log = "0.4.27"
+mockall = "0.13.1"
+mockito = "1.7.0"
+napi = { version = "2.16.17", default-features = false, features = ["napi4"] }
+napi-build = "2.1.6"
+napi-derive = "2.16.13"
+parking_lot = "0.12.3"
+pdfium-render = "0.8"
+predicates = "3.1.3"
+reqwest = { version = "0.12", features = ["json"] }
+rust_search = "2.1.0"
+semver = { version = "1.0.26", features = ["serde"] }
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_derive = "=1.0.219"
+serde_json = "=1.0.140"
+tokio = { version = "1", features = ["full"] }
+typed-builder = "0.21.0"
+once_cell = "=1.21.3"
+regex = { version = "1.11.1", default-features = false }
+relative-path = "1.9.3"
+pathdiff = "0.2"
+swc_atoms = "=5.0.0"
+swc_common = "=11.0.3"
+swc_core = "=26.3.4"
+swc_ecma_ast = "=11.0.0"
+swc_ecma_codegen = "=17.0.2"
+swc_ecma_parser = "=14.0.1"
+swc_ecma_utils = "=15.0.1"
+swc_ecma_visit = "=11.0.0"
+swc_plugin = "=1.0.1"
+swc_plugin_macro = "=1.1.0"
+swc_ecma_transforms_testing = "=18.0.0"
+testing = "12.0.0"
