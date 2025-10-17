@@ -41,14 +41,19 @@ regex = { version = "1.11.1", default-features = false }
 relative-path = "1.9.3"
 pathdiff = "0.2"
 swc_atoms = "=5.0.0"
-swc_common = "=11.0.3"
-swc_core = "=26.3.4"
+swc_common = "=11.1.3"
+swc_core = "=26.4.5"
 swc_ecma_ast = "=11.0.0"
 swc_ecma_codegen = "=17.0.2"
 swc_ecma_parser = "=14.0.1"
-swc_ecma_utils = "=15.0.1"
+swc_ecma_utils = "=15.0.2"
 swc_ecma_visit = "=11.0.0"
 swc_plugin = "=1.0.1"
 swc_plugin_macro = "=1.1.0"
 swc_ecma_transforms_testing = "=18.0.0"
+swc_ecma_transforms_base = "=15.1.1"
 testing = "12.0.0"
+
+[patch.crates-io]
+swc_compiler_base = { path = "crates/compiled_swc_plugin/vendor/swc_compiler_base" }
+swc = { path = "crates/compiled_swc_plugin/vendor/swc" }
