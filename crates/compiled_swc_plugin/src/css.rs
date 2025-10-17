@@ -176,7 +176,8 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   }
 
   let mut semantic = lowercase_hex_literals(trimmed);
-  semantic = maybe_convert_px_to_pt(&semantic);
+  semantic = convert_px_multiples_to_pc(&semantic);
+  semantic = strip_zero_units(&semantic);
   let output = minify_whitespace(&semantic);
 
   NormalizedCssValue {
@@ -185,56 +186,180 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   }
 }
 
-fn maybe_convert_px_to_pt(value: &str) -> String {
+fn convert_px_multiples_to_pc(value: &str) -> String {
   let trimmed = value.trim();
   if trimmed.is_empty() {
     return String::new();
   }
 
-  let mut core = trimmed;
-  let mut important_suffix = "";
+  let bytes = trimmed.as_bytes();
+  let mut search_start = 0usize;
+  let mut last_written = 0usize;
+  let mut output = String::with_capacity(trimmed.len());
 
-  if let Some(stripped) = core.strip_suffix("!important") {
-    core = stripped.trim_end();
-    important_suffix = "!important";
+  while let Some(rel_pos) = trimmed[search_start..].find("px") {
+    let px_index = search_start + rel_pos;
+    let mut cursor = px_index;
+    let mut has_digit = false;
+    let mut seen_decimal = false;
+
+    while cursor > 0 {
+      let ch = bytes[cursor - 1] as char;
+      if ch.is_ascii_digit() {
+        has_digit = true;
+        cursor -= 1;
+        continue;
+      }
+      if ch == '.' && !seen_decimal {
+        seen_decimal = true;
+        cursor -= 1;
+        continue;
+      }
+      if (ch == '+' || ch == '-') && cursor - 1 < px_index {
+        if cursor > 1 {
+          let prev = bytes[cursor - 2] as char;
+          if prev.is_ascii_alphanumeric() || prev == '_' {
+            break;
+          }
+        }
+        cursor -= 1;
+        continue;
+      }
+      break;
+    }
+
+    if !has_digit {
+      search_start = px_index + 2;
+      continue;
+    }
+
+    let number_start = cursor;
+    if number_start > 0 {
+      let prev = bytes[number_start - 1] as char;
+      let mut should_skip = prev.is_ascii_alphanumeric() || prev == '_';
+      if !should_skip && prev == '-' && number_start >= 2 {
+        let prev2 = bytes[number_start - 2] as char;
+        if prev2.is_ascii_alphanumeric() || prev2 == '_' || prev2 == '-' {
+          should_skip = true;
+        }
+      }
+      if should_skip {
+        search_start = px_index + 2;
+        continue;
+      }
+    }
+
+    let number_str = &trimmed[number_start..px_index];
+    if number_str.contains('.') || number_str.contains('e') || number_str.contains('E') {
+      search_start = px_index + 2;
+      continue;
+    }
+
+    if let Ok(px_value) = number_str.parse::<i64>() {
+      if px_value != 0 && px_value % 16 == 0 {
+        let converted_abs = px_value.abs() / 16;
+        let mut candidate = String::new();
+        if px_value < 0 {
+          candidate.push('-');
+        }
+        candidate.push_str(&converted_abs.to_string());
+        candidate.push_str("pc");
+
+        let original_len = px_index + 2 - number_start;
+        if candidate.len() < original_len {
+          output.push_str(&trimmed[last_written..number_start]);
+          output.push_str(&candidate);
+          last_written = px_index + 2;
+        }
+      }
+    }
+
+    search_start = px_index + 2;
   }
 
-  let (sign, digits) = if let Some(rest) = core.strip_prefix('-') {
-    ("-", rest)
-  } else if let Some(rest) = core.strip_prefix('+') {
-    ("+", rest)
+  if last_written == 0 {
+    trimmed.to_string()
   } else {
-    ("", core)
-  };
+    output.push_str(&trimmed[last_written..]);
+    output
+  }
+}
 
-  let Some(number_part) = digits.strip_suffix("px") else {
-    return trimmed.to_string();
-  };
+fn strip_zero_units(value: &str) -> String {
+  const UNITS: [&str; 8] = ["px", "em", "rem", "%", "vw", "vh", "vmin", "vmax"];
 
-  if number_part.is_empty() || !number_part.chars().all(|ch| ch.is_ascii_digit()) {
-    return trimmed.to_string();
+  let bytes = value.as_bytes();
+  let mut index = 0usize;
+  let mut output = String::with_capacity(value.len());
+
+  while index < bytes.len() {
+    let current = bytes[index];
+    if current == b'0' {
+      let prev_byte = if index > 0 { Some(bytes[index - 1]) } else { None };
+      let prev_is_digit_or_dot = prev_byte
+        .map(|byte| {
+          let ch = byte as char;
+          ch.is_ascii_digit() || ch == '.'
+        })
+        .unwrap_or(false);
+
+      if !prev_is_digit_or_dot {
+        let mut replaced = false;
+        for unit in UNITS {
+          let unit_bytes = unit.as_bytes();
+          if index + 1 + unit_bytes.len() <= bytes.len()
+            && &bytes[index + 1..index + 1 + unit_bytes.len()] == unit_bytes
+          {
+            if prev_byte == Some(b'-') && output.ends_with('-') {
+              output.pop();
+            }
+            output.push('0');
+            index += 1 + unit_bytes.len();
+            replaced = true;
+            break;
+          }
+        }
+
+        if replaced {
+          continue;
+        }
+      }
+    }
+
+    output.push(current as char);
+    index += 1;
   }
 
-  let Ok(px_value) = number_part.parse::<i64>() else {
-    return trimmed.to_string();
-  };
+  output
+}
 
-  if px_value % 4 != 0 {
-    return trimmed.to_string();
+fn vendor_prefixed_values(property: &str, value: &str) -> Option<Vec<String>> {
+  let normalized_value = value.trim();
+  if normalized_value.is_empty() {
+    return None;
   }
 
-  let pt_value = px_value * 3 / 4;
-  let candidate = format!("{sign}{pt_value}pt");
+  let property_lower = property.to_ascii_lowercase();
+  let applies_to_fit_content = matches!(
+    property_lower.as_str(),
+    "width" | "height" | "min-width" | "max-width" | "min-height" | "max-height"
+  );
 
-  if candidate.len() + important_suffix.len() >= core.len() + important_suffix.len() {
-    return trimmed.to_string();
+  if applies_to_fit_content && normalized_value == "fit-content" {
+    if normalized_value.contains("-moz-fit-content") {
+      return None;
+    }
+    return Some(vec!["-moz-fit-content".into(), "fit-content".into()]);
   }
 
-  let mut result = candidate;
-  if !important_suffix.is_empty() {
-    result.push_str(important_suffix);
+  None
+}
+
+fn expand_shorthand_properties(property: &str) -> Option<Vec<String>> {
+  match property {
+    "overflow" => Some(vec!["overflow-x".into(), "overflow-y".into()]),
+    _ => None,
   }
-  result
 }
 
 fn trim_numeric(value: &str) -> String {
@@ -362,10 +487,37 @@ fn apply_increase_specificity(selector: &str) -> String {
   result
 }
 
+fn minify_at_rule_params(raw: &str) -> String {
+  let mut result = String::with_capacity(raw.len());
+  let mut chars = raw.chars().peekable();
+  let mut pending_space = false;
+
+  while let Some(ch) = chars.next() {
+    if ch.is_ascii_whitespace() {
+      pending_space = true;
+      continue;
+    }
+    if pending_space {
+      if !result.ends_with('(') && !result.is_empty() {
+        result.push(' ');
+      }
+      pending_space = false;
+    }
+    result.push(ch);
+    if ch == ':' {
+      while matches!(chars.peek(), Some(next) if next.is_ascii_whitespace()) {
+        chars.next();
+      }
+    }
+  }
+
+  result.trim().to_string()
+}
+
 pub(crate) fn wrap_at_rules(mut css: String, at_rules: &[AtRuleInput]) -> String {
   for at_rule in at_rules.iter().rev() {
     let name = at_rule.name.trim();
-    let params = at_rule.params.trim();
+    let params = minify_at_rule_params(&at_rule.params);
     if params.is_empty() {
       css = format!("@{}{{{}}}", name, css);
     } else {
@@ -390,98 +542,124 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         .collect::<Vec<_>>()
     };
 
-    let declaration = if rule.important {
-      format!("{}:{}!important", rule.property, rule.value)
+    let NormalizedCssValue {
+      hash_value: base_hash_value,
+      output_value: base_output_value,
+    } = normalize_css_value(&rule.raw_value);
+
+    let property_names = expand_shorthand_properties(rule.property.as_str())
+      .unwrap_or_else(|| vec![rule.property.clone()]);
+
+    let at_rule_label: String = if rule.at_rules.is_empty() {
+      "undefined".to_string()
     } else {
-      format!("{}:{}", rule.property, rule.value)
+      rule
+        .at_rules
+        .iter()
+        .map(|input| {
+          format!(
+            "{}{}",
+            input.name.trim(),
+            minify_at_rule_params(&input.params)
+          )
+        })
+        .collect()
     };
+    let prefix = options.class_hash_prefix.as_deref().unwrap_or("");
 
-    let mut per_selector_outputs = Vec::new();
-    for selector in &normalized_selectors {
-      let selectors_hash = selector.to_string();
-      let at_rule_label: String = if rule.at_rules.is_empty() {
-        "undefined".to_string()
-      } else {
-        rule
-          .at_rules
-          .iter()
-          .map(|input| format!("{}{}", input.name.trim(), input.params.trim()))
-          .collect()
-      };
-      let prefix = options.class_hash_prefix.as_deref().unwrap_or("");
-      let group_hash = hash(
-        &format!(
-          "{}{}{}{}",
-          prefix, at_rule_label, selectors_hash, rule.property
-        ),
-        0,
-      );
-      let group = &group_hash[..group_hash.len().min(4)];
-      if debug_hash {
-        eprintln!(
-          "[compiled-hash] group-input='{}{}{}{}' selector='{}' property='{}'",
-          prefix,
-          at_rule_label,
-          selectors_hash,
-          rule.property,
-          selector,
-          rule.property
-        );
-      }
+    for property_name in property_names {
+      let vendor_values = vendor_prefixed_values(property_name.as_str(), &base_output_value)
+        .unwrap_or_else(|| vec![base_output_value.clone()]);
 
-      let value_for_hash = if rule.important {
-        format!("{}!important", rule.raw_value)
-      } else {
-        rule.raw_value.clone()
-      };
-      if debug_hash {
-        eprintln!(
-          "[compiled-hash] value-input='{}' important={}",
-          value_for_hash,
-          rule.important
-        );
+      let declaration_values: Vec<String> = vendor_values
+        .iter()
+        .map(|value| {
+          if rule.important {
+            format!("{}:{}!important", property_name, value)
+          } else {
+            format!("{}:{}", property_name, value)
+          }
+        })
+        .collect();
+      let declaration = declaration_values.join(";");
+
+      let mut hash_component = base_hash_value.clone();
+      if rule.important {
+        hash_component.push_str("!important");
       }
+      let value_for_hash = hash_component.clone();
       let value_hash = hash(&value_for_hash, 0);
       let value_segment = &value_hash[..value_hash.len().min(4)];
-      let full_class = format!("_{}{}", group, value_segment);
-      let (class_name, selector_target) =
-        match options.class_name_compression_map.get(&full_class[1..]) {
-          Some(compressed) => (
-            format!("_{}_{}", &full_class[1..5], compressed),
-            compressed.clone(),
-          ),
-          None => (full_class.clone(), full_class.clone()),
-        };
-      let mut selector_output = join_selectors(&[selector.clone()], &selector_target);
-      if options.increase_specificity {
-        selector_output = apply_increase_specificity(&selector_output);
-      }
-      let css = wrap_at_rules(
-        format!("{}{{{}}}", selector_output.clone(), declaration.clone()),
-        &rule.at_rules,
-      );
-      per_selector_outputs.push((class_name, selector_output, css));
-    }
 
-    if !options.flatten_multiple_selectors && per_selector_outputs.len() > 1 {
-      let combined_selector = per_selector_outputs
-        .iter()
-        .map(|(_, selector, _)| selector.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-      let combined_css = wrap_at_rules(
-        format!("{}{{{}}}", combined_selector, declaration),
-        &rule.at_rules,
-      );
-      for (class_name, _, _) in per_selector_outputs {
-        artifacts.push(AtomicRule {
-          class_name,
-          css: combined_css.clone(),
-        });
+      let mut per_selector_outputs = Vec::new();
+      for selector in &normalized_selectors {
+        let selectors_hash = selector.to_string();
+        let group_hash = hash(
+          &format!(
+            "{}{}{}{}",
+            prefix, at_rule_label, selectors_hash, property_name
+          ),
+          0,
+        );
+        let group = &group_hash[..group_hash.len().min(4)];
+        if debug_hash {
+          eprintln!(
+            "[compiled-hash] group-input='{}{}{}{}' selector='{}' property='{}'",
+            prefix,
+            at_rule_label,
+            selectors_hash,
+            property_name,
+            selector,
+            property_name
+          );
+        }
+        if debug_hash {
+          eprintln!(
+            "[compiled-hash] value-input='{}' important={}",
+            value_for_hash,
+            rule.important
+          );
+        }
+        let full_class = format!("_{}{}", group, value_segment);
+        let (class_name, selector_target) =
+          match options.class_name_compression_map.get(&full_class[1..]) {
+            Some(compressed) => (
+              format!("_{}_{}", &full_class[1..5], compressed),
+              compressed.clone(),
+            ),
+            None => (full_class.clone(), full_class.clone()),
+          };
+        let mut selector_output = join_selectors(&[selector.clone()], &selector_target);
+        if options.increase_specificity {
+          selector_output = apply_increase_specificity(&selector_output);
+        }
+        let css = wrap_at_rules(
+          format!("{}{{{}}}", selector_output.clone(), declaration.clone()),
+          &rule.at_rules,
+        );
+        per_selector_outputs.push((class_name, selector_output, css));
       }
-    } else {
-      for (class_name, _, css) in per_selector_outputs {
-        artifacts.push(AtomicRule { class_name, css });
+
+      if !options.flatten_multiple_selectors && per_selector_outputs.len() > 1 {
+        let combined_selector = per_selector_outputs
+          .iter()
+          .map(|(_, selector, _)| selector.as_str())
+          .collect::<Vec<_>>()
+          .join(", ");
+        let combined_css = wrap_at_rules(
+          format!("{}{{{}}}", combined_selector, declaration.clone()),
+          &rule.at_rules,
+        );
+        for (class_name, _, _) in per_selector_outputs {
+          artifacts.push(AtomicRule {
+            class_name,
+            css: combined_css.clone(),
+          });
+        }
+      } else {
+        for (class_name, _, css) in per_selector_outputs {
+          artifacts.push(AtomicRule { class_name, css });
+        }
       }
     }
   }
@@ -557,7 +735,10 @@ pub fn atomicize_literal(css: &str, options: &CssOptions) -> CssArtifacts {
 
 #[cfg(test)]
 mod tests {
-  use super::{CssOptions, atomicize_literal};
+  use super::{
+    CssOptions, CssRuleInput, atomicize_literal, atomicize_rules, minify_at_rule_params,
+    normalize_css_value, vendor_prefixed_values,
+  };
 
   #[test]
   fn generates_atomic_rules() {
@@ -571,11 +752,98 @@ mod tests {
     let mut options = CssOptions::default();
     options
       .class_name_compression_map
-      .insert("1ylx13q2".into(), "a".into());
+      .insert("1doq13q2".into(), "a".into());
     let artifacts = atomicize_literal("color: blue;", &options);
     assert_eq!(artifacts.rules.len(), 1);
     let rule = &artifacts.rules[0];
-    assert_eq!(rule.class_name, "_1ylx_a");
+    assert_eq!(rule.class_name, "_1doq_a");
     assert!(rule.css.contains(".a{"));
+  }
+
+  #[test]
+  fn converts_px_fallbacks_to_pc_inside_var() {
+    let normalized = normalize_css_value("var(--ds-space-200, 16px)");
+    assert_eq!(normalized.output_value, "var(--ds-space-200,1pc)");
+    assert!(normalized.hash_value.contains("1pc"));
+  }
+
+  #[test]
+  fn does_not_convert_px_inside_identifiers() {
+    let normalized = normalize_css_value("url(/images/icon-16px.png)");
+    assert_eq!(
+      normalized.output_value,
+      "url(/images/icon-16px.png)"
+    );
+  }
+
+  #[test]
+  fn strips_zero_units_inside_var() {
+    let normalized = normalize_css_value("var(--ds-space-0, 0px)");
+    assert_eq!(normalized.output_value, "var(--ds-space-0,0)");
+  }
+
+  #[test]
+  fn vendor_prefixed_values_for_fit_content() {
+    let values = vendor_prefixed_values("width", "fit-content").expect("expected expansion");
+    assert_eq!(values, vec!["-moz-fit-content", "fit-content"]);
+    assert!(vendor_prefixed_values("width", "-moz-fit-content").is_none());
+  }
+
+  #[test]
+  fn atomicize_rules_emits_vendor_prefixed_fit_content() {
+    let rule = CssRuleInput {
+      selectors: vec!["&".to_string()],
+      at_rules: vec![],
+      property: "width".into(),
+      value: "fit-content".into(),
+      raw_value: "fit-content".into(),
+      important: false,
+    };
+    let artifacts = atomicize_rules(&[rule], &CssOptions::default());
+    let css_rule = &artifacts.rules[0].css;
+    assert!(
+      css_rule.contains("width:-moz-fit-content;width:fit-content"),
+      "css rule was {css_rule}"
+    );
+  }
+
+  #[test]
+  fn atomicize_rules_expands_overflow_shorthand() {
+    let rule = CssRuleInput {
+      selectors: vec!["&".to_string()],
+      at_rules: vec![],
+      property: "overflow".into(),
+      value: "hidden".into(),
+      raw_value: "hidden".into(),
+      important: false,
+    };
+    let artifacts = atomicize_rules(&[rule], &CssOptions::default());
+    let css_strings: Vec<&str> = artifacts.rules.iter().map(|rule| rule.css.as_str()).collect();
+    assert!(
+      css_strings
+        .iter()
+        .any(|css| css.contains("overflow-x:hidden")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings
+        .iter()
+        .any(|css| css.contains("overflow-y:hidden")),
+      "css strings were {:?}",
+      css_strings
+    );
+  }
+
+  #[test]
+  fn minifies_media_query_parameters() {
+    assert_eq!(
+      minify_at_rule_params("(min-width: 90rem)"),
+      "(min-width:90rem)"
+    );
+    assert_eq!(
+      minify_at_rule_params("screen and (min-width: 90rem)"),
+      "screen and (min-width:90rem)"
+    );
   }
 }
