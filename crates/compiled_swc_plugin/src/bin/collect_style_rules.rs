@@ -6,21 +6,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use once_cell::sync::Lazy;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use swc_core::common::{
-  comments::SingleThreadedComments, FileName, Globals, Mark, SourceMap, GLOBALS,
+  FileName, GLOBALS, Globals, Mark, SourceMap, comments::SingleThreadedComments,
 };
 use swc_core::ecma::ast::{EsVersion, Pass, Program};
-use swc_core::ecma::codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter, Node};
-use swc_core::ecma::parser::{lexer::Lexer, Parser as SwcParser, StringInput, Syntax, TsSyntax, EsSyntax};
+use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, Node, text_writer::JsWriter};
+use swc_core::ecma::parser::{
+  EsSyntax, Parser as SwcParser, StringInput, Syntax, TsSyntax, lexer::Lexer,
+};
 use swc_core::ecma::transforms::base::resolver;
 use swc_core::ecma::visit::VisitMutWith;
 use walkdir::WalkDir;
 
-use compiled_swc_plugin::{take_latest_artifacts, StyleArtifacts};
+use compiled_swc_plugin::{StyleArtifacts, take_latest_artifacts};
 use swc_design_system_tokens::design_system_tokens_visitor;
 
 const IMPORT_MARKERS: [&str; 2] = ["@compiled/react", "@atlaskit/css"];
@@ -232,8 +234,7 @@ fn process_file(
 
   let output_file = build_output_path(output_dir, rel_path);
   if let Some(parent) = output_file.parent() {
-    fs::create_dir_all(parent)
-      .with_context(|| format!("Failed to create {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
   }
 
   let mut style_rules = artifacts.style_rules;
@@ -334,7 +335,12 @@ fn compiled_syntax(path: &Path) -> Syntax {
   let is_ts = path
     .extension()
     .and_then(|ext| ext.to_str())
-    .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ts" | "tsx" | "cts" | "mts"))
+    .map(|ext| {
+      matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "ts" | "tsx" | "cts" | "mts"
+      )
+    })
     .unwrap_or(false);
 
   if is_ts {
@@ -377,9 +383,7 @@ fn extract_tokens_options(config: &Value) -> TokensOptions {
     for entry in plugins {
       match entry {
         Value::String(name) if name == "@atlaskit/tokens/babel-plugin" => {}
-        Value::Array(items)
-          if matches!(items.first(), Some(Value::String(name)) if name == "@atlaskit/tokens/babel-plugin") =>
-        {
+        Value::Array(items) if matches!(items.first(), Some(Value::String(name)) if name == "@atlaskit/tokens/babel-plugin") => {
           if let Some(Value::Object(options)) = items.get(1) {
             if let Some(value) = options
               .get("shouldUseAutoFallback")

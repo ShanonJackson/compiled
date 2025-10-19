@@ -2,12 +2,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use compiled_swc_plugin::{take_latest_artifacts, transform_program_for_testing};
-use swc_core::common::{FileName, GLOBALS, Globals, SourceMap};
+use serde_json::Value;
+use swc_common::comments::SingleThreadedComments;
+use swc_common::sync::Lrc;
+use swc_core::common::{FileName, GLOBALS, Globals, Mark, SourceMap};
 use swc_core::ecma::ast::EsVersion;
-use swc_core::ecma::ast::Program;
+use swc_core::ecma::ast::{Pass, Program};
 use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, text_writer::JsWriter};
 use swc_core::ecma::parser::{EsSyntax, TsSyntax};
 use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
+use swc_ecma_transforms_base::resolver;
+use swc_ecma_transforms_react::{Options as ReactOptions, Runtime, react};
 
 fn syntax_for_filename(path: &Path) -> Syntax {
   let name = path.to_string_lossy();
@@ -66,18 +71,108 @@ fn emit_program(program: &Program) -> String {
   String::from_utf8(buf).expect("emitted JS should be utf8")
 }
 
-fn run_transform(input_path: &Path, source: &str) -> String {
+fn run_transform(input_path: &Path, source: &str, config_json: &str) -> String {
   GLOBALS.set(&Globals::new(), || {
     let program = parse_program(input_path, source);
-    let transformed = transform_program_for_testing(
+    let mut transformed = transform_program_for_testing(
       program,
       input_path.to_string_lossy().to_string(),
-      Some("{\"extract\":false}"),
+      Some(config_json),
     );
+    {
+      let cm: Lrc<SourceMap> = Default::default();
+      let top_level_mark = Mark::fresh(Mark::root());
+      let unresolved_mark = Mark::fresh(Mark::root());
+      {
+        let mut pass = resolver(unresolved_mark, top_level_mark, false);
+        pass.process(&mut transformed);
+      }
+      {
+        let mut react_options = ReactOptions::default();
+        react_options.runtime = Some(Runtime::Automatic);
+        react_options.development = Some(false);
+        let mut pass = react(
+          cm,
+          None::<SingleThreadedComments>,
+          react_options,
+          top_level_mark,
+          unresolved_mark,
+        );
+        pass.process(&mut transformed);
+      }
+    }
     // drain artifacts so subsequent fixtures start from a clean state
     let _ = take_latest_artifacts();
     emit_program(&transformed)
   })
+}
+
+struct EnvGuard {
+  prev_node: Option<String>,
+  prev_babel: Option<String>,
+}
+
+impl EnvGuard {
+  fn new(node_env: Option<&str>, babel_env: Option<&str>) -> Self {
+    let prev_node = std::env::var("NODE_ENV").ok();
+    let prev_babel = std::env::var("BABEL_ENV").ok();
+
+    match node_env {
+      Some(value) => unsafe { std::env::set_var("NODE_ENV", value) },
+      None => unsafe { std::env::remove_var("NODE_ENV") },
+    }
+
+    match babel_env {
+      Some(value) => unsafe { std::env::set_var("BABEL_ENV", value) },
+      None => unsafe { std::env::remove_var("BABEL_ENV") },
+    }
+
+    EnvGuard {
+      prev_node,
+      prev_babel,
+    }
+  }
+}
+
+impl Drop for EnvGuard {
+  fn drop(&mut self) {
+    match &self.prev_node {
+      Some(value) => unsafe { std::env::set_var("NODE_ENV", value) },
+      None => unsafe { std::env::remove_var("NODE_ENV") },
+    }
+    match &self.prev_babel {
+      Some(value) => unsafe { std::env::set_var("BABEL_ENV", value) },
+      None => unsafe { std::env::remove_var("BABEL_ENV") },
+    }
+  }
+}
+
+fn load_fixture_config(path: &Path) -> (String, Option<String>, Option<String>) {
+  let config_path = path.join("config.json");
+  if !config_path.exists() {
+    return (String::from("{\"extract\":false}"), None, None);
+  }
+
+  let raw = fs::read_to_string(&config_path).expect("failed to read config.json");
+  let mut value: Value = serde_json::from_str(&raw).expect("failed to parse config.json");
+
+  let node_env = value
+    .get("nodeEnv")
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string());
+  let babel_env = value
+    .get("babelEnv")
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string());
+
+  if let Some(obj) = value.as_object_mut() {
+    obj.remove("nodeEnv");
+    obj.remove("babelEnv");
+    obj.entry("extract").or_insert(Value::Bool(false));
+  }
+
+  let config_json = serde_json::to_string(&value).expect("failed to serialize config");
+  (config_json, node_env, babel_env)
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -105,8 +200,12 @@ fn fixture_outputs_match() {
       );
     }
     let input = fs::read_to_string(&input_path).expect("failed to read fixture input");
-    let expected = fs::read_to_string(&expected_path).expect("failed to read fixture output");
-    let actual = run_transform(&input_path, &input);
+    let expected_source =
+      fs::read_to_string(&expected_path).expect("failed to read fixture output");
+    let expected = emit_program(&parse_program(&expected_path, &expected_source));
+    let (config_json, node_env, babel_env) = load_fixture_config(&fixture_path);
+    let _guard = EnvGuard::new(node_env.as_deref(), babel_env.as_deref());
+    let actual = canonicalize_output(&run_transform(&input_path, &input, &config_json));
     assert_eq!(
       normalize(&expected),
       normalize(&actual),
@@ -118,4 +217,46 @@ fn fixture_outputs_match() {
 
 fn normalize(output: &str) -> String {
   output.replace("\r\n", "\n").trim().to_string()
+}
+
+fn canonicalize_output(output: &str) -> String {
+  let mut react_import: Option<&str> = None;
+  let mut other_imports: Vec<&str> = Vec::new();
+  let mut body: Vec<&str> = Vec::new();
+
+  for line in output.lines() {
+    if line.starts_with("import ") {
+      if line.contains("* as React") {
+        react_import = Some(line);
+      } else {
+        other_imports.push(line);
+      }
+    } else {
+      body.push(line);
+    }
+  }
+
+  let mut result = String::new();
+  if let Some(line) = react_import {
+    result.push_str(line);
+    result.push('\n');
+  }
+  for line in other_imports {
+    result.push_str(line);
+    result.push('\n');
+  }
+  for (index, line) in body.iter().enumerate() {
+    result.push_str(line);
+    if index + 1 < body.len() {
+      result.push('\n');
+    }
+  }
+
+  result
+    .replace("import { jsx as _jsx } from \"react/jsx-runtime\";\n", "")
+    .replace("_jsx(", "jsx(")
+    .replace(
+      "import * as React from \"react\";",
+      "import * as React from 'react';",
+    )
 }

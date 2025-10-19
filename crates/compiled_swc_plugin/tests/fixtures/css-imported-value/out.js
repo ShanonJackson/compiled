@@ -1,6 +1,14 @@
-import { css as compiledCss } from '@compiled/react';
+import * as React from 'react';
+import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { color } from './tokens';
-const styles = compiledCss({
-    color
+import { jsx, jsxs } from "react/jsx-runtime";
+const _ = "._syaz13q2{color:blue}";
+const styles = null;
+export const Component = () => jsxs(CC, {
+  children: [jsx(CS, {
+    children: [_]
+  }), jsx("div", {
+    className: ax(["_syaz13q2"]),
+    children: "Hello"
+  })]
 });
-export const Component = ()=><div css={styles}>Hello</div>;

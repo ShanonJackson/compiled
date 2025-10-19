@@ -2,14 +2,9 @@ import { forwardRef } from 'react';
 import * as React from 'react';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
-const _ = "._syaz1q9v{color:hotpink}";
-const Base = ({
-  children
-}) => jsx("button", {
-  children: children
-});
-export const StyledButton = forwardRef(({
-  as: C = Base,
+const _ = "._syaz5scu{color:red}";
+export const MyDiv = forwardRef(({
+  as: C = "div",
   style: __cmpls,
   ...__cmplp
 }, __cmplr) => {
@@ -23,13 +18,10 @@ export const StyledButton = forwardRef(({
       ...__cmplp,
       style: __cmpls,
       ref: __cmplr,
-      className: ax(["_syaz1q9v", __cmplp.className])
+      className: ax(["c_MyDiv", "_syaz5scu", __cmplp.className])
     })]
   });
 });
 if (process.env.NODE_ENV !== 'production') {
-  StyledButton.displayName = 'StyledButton';
+  MyDiv.displayName = 'MyDiv';
 }
-export const Component = () => jsx(StyledButton, {
-  children: "Click me"
-});

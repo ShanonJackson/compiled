@@ -2,30 +2,23 @@ import { forwardRef } from 'react';
 import * as React from 'react';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
-const _2 = "._30l3r3uz:hover{color:#000}";
-const _ = "._syaz1my7{color:teal}";
-const StyledDiv = forwardRef(({
+const _ = "._syaz5scu{color:red}";
+export const Styled = forwardRef(({
   as: C = "div",
   style: __cmpls,
   ...__cmplp
 }, __cmplr) => {
-  if (__cmplp.innerRef) {
-    throw new Error("Please use 'ref' instead of 'innerRef'.");
-  }
   return jsxs(CC, {
     children: [jsx(CS, {
-      children: [_, _2]
+      children: [_]
     }), jsx(C, {
       ...__cmplp,
       style: __cmpls,
       ref: __cmplr,
-      className: ax(["_syaz1my7 _30l3r3uz", __cmplp.className])
+      className: ax(["_syaz5scu", __cmplp.className])
     })]
   });
 });
 if (process.env.NODE_ENV !== 'production') {
-  StyledDiv.displayName = 'StyledDiv';
+  Styled.displayName = 'Styled';
 }
-export const Component = () => jsx(StyledDiv, {
-  children: "Hover me"
-});

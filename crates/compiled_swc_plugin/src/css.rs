@@ -143,6 +143,34 @@ fn lowercase_hex_literals(input: &str) -> String {
   String::from_utf8(bytes).expect("css value should be valid utf8")
 }
 
+fn shorten_hex_literals(input: &str) -> String {
+  let mut output = String::with_capacity(input.len());
+  let chars: Vec<char> = input.chars().collect();
+  let mut index = 0usize;
+
+  while index < chars.len() {
+    let ch = chars[index];
+    if ch == '#' && index + 6 < chars.len() {
+      let slice = &chars[index + 1..index + 7];
+      if slice.iter().all(|c| c.is_ascii_hexdigit()) {
+        if slice[0] == slice[1] && slice[2] == slice[3] && slice[4] == slice[5] {
+          output.push('#');
+          output.push(slice[0]);
+          output.push(slice[2]);
+          output.push(slice[4]);
+          index += 7;
+          continue;
+        }
+      }
+    }
+
+    output.push(ch);
+    index += 1;
+  }
+
+  output
+}
+
 fn minify_whitespace(value: &str) -> String {
   let mut output = String::with_capacity(value.len());
   let mut chars = value.chars().peekable();
@@ -176,7 +204,8 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   }
 
   let mut semantic = lowercase_hex_literals(trimmed);
-  semantic = convert_px_multiples_to_pc(&semantic);
+  semantic = shorten_hex_literals(&semantic);
+  semantic = convert_length_units(&semantic);
   semantic = strip_zero_units(&semantic);
   let output = minify_whitespace(&semantic);
 
@@ -186,18 +215,26 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   }
 }
 
-fn convert_px_multiples_to_pc(value: &str) -> String {
+fn convert_length_units(value: &str) -> String {
   let trimmed = value.trim();
   if trimmed.is_empty() {
     return String::new();
   }
 
-  let bytes = trimmed.as_bytes();
+  let mut core = trimmed;
+  let mut important_suffix = "";
+
+  if let Some(stripped) = core.strip_suffix("!important") {
+    core = stripped.trim_end();
+    important_suffix = "!important";
+  }
+
+  let bytes = core.as_bytes();
   let mut search_start = 0usize;
   let mut last_written = 0usize;
-  let mut output = String::with_capacity(trimmed.len());
+  let mut output = String::with_capacity(core.len());
 
-  while let Some(rel_pos) = trimmed[search_start..].find("px") {
+  while let Some(rel_pos) = core[search_start..].find("px") {
     let px_index = search_start + rel_pos;
     let mut cursor = px_index;
     let mut has_digit = false;
@@ -249,25 +286,52 @@ fn convert_px_multiples_to_pc(value: &str) -> String {
       }
     }
 
-    let number_str = &trimmed[number_start..px_index];
+    let number_str = &core[number_start..px_index];
     if number_str.contains('.') || number_str.contains('e') || number_str.contains('E') {
       search_start = px_index + 2;
       continue;
     }
 
     if let Ok(px_value) = number_str.parse::<i64>() {
-      if px_value != 0 && px_value % 16 == 0 {
-        let converted_abs = px_value.abs() / 16;
-        let mut candidate = String::new();
-        if px_value < 0 {
-          candidate.push('-');
-        }
-        candidate.push_str(&converted_abs.to_string());
-        candidate.push_str("pc");
+      let mut best: Option<String> = None;
 
+      if px_value != 0 {
+        if px_value % 16 == 0 {
+          let converted_abs = px_value.abs() / 16;
+          let mut candidate = String::new();
+          if px_value < 0 {
+            candidate.push('-');
+          }
+          candidate.push_str(&converted_abs.to_string());
+          candidate.push_str("pc");
+          best = Some(candidate);
+        }
+
+        if px_value % 4 == 0 {
+          let pt_value = px_value * 3 / 4;
+          let mut candidate = String::new();
+          if pt_value < 0 {
+            candidate.push('-');
+          }
+          candidate.push_str(&pt_value.abs().to_string());
+          candidate.push_str("pt");
+          best = match best {
+            Some(existing) => {
+              if candidate.len() < existing.len() {
+                Some(candidate)
+              } else {
+                Some(existing)
+              }
+            }
+            None => Some(candidate),
+          };
+        }
+      }
+
+      if let Some(candidate) = best {
         let original_len = px_index + 2 - number_start;
         if candidate.len() < original_len {
-          output.push_str(&trimmed[last_written..number_start]);
+          output.push_str(&core[last_written..number_start]);
           output.push_str(&candidate);
           last_written = px_index + 2;
         }
@@ -278,15 +342,26 @@ fn convert_px_multiples_to_pc(value: &str) -> String {
   }
 
   if last_written == 0 {
-    trimmed.to_string()
+    if important_suffix.is_empty() {
+      core.to_string()
+    } else {
+      let mut result = core.to_string();
+      result.push_str(important_suffix);
+      result
+    }
   } else {
-    output.push_str(&trimmed[last_written..]);
-    output
+    output.push_str(&core[last_written..]);
+    if important_suffix.is_empty() {
+      output
+    } else {
+      output.push_str(important_suffix);
+      output
+    }
   }
 }
 
 fn strip_zero_units(value: &str) -> String {
-  const UNITS: [&str; 8] = ["px", "em", "rem", "%", "vw", "vh", "vmin", "vmax"];
+  const UNITS: [&str; 7] = ["px", "em", "rem", "vw", "vh", "vmin", "vmax"];
 
   let bytes = value.as_bytes();
   let mut index = 0usize;
@@ -295,7 +370,11 @@ fn strip_zero_units(value: &str) -> String {
   while index < bytes.len() {
     let current = bytes[index];
     if current == b'0' {
-      let prev_byte = if index > 0 { Some(bytes[index - 1]) } else { None };
+      let prev_byte = if index > 0 {
+        Some(bytes[index - 1])
+      } else {
+        None
+      };
       let prev_is_digit_or_dot = prev_byte
         .map(|byte| {
           let ch = byte as char;
@@ -355,9 +434,139 @@ fn vendor_prefixed_values(property: &str, value: &str) -> Option<Vec<String>> {
   None
 }
 
+struct PropertyExpansion {
+  name: String,
+  raw_value: String,
+}
+
+fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
+  if property == "flex" {
+    let trimmed = raw_value.trim();
+    if trimmed == "1" {
+      return vec![
+        PropertyExpansion {
+          name: "flex-grow".into(),
+          raw_value: "1".into(),
+        },
+        PropertyExpansion {
+          name: "flex-shrink".into(),
+          raw_value: "1".into(),
+        },
+        PropertyExpansion {
+          name: "flex-basis".into(),
+          raw_value: "0%".into(),
+        },
+      ];
+    }
+  }
+
+  if property == "text-decoration" {
+    let trimmed = raw_value.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+      return vec![
+        PropertyExpansion {
+          name: "text-decoration-line".into(),
+          raw_value: "none".into(),
+        },
+        PropertyExpansion {
+          name: "text-decoration-color".into(),
+          raw_value: "initial".into(),
+        },
+        PropertyExpansion {
+          name: "text-decoration-style".into(),
+          raw_value: "solid".into(),
+        },
+      ];
+    }
+  }
+
+  if let Some(names) = expand_shorthand_properties(property) {
+    return names
+      .into_iter()
+      .map(|name| PropertyExpansion {
+        raw_value: raw_value.to_string(),
+        name,
+      })
+      .collect();
+  }
+
+  vec![PropertyExpansion {
+    name: property.to_string(),
+    raw_value: raw_value.to_string(),
+  }]
+}
+
 fn expand_shorthand_properties(property: &str) -> Option<Vec<String>> {
   match property {
     "overflow" => Some(vec!["overflow-x".into(), "overflow-y".into()]),
+    _ => None,
+  }
+}
+
+pub(crate) fn shorthand_bucket(property: &str) -> Option<u16> {
+  match property {
+    "all" => Some(0),
+    "animation"
+    | "animation-range"
+    | "background"
+    | "border"
+    | "border-image"
+    | "border-radius"
+    | "column-rule"
+    | "columns"
+    | "contain-intrinsic-size"
+    | "container"
+    | "flex"
+    | "flex-flow"
+    | "font"
+    | "font-synthesis"
+    | "gap"
+    | "grid"
+    | "grid-area"
+    | "grid-template"
+    | "inset"
+    | "list-style"
+    | "margin"
+    | "mask"
+    | "mask-border"
+    | "offset"
+    | "outline"
+    | "overflow"
+    | "overscroll-behavior"
+    | "padding"
+    | "place-content"
+    | "place-items"
+    | "place-self"
+    | "position-try"
+    | "scroll-margin"
+    | "scroll-padding"
+    | "scroll-timeline"
+    | "text-decoration"
+    | "text-emphasis"
+    | "text-wrap"
+    | "transition"
+    | "view-timeline" => Some(1),
+    "border-color"
+    | "border-style"
+    | "border-width"
+    | "grid-column"
+    | "grid-row"
+    | "inset-block"
+    | "inset-inline"
+    | "margin-block"
+    | "margin-inline"
+    | "padding-block"
+    | "padding-inline"
+    | "scroll-margin-block"
+    | "scroll-margin-inline"
+    | "scroll-padding-block"
+    | "scroll-padding-inline"
+    | "font-variant" => Some(2),
+    "border-block" | "border-inline" => Some(3),
+    "border-top" | "border-right" | "border-bottom" | "border-left" => Some(4),
+    "border-block-start" | "border-block-end" | "border-inline-start" | "border-inline-end" => {
+      Some(5)
+    }
     _ => None,
   }
 }
@@ -531,7 +740,17 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
   let mut artifacts = CssArtifacts::default();
   let debug_hash = std::env::var_os("COMPILED_DEBUG_HASH").is_some();
 
-  for rule in rules {
+  let mut indices: Vec<usize> = (0..rules.len()).collect();
+  indices.sort_by(|&a, &b| {
+    let rule_a = &rules[a];
+    let rule_b = &rules[b];
+    let bucket_a = shorthand_bucket(rule_a.property.as_str()).unwrap_or(u16::MAX);
+    let bucket_b = shorthand_bucket(rule_b.property.as_str()).unwrap_or(u16::MAX);
+    bucket_a.cmp(&bucket_b).then_with(|| a.cmp(&b))
+  });
+
+  for index in indices {
+    let rule = &rules[index];
     let normalized_selectors = if rule.selectors.is_empty() {
       vec![normalize_selector(None)]
     } else {
@@ -541,14 +760,6 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         .map(|selector| normalize_selector(Some(selector)))
         .collect::<Vec<_>>()
     };
-
-    let NormalizedCssValue {
-      hash_value: base_hash_value,
-      output_value: base_output_value,
-    } = normalize_css_value(&rule.raw_value);
-
-    let property_names = expand_shorthand_properties(rule.property.as_str())
-      .unwrap_or_else(|| vec![rule.property.clone()]);
 
     let at_rule_label: String = if rule.at_rules.is_empty() {
       "undefined".to_string()
@@ -566,24 +777,30 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         .collect()
     };
     let prefix = options.class_hash_prefix.as_deref().unwrap_or("");
+    let expansions = expand_property(rule.property.as_str(), &rule.raw_value);
 
-    for property_name in property_names {
-      let vendor_values = vendor_prefixed_values(property_name.as_str(), &base_output_value)
-        .unwrap_or_else(|| vec![base_output_value.clone()]);
+    for expansion in expansions {
+      let NormalizedCssValue {
+        hash_value,
+        output_value,
+      } = normalize_css_value(&expansion.raw_value);
+
+      let vendor_values = vendor_prefixed_values(expansion.name.as_str(), &output_value)
+        .unwrap_or_else(|| vec![output_value.clone()]);
 
       let declaration_values: Vec<String> = vendor_values
         .iter()
         .map(|value| {
           if rule.important {
-            format!("{}:{}!important", property_name, value)
+            format!("{}:{}!important", expansion.name, value)
           } else {
-            format!("{}:{}", property_name, value)
+            format!("{}:{}", expansion.name, value)
           }
         })
         .collect();
       let declaration = declaration_values.join(";");
 
-      let mut hash_component = base_hash_value.clone();
+      let mut hash_component = hash_value.clone();
       if rule.important {
         hash_component.push_str("!important");
       }
@@ -597,7 +814,7 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         let group_hash = hash(
           &format!(
             "{}{}{}{}",
-            prefix, at_rule_label, selectors_hash, property_name
+            prefix, at_rule_label, selectors_hash, expansion.name
           ),
           0,
         );
@@ -605,19 +822,13 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         if debug_hash {
           eprintln!(
             "[compiled-hash] group-input='{}{}{}{}' selector='{}' property='{}'",
-            prefix,
-            at_rule_label,
-            selectors_hash,
-            property_name,
-            selector,
-            property_name
+            prefix, at_rule_label, selectors_hash, expansion.name, selector, expansion.name
           );
         }
         if debug_hash {
           eprintln!(
             "[compiled-hash] value-input='{}' important={}",
-            value_for_hash,
-            rule.important
+            value_for_hash, rule.important
           );
         }
         let full_class = format!("_{}{}", group, value_segment);
@@ -770,10 +981,7 @@ mod tests {
   #[test]
   fn does_not_convert_px_inside_identifiers() {
     let normalized = normalize_css_value("url(/images/icon-16px.png)");
-    assert_eq!(
-      normalized.output_value,
-      "url(/images/icon-16px.png)"
-    );
+    assert_eq!(normalized.output_value, "url(/images/icon-16px.png)");
   }
 
   #[test]
@@ -818,7 +1026,11 @@ mod tests {
       important: false,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
-    let css_strings: Vec<&str> = artifacts.rules.iter().map(|rule| rule.css.as_str()).collect();
+    let css_strings: Vec<&str> = artifacts
+      .rules
+      .iter()
+      .map(|rule| rule.css.as_str())
+      .collect();
     assert!(
       css_strings
         .iter()
@@ -830,6 +1042,78 @@ mod tests {
       css_strings
         .iter()
         .any(|css| css.contains("overflow-y:hidden")),
+      "css strings were {:?}",
+      css_strings
+    );
+  }
+
+  #[test]
+  fn atomicize_rules_expands_flex_shorthand_one() {
+    let rule = CssRuleInput {
+      selectors: vec!["&".to_string()],
+      at_rules: vec![],
+      property: "flex".into(),
+      value: "1".into(),
+      raw_value: "1".into(),
+      important: false,
+    };
+    let artifacts = atomicize_rules(&[rule], &CssOptions::default());
+    let css_strings: Vec<&str> = artifacts
+      .rules
+      .iter()
+      .map(|rule| rule.css.as_str())
+      .collect();
+    assert!(
+      css_strings.iter().any(|css| css.contains("flex-grow:1")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings.iter().any(|css| css.contains("flex-shrink:1")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings.iter().any(|css| css.contains("flex-basis:0%")),
+      "css strings were {:?}",
+      css_strings
+    );
+  }
+
+  #[test]
+  fn atomicize_rules_expands_text_decoration_none() {
+    let rule = CssRuleInput {
+      selectors: vec!["&".to_string()],
+      at_rules: vec![],
+      property: "text-decoration".into(),
+      value: "none".into(),
+      raw_value: "none".into(),
+      important: false,
+    };
+    let artifacts = atomicize_rules(&[rule], &CssOptions::default());
+    let css_strings: Vec<&str> = artifacts
+      .rules
+      .iter()
+      .map(|rule| rule.css.as_str())
+      .collect();
+    assert!(
+      css_strings
+        .iter()
+        .any(|css| css.contains("text-decoration-line:none")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings
+        .iter()
+        .any(|css| css.contains("text-decoration-color:initial")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings
+        .iter()
+        .any(|css| css.contains("text-decoration-style:solid")),
       "css strings were {:?}",
       css_strings
     );

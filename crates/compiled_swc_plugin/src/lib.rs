@@ -396,9 +396,17 @@ fn collect_static_bindings(
   module: &Module,
   evaluator: Option<&ModuleEvaluator>,
   module_path: Option<&Path>,
+  import_sources: &[String],
 ) -> HashMap<(Atom, SyntaxContext), StaticValue> {
   let mut visiting = HashSet::new();
-  collect_module_statics_from_ast(module, module_path, evaluator, &mut visiting).bindings
+  collect_module_statics_from_ast(
+    module,
+    module_path,
+    evaluator,
+    import_sources,
+    &mut visiting,
+  )
+  .bindings
 }
 
 fn evaluate_static(
@@ -523,6 +531,9 @@ fn evaluate_static(
 
 fn record_var_decl(
   var: &VarDecl,
+  css_idents: &HashSet<(Atom, SyntaxContext)>,
+  css_map_idents: &HashSet<(Atom, SyntaxContext)>,
+  keyframes_idents: &HashSet<(Atom, SyntaxContext)>,
   bindings: &mut HashMap<(Atom, SyntaxContext), StaticValue>,
 ) -> Vec<(Ident, StaticValue)> {
   let mut recorded = Vec::new();
@@ -532,7 +543,10 @@ fn record_var_decl(
   for decl in &var.decls {
     if let Pat::Ident(BindingIdent { id, .. }) = &decl.name {
       if let Some(init) = &decl.init {
-        if let Some(value) = evaluate_static(init, bindings) {
+        if let Some(value) = evaluate_static(init, bindings)
+          .or_else(|| evaluate_compiled_css_expr(init, css_idents, css_map_idents, bindings))
+          .or_else(|| evaluate_keyframes_expr(init, keyframes_idents))
+        {
           bindings.insert(to_id(id), value.clone());
           recorded.push((id.clone(), value));
         }
@@ -540,6 +554,109 @@ fn record_var_decl(
     }
   }
   recorded
+}
+
+fn evaluate_compiled_css_expr(
+  expr: &Expr,
+  css_idents: &HashSet<(Atom, SyntaxContext)>,
+  css_map_idents: &HashSet<(Atom, SyntaxContext)>,
+  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
+) -> Option<StaticValue> {
+  match expr {
+    Expr::Call(call) => {
+      let callee_ident = match &call.callee {
+        Callee::Expr(callee) => match &**callee {
+          Expr::Ident(ident) => ident,
+          _ => return None,
+        },
+        _ => return None,
+      };
+      let callee_id = to_id(callee_ident);
+      let is_css = css_idents.contains(&callee_id);
+      let is_css_map = css_map_idents.contains(&callee_id);
+      if !is_css && !is_css_map {
+        return None;
+      }
+
+      let mut values = Vec::with_capacity(call.args.len());
+      for arg in &call.args {
+        if arg.spread.is_some() {
+          return None;
+        }
+        let value = evaluate_static(&arg.expr, bindings)?;
+        values.push(value);
+      }
+
+      if is_css_map {
+        // `cssMap` accepts a single object literal in our supported scenarios.
+        return values.into_iter().next();
+      }
+
+      if values.is_empty() {
+        Some(StaticValue::Null)
+      } else if values.len() == 1 {
+        values.into_iter().next()
+      } else {
+        Some(StaticValue::Array(values))
+      }
+    }
+    Expr::TaggedTpl(tagged) => {
+      let ident = match &*tagged.tag {
+        Expr::Ident(ident) => ident,
+        _ => return None,
+      };
+      if !css_idents.contains(&to_id(ident)) {
+        return None;
+      }
+      let mut result = String::new();
+      for (index, quasi) in tagged.tpl.quasis.iter().enumerate() {
+        result.push_str(
+          quasi
+            .cooked
+            .as_ref()
+            .map(|atom| atom.to_string())
+            .unwrap_or_else(|| quasi.raw.to_string())
+            .as_str(),
+        );
+        if let Some(expr) = tagged.tpl.exprs.get(index) {
+          let value = evaluate_static(expr, bindings)?;
+          result.push_str(value.as_str()?);
+        }
+      }
+      Some(StaticValue::Str(result))
+    }
+    _ => None,
+  }
+}
+
+fn evaluate_keyframes_expr(
+  expr: &Expr,
+  keyframes_idents: &HashSet<(Atom, SyntaxContext)>,
+) -> Option<StaticValue> {
+  if let Expr::Call(call) = expr {
+    let callee_ident = match &call.callee {
+      Callee::Expr(callee) => match &**callee {
+        Expr::Ident(ident) => ident,
+        _ => return None,
+      },
+      _ => return None,
+    };
+    if !keyframes_idents.contains(&to_id(callee_ident)) {
+      return None;
+    }
+    let name = format!("k{}", hash(&emit_expression(expr), 0));
+    Some(StaticValue::Str(name))
+  } else if let Expr::TaggedTpl(tagged) = expr {
+    if let Expr::Ident(ident) = &*tagged.tag {
+      if keyframes_idents.contains(&to_id(ident)) {
+        let name = format!("k{}", hash(&emit_expression(expr), 0));
+        return Some(StaticValue::Str(name));
+      }
+    }
+    None
+  } else {
+    None
+  }
 }
 
 const DEFAULT_RESOLVE_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
@@ -554,10 +671,11 @@ struct ModuleEvaluator {
   resolver: Resolver,
   cache: RefCell<HashMap<PathBuf, ModuleStaticResult>>,
   included_files: RefCell<BTreeSet<PathBuf>>,
+  import_sources: Vec<String>,
 }
 
 impl ModuleEvaluator {
-  fn new(cwd: &Path, extensions: &[String]) -> Self {
+  fn new(cwd: &Path, extensions: &[String], import_sources: &[String]) -> Self {
     let mut options = ResolveOptions::default();
     if extensions.is_empty() {
       options.extensions = DEFAULT_RESOLVE_EXTENSIONS
@@ -582,6 +700,7 @@ impl ModuleEvaluator {
       resolver,
       cache: RefCell::new(HashMap::new()),
       included_files: RefCell::new(BTreeSet::new()),
+      import_sources: import_sources.to_vec(),
     }
   }
 
@@ -608,7 +727,13 @@ impl ModuleEvaluator {
     }
     let source = fs::read_to_string(path).ok()?;
     let module = parse_module_from_source(&source, path)?;
-    let result = collect_module_statics_from_ast(&module, Some(path), Some(self), visiting);
+    let result = collect_module_statics_from_ast(
+      &module,
+      Some(path),
+      Some(self),
+      &self.import_sources,
+      visiting,
+    );
     visiting.remove(path);
     self
       .cache
@@ -638,14 +763,45 @@ fn collect_module_statics_from_ast(
   module: &Module,
   module_path: Option<&Path>,
   evaluator: Option<&ModuleEvaluator>,
+  import_sources: &[String],
   visiting: &mut HashSet<PathBuf>,
 ) -> ModuleStaticResult {
   let mut result = ModuleStaticResult::default();
+  let mut css_idents: HashSet<(Atom, SyntaxContext)> = HashSet::new();
+  let mut css_map_idents: HashSet<(Atom, SyntaxContext)> = HashSet::new();
+  let mut keyframes_idents: HashSet<(Atom, SyntaxContext)> = HashSet::new();
 
   if let (Some(evaluator), Some(module_path)) = (evaluator, module_path) {
     for item in &module.body {
       if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
-        if let Some(resolved) = evaluator.resolve(module_path, import.src.value.as_ref()) {
+        let source = import.src.value.as_ref();
+        if import_sources.iter().any(|candidate| candidate == source) {
+          for specifier in &import.specifiers {
+            if let ImportSpecifier::Named(named) = specifier {
+              let imported_name = named
+                .imported
+                .as_ref()
+                .map(|name| match name {
+                  ModuleExportName::Ident(ident) => ident.sym.as_ref(),
+                  ModuleExportName::Str(str) => str.value.as_ref(),
+                })
+                .unwrap_or_else(|| named.local.sym.as_ref());
+              match imported_name {
+                "css" => {
+                  css_idents.insert(to_id(&named.local));
+                }
+                "cssMap" => {
+                  css_map_idents.insert(to_id(&named.local));
+                }
+                "keyframes" => {
+                  keyframes_idents.insert(to_id(&named.local));
+                }
+                _ => {}
+              }
+            }
+          }
+        }
+        if let Some(resolved) = evaluator.resolve(module_path, source) {
           if let Some(imported) = evaluator.statics_for_inner(&resolved, visiting) {
             for specifier in &import.specifiers {
               match specifier {
@@ -678,11 +834,23 @@ fn collect_module_statics_from_ast(
   for item in &module.body {
     match item {
       ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) => {
-        record_var_decl(var, &mut result.bindings);
+        record_var_decl(
+          var,
+          &css_idents,
+          &css_map_idents,
+          &keyframes_idents,
+          &mut result.bindings,
+        );
       }
       ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => match &export_decl.decl {
         Decl::Var(var) => {
-          for (ident, value) in record_var_decl(var, &mut result.bindings) {
+          for (ident, value) in record_var_decl(
+            var,
+            &css_idents,
+            &css_map_idents,
+            &keyframes_idents,
+            &mut result.bindings,
+          ) {
             result.exports.insert(ident.sym.to_string(), value);
           }
         }
@@ -1032,7 +1200,10 @@ fn normalize_content_value(raw: &str) -> String {
   format!("\"{}\"", trimmed)
 }
 
-fn static_value_to_css_value(property: &str, value: &StaticValue) -> Option<(String, String, bool)> {
+fn static_value_to_css_value(
+  property: &str,
+  value: &StaticValue,
+) -> Option<(String, String, bool)> {
   match value {
     StaticValue::Str(str) => {
       let mut trimmed = str.trim().to_string();
@@ -1187,8 +1358,7 @@ fn push_css_value(
   if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
     eprintln!(
       "[compiled-debug] push_css_value property='{}' selectors={:?}",
-      property,
-      selectors
+      property, selectors
     );
   }
 
@@ -1459,6 +1629,7 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
               let values = match self.parent.evaluate_call_arguments(call) {
                 Some(values) => values,
                 None => {
+                  eprintln!("ClassNames visitor: failed to evaluate call arguments");
                   self.failed = true;
                   return;
                 }
@@ -1469,6 +1640,7 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
                   match css_artifacts_from_static_value(value, &self.parent.css_options()) {
                     Some(artifacts) => artifacts,
                     None => {
+                      eprintln!("ClassNames visitor: css artifacts not static");
                       self.failed = true;
                       return;
                     }
@@ -1975,6 +2147,7 @@ impl<'a> TransformVisitor<'a> {
     let expr = match function_expr {
       Some(expr) => expr,
       None => {
+        eprintln!("ClassNames handler: missing function expression");
         self.retain_imports.insert(id);
         return None;
       }
@@ -2021,6 +2194,7 @@ impl<'a> TransformVisitor<'a> {
         (params, body)
       }
       _ => {
+        eprintln!("ClassNames handler: unsupported callback expression");
         self.retain_imports.insert(id);
         return None;
       }
@@ -2029,6 +2203,7 @@ impl<'a> TransformVisitor<'a> {
     let (css_idents, style_idents) = match self.extract_class_names_bindings(&params) {
       Some(result) => result,
       None => {
+        eprintln!("ClassNames handler: failed to extract bindings");
         self.retain_imports.insert(id);
         return None;
       }
@@ -2038,6 +2213,7 @@ impl<'a> TransformVisitor<'a> {
     let mut visitor = ClassNamesBodyVisitor::new(self, css_idents, style_idents);
     rewritten.visit_mut_with(&mut visitor);
     if visitor.failed {
+      eprintln!("ClassNames handler: visitor failed");
       self.retain_imports.insert(id);
       return None;
     }
@@ -2603,10 +2779,9 @@ impl<'a> TransformVisitor<'a> {
       },
       Some(JSXAttrValue::Lit(Lit::Str(str))) => Some(StaticValue::Str(str.value.to_string())),
       _ => None,
-    };
+    }?;
 
-    let css_map = css_value.and_then(|value| value.as_object().cloned())?;
-    let artifacts = css_artifacts_from_static_object(&css_map, &self.css_options())?;
+    let artifacts = css_artifacts_from_static_value(&css_value, &self.css_options())?;
 
     let mut runtime_sheets = Vec::new();
     for rule in &artifacts.rules {
@@ -3513,8 +3688,13 @@ fn transform_program_with_options(
       .map(Path::to_path_buf)
       .unwrap_or_else(|| PathBuf::from("."));
     let project_root = std::env::current_dir().unwrap_or_else(|_| file_dir.clone());
-    let evaluator = ModuleEvaluator::new(&file_dir, &options.extensions);
-    let bindings = collect_static_bindings(&module, Some(&evaluator), Some(file_path.as_path()));
+    let evaluator = ModuleEvaluator::new(&file_dir, &options.extensions, &options.import_sources);
+    let bindings = collect_static_bindings(
+      &module,
+      Some(&evaluator),
+      Some(file_path.as_path()),
+      &options.import_sources,
+    );
     let name_tracker = NameTracker::from_module(&module);
     let mut visitor = TransformVisitor::new(&options, bindings, name_tracker);
     module.visit_mut_with(&mut visitor);
@@ -3870,16 +4050,21 @@ const className = css`color: ${brand};`;
 "#;
     fs::write(&entry_path, source).expect("write entry");
 
-    let evaluator = ModuleEvaluator::new(&temp_root, &Vec::new());
+    let plugin_options = PluginOptions::default();
+    let evaluator = ModuleEvaluator::new(&temp_root, &Vec::new(), &plugin_options.import_sources);
     GLOBALS.set(&Globals::new(), || {
       let program = parse(source);
       let mut module = match program {
         Program::Module(module) => module,
         _ => panic!("expected module"),
       };
-      let bindings = collect_static_bindings(&module, Some(&evaluator), Some(entry_path.as_path()));
+      let bindings = collect_static_bindings(
+        &module,
+        Some(&evaluator),
+        Some(entry_path.as_path()),
+        &plugin_options.import_sources,
+      );
       let name_tracker = NameTracker::from_module(&module);
-      let plugin_options = PluginOptions::default();
       let mut visitor = TransformVisitor::new(&plugin_options, bindings, name_tracker);
       module.visit_mut_with(&mut visitor);
       assert!(
