@@ -206,6 +206,10 @@ fn fixture_outputs_match() {
     let (config_json, node_env, babel_env) = load_fixture_config(&fixture_path);
     let _guard = EnvGuard::new(node_env.as_deref(), babel_env.as_deref());
     let actual = canonicalize_output(&run_transform(&input_path, &input, &config_json));
+    if fixture_path.file_name().and_then(|n| n.to_str()) == Some("complex-runtime-combo") {
+      println!("expected:\n{}", normalize(&expected));
+      println!("actual:\n{}", normalize(&actual));
+    }
     assert_eq!(
       normalize(&expected),
       normalize(&actual),

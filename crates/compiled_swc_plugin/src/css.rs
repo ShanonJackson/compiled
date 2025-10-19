@@ -93,13 +93,162 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
     Some(raw) => {
       let trimmed = raw.trim();
       if trimmed.contains('&') {
+        if trimmed.starts_with(':') {
+          return format!("&{}", trimmed);
+        }
         trimmed.to_string()
       } else if trimmed.is_empty() {
         "&".to_string()
+      } else if trimmed.starts_with(':') || trimmed.starts_with('[') {
+        format!("&{}", trimmed)
       } else {
         format!("& {}", trimmed)
       }
     }
+  }
+}
+
+fn named_color_hex(value: &str) -> Option<&'static str> {
+  match value {
+    "aliceblue" => Some("#f0f8ff"),
+    "antiquewhite" => Some("#faebd7"),
+    "aqua" => Some("#00ffff"),
+    "aquamarine" => Some("#7fffd4"),
+    "azure" => Some("#f0ffff"),
+    "beige" => Some("#f5f5dc"),
+    "bisque" => Some("#ffe4c4"),
+    "black" => Some("#000000"),
+    "blanchedalmond" => Some("#ffebcd"),
+    "blue" => Some("#0000ff"),
+    "blueviolet" => Some("#8a2be2"),
+    "brown" => Some("#a52a2a"),
+    "burlywood" => Some("#deb887"),
+    "cadetblue" => Some("#5f9ea0"),
+    "chartreuse" => Some("#7fff00"),
+    "chocolate" => Some("#d2691e"),
+    "coral" => Some("#ff7f50"),
+    "cornflowerblue" => Some("#6495ed"),
+    "cornsilk" => Some("#fff8dc"),
+    "crimson" => Some("#dc143c"),
+    "darkblue" => Some("#00008b"),
+    "darkcyan" => Some("#008b8b"),
+    "darkgoldenrod" => Some("#b8860b"),
+    "darkgray" => Some("#a9a9a9"),
+    "darkgreen" => Some("#006400"),
+    "darkkhaki" => Some("#bdb76b"),
+    "darkmagenta" => Some("#8b008b"),
+    "darkolivegreen" => Some("#556b2f"),
+    "darkorange" => Some("#ff8c00"),
+    "darkorchid" => Some("#9932cc"),
+    "darkred" => Some("#8b0000"),
+    "darksalmon" => Some("#e9967a"),
+    "darkseagreen" => Some("#8fbc8f"),
+    "darkslateblue" => Some("#483d8b"),
+    "darkslategray" => Some("#2f4f4f"),
+    "darkturquoise" => Some("#00ced1"),
+    "darkviolet" => Some("#9400d3"),
+    "deeppink" => Some("#ff1493"),
+    "deepskyblue" => Some("#00bfff"),
+    "dimgray" => Some("#696969"),
+    "dodgerblue" => Some("#1e90ff"),
+    "firebrick" => Some("#b22222"),
+    "floralwhite" => Some("#fffaf0"),
+    "forestgreen" => Some("#228b22"),
+    "fuchsia" => Some("#ff00ff"),
+    "gainsboro" => Some("#dcdcdc"),
+    "ghostwhite" => Some("#f8f8ff"),
+    "gold" => Some("#ffd700"),
+    "goldenrod" => Some("#daa520"),
+    "gray" => Some("#808080"),
+    "green" => Some("#008000"),
+    "greenyellow" => Some("#adff2f"),
+    "honeydew" => Some("#f0fff0"),
+    "hotpink" => Some("#ff69b4"),
+    "indianred" => Some("#cd5c5c"),
+    "indigo" => Some("#4b0082"),
+    "ivory" => Some("#fffff0"),
+    "khaki" => Some("#f0e68c"),
+    "lavender" => Some("#e6e6fa"),
+    "lavenderblush" => Some("#fff0f5"),
+    "lawngreen" => Some("#7cfc00"),
+    "lemonchiffon" => Some("#fffacd"),
+    "lightblue" => Some("#add8e6"),
+    "lightcoral" => Some("#f08080"),
+    "lightcyan" => Some("#e0ffff"),
+    "lightgoldenrodyellow" => Some("#fafad2"),
+    "lightgray" => Some("#d3d3d3"),
+    "lightgreen" => Some("#90ee90"),
+    "lightpink" => Some("#ffb6c1"),
+    "lightsalmon" => Some("#ffa07a"),
+    "lightseagreen" => Some("#20b2aa"),
+    "lightskyblue" => Some("#87cefa"),
+    "lightslategray" => Some("#778899"),
+    "lightsteelblue" => Some("#b0c4de"),
+    "lightyellow" => Some("#ffffe0"),
+    "lime" => Some("#00ff00"),
+    "limegreen" => Some("#32cd32"),
+    "linen" => Some("#faf0e6"),
+    "maroon" => Some("#800000"),
+    "mediumaquamarine" => Some("#66cdaa"),
+    "mediumblue" => Some("#0000cd"),
+    "mediumorchid" => Some("#ba55d3"),
+    "mediumpurple" => Some("#9370db"),
+    "mediumseagreen" => Some("#3cb371"),
+    "mediumslateblue" => Some("#7b68ee"),
+    "mediumspringgreen" => Some("#00fa9a"),
+    "mediumturquoise" => Some("#48d1cc"),
+    "mediumvioletred" => Some("#c71585"),
+    "midnightblue" => Some("#191970"),
+    "mintcream" => Some("#f5fffa"),
+    "mistyrose" => Some("#ffe4e1"),
+    "moccasin" => Some("#ffe4b5"),
+    "navajowhite" => Some("#ffdead"),
+    "navy" => Some("#000080"),
+    "oldlace" => Some("#fdf5e6"),
+    "olive" => Some("#808000"),
+    "olivedrab" => Some("#6b8e23"),
+    "orange" => Some("#ff8000"),
+    "orangered" => Some("#ff4500"),
+    "orchid" => Some("#da70d6"),
+    "palegoldenrod" => Some("#eee8aa"),
+    "palegreen" => Some("#98fb98"),
+    "paleturquoise" => Some("#afeeee"),
+    "palevioletred" => Some("#db7093"),
+    "papayawhip" => Some("#ffefd5"),
+    "peachpuff" => Some("#ffdab9"),
+    "peru" => Some("#cd853f"),
+    "pink" => Some("#ffc0cb"),
+    "plum" => Some("#dda0dd"),
+    "powderblue" => Some("#b0e0e6"),
+    "purple" => Some("#800080"),
+    "red" => Some("#ff0000"),
+    "rosybrown" => Some("#bc8f8f"),
+    "royalblue" => Some("#4169e1"),
+    "saddlebrown" => Some("#8b4513"),
+    "salmon" => Some("#fa8072"),
+    "sandybrown" => Some("#f4a460"),
+    "seagreen" => Some("#2e8b57"),
+    "seashell" => Some("#fff5ee"),
+    "sienna" => Some("#a0522d"),
+    "silver" => Some("#c0c0c0"),
+    "skyblue" => Some("#87ceeb"),
+    "slateblue" => Some("#6a5acd"),
+    "slategray" => Some("#708090"),
+    "snow" => Some("#fffafa"),
+    "springgreen" => Some("#00ff7f"),
+    "steelblue" => Some("#4682b4"),
+    "tan" => Some("#d2b48c"),
+    "teal" => Some("#008080"),
+    "thistle" => Some("#d8bfd8"),
+    "tomato" => Some("#ff6347"),
+    "turquoise" => Some("#40e0d0"),
+    "violet" => Some("#ee82ee"),
+    "wheat" => Some("#f5deb3"),
+    "white" => Some("#ffffff"),
+    "whitesmoke" => Some("#f5f5f5"),
+    "yellow" => Some("#ffff00"),
+    "yellowgreen" => Some("#9acd32"),
+    _ => None,
   }
 }
 
@@ -203,7 +352,24 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
     };
   }
 
-  let mut semantic = lowercase_hex_literals(trimmed);
+  let mut semantic = trimmed.to_ascii_lowercase();
+  if let Some(hex) = named_color_hex(&semantic) {
+    let shortened = shorten_hex_literals(hex);
+    let candidate = if shortened.len() < hex.len() {
+      shortened
+    } else {
+      hex.to_string()
+    };
+    if candidate.len() < semantic.len() {
+      semantic = candidate;
+    } else if hex.len() < semantic.len() {
+      semantic = hex.to_string();
+    }
+  }
+  if semantic == "currentcolor" || semantic == "current-color" {
+    semantic = "currentColor".to_string();
+  }
+  semantic = lowercase_hex_literals(&semantic);
   semantic = shorten_hex_literals(&semantic);
   semantic = convert_length_units(&semantic);
   semantic = strip_zero_units(&semantic);
@@ -439,6 +605,303 @@ struct PropertyExpansion {
   raw_value: String,
 }
 
+fn should_skip_shorthand_expansion(raw_value: &str) -> bool {
+  raw_value.to_ascii_lowercase().contains("var(")
+}
+
+fn split_css_value_components(raw_value: &str) -> Vec<String> {
+  let mut parts = Vec::new();
+  let mut current = String::new();
+  let mut paren_depth = 0usize;
+  let mut bracket_depth = 0usize;
+  let mut brace_depth = 0usize;
+  let mut string_delim: Option<char> = None;
+  let mut escape_next = false;
+
+  for ch in raw_value.chars() {
+    if let Some(delim) = string_delim {
+      current.push(ch);
+      if escape_next {
+        escape_next = false;
+        continue;
+      }
+      if ch == '\\' {
+        escape_next = true;
+      } else if ch == delim {
+        string_delim = None;
+      }
+      continue;
+    }
+
+    match ch {
+      '"' | '\'' => {
+        string_delim = Some(ch);
+        current.push(ch);
+      }
+      '(' => {
+        paren_depth += 1;
+        current.push(ch);
+      }
+      ')' => {
+        if paren_depth > 0 {
+          paren_depth -= 1;
+        }
+        current.push(ch);
+      }
+      '[' => {
+        bracket_depth += 1;
+        current.push(ch);
+      }
+      ']' => {
+        if bracket_depth > 0 {
+          bracket_depth -= 1;
+        }
+        current.push(ch);
+      }
+      '{' => {
+        brace_depth += 1;
+        current.push(ch);
+      }
+      '}' => {
+        if brace_depth > 0 {
+          brace_depth -= 1;
+        }
+        current.push(ch);
+      }
+      ' ' | '\t' | '\n' | '\r' => {
+        if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+          if !current.trim().is_empty() {
+            parts.push(current.trim().to_string());
+            current.clear();
+          }
+        } else {
+          current.push(ch);
+        }
+      }
+      _ => current.push(ch),
+    }
+  }
+
+  if !current.trim().is_empty() {
+    parts.push(current.trim().to_string());
+  }
+
+  parts
+}
+
+fn expand_box_shorthand(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
+  if should_skip_shorthand_expansion(raw_value) {
+    return vec![PropertyExpansion {
+      name: property.to_string(),
+      raw_value: raw_value.to_string(),
+    }];
+  }
+
+  let values = split_css_value_components(raw_value);
+  if values.is_empty() || values.len() > 4 {
+    return vec![PropertyExpansion {
+      name: property.to_string(),
+      raw_value: raw_value.to_string(),
+    }];
+  }
+
+  let top = values[0].clone();
+  let right = values.get(1).cloned().unwrap_or_else(|| top.clone());
+  let bottom = values.get(2).cloned().unwrap_or_else(|| top.clone());
+  let left = values.get(3).cloned().unwrap_or_else(|| right.clone());
+
+  vec![
+    PropertyExpansion {
+      name: format!("{}-top", property),
+      raw_value: top,
+    },
+    PropertyExpansion {
+      name: format!("{}-right", property),
+      raw_value: right,
+    },
+    PropertyExpansion {
+      name: format!("{}-bottom", property),
+      raw_value: bottom,
+    },
+    PropertyExpansion {
+      name: format!("{}-left", property),
+      raw_value: left,
+    },
+  ]
+}
+
+const OUTLINE_STYLE_VALUES: &[&str] = &[
+  "auto", "none", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
+];
+
+const OUTLINE_GLOBAL_VALUES: &[&str] = &["inherit", "initial", "unset", "revert", "revert-layer"];
+
+const OUTLINE_WIDTH_UNITS: &[&str] = &[
+  "%", "cap", "ch", "cm", "em", "ex", "fr", "ic", "in", "lh", "mm", "pc", "pt", "px", "q", "rem",
+  "rlh", "vb", "vh", "vi", "vmax", "vmin", "vw",
+];
+
+fn is_outline_style_value(value: &str) -> bool {
+  let lower = value.trim().to_ascii_lowercase();
+  OUTLINE_STYLE_VALUES
+    .iter()
+    .any(|candidate| lower == *candidate)
+    || OUTLINE_GLOBAL_VALUES
+      .iter()
+      .any(|candidate| lower == *candidate)
+}
+
+fn is_outline_width_value(value: &str) -> bool {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return false;
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  if OUTLINE_GLOBAL_VALUES
+    .iter()
+    .any(|candidate| lower == *candidate)
+  {
+    return true;
+  }
+  if matches!(
+    lower.as_str(),
+    "auto" | "thin" | "medium" | "thick" | "min-content" | "max-content" | "fit-content"
+  ) {
+    return true;
+  }
+  if trimmed.contains('(') {
+    return true;
+  }
+  let mut chars = trimmed.chars().peekable();
+  if matches!(chars.peek(), Some(c) if *c == '+' || *c == '-') {
+    chars.next();
+  }
+  let mut has_digit = false;
+  while let Some(ch) = chars.peek() {
+    if ch.is_ascii_digit() {
+      has_digit = true;
+      chars.next();
+      continue;
+    }
+    if *ch == '.' {
+      chars.next();
+      continue;
+    }
+    break;
+  }
+  if !has_digit {
+    return false;
+  }
+  let unit: String = chars.collect();
+  if unit.is_empty() {
+    return true;
+  }
+  let lower_unit = unit.trim().to_ascii_lowercase();
+  OUTLINE_WIDTH_UNITS
+    .iter()
+    .any(|candidate| lower_unit == *candidate)
+}
+
+fn is_outline_color_value(value: &str) -> bool {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return false;
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  if OUTLINE_GLOBAL_VALUES
+    .iter()
+    .any(|candidate| lower == *candidate)
+  {
+    return true;
+  }
+  if lower == "transparent" || lower == "currentcolor" {
+    return true;
+  }
+  if lower.starts_with('#') {
+    return lower.chars().skip(1).all(|ch| ch.is_ascii_hexdigit());
+  }
+  if named_color_hex(&lower).is_some() {
+    return true;
+  }
+  if let Some(index) = lower.find('(') {
+    let func = &lower[..index];
+    return matches!(
+      func,
+      "rgb"
+        | "rgba"
+        | "hsl"
+        | "hsla"
+        | "hwb"
+        | "lab"
+        | "lch"
+        | "color"
+        | "device-cmyk"
+        | "oklab"
+        | "oklch"
+    );
+  }
+  false
+}
+
+fn expand_outline_shorthand(raw_value: &str) -> Option<Vec<PropertyExpansion>> {
+  if should_skip_shorthand_expansion(raw_value) {
+    return None;
+  }
+
+  let values = split_css_value_components(raw_value);
+  if values.len() > 3 {
+    return None;
+  }
+
+  let mut color_value: Option<String> = None;
+  let mut style_value: Option<String> = None;
+  let mut width_value: Option<String> = None;
+
+  for value in values {
+    if is_outline_color_value(&value) {
+      if color_value.is_some() {
+        return None;
+      }
+      color_value = Some(value);
+      continue;
+    }
+    if is_outline_style_value(&value) {
+      if style_value.is_some() {
+        return None;
+      }
+      style_value = Some(value);
+      continue;
+    }
+    if is_outline_width_value(&value) {
+      if width_value.is_some() {
+        return None;
+      }
+      width_value = Some(value);
+      continue;
+    }
+    return None;
+  }
+
+  let color = color_value.unwrap_or_else(|| "currentColor".to_string());
+  let style = style_value.unwrap_or_else(|| "none".to_string());
+  let width = width_value.unwrap_or_else(|| "medium".to_string());
+
+  Some(vec![
+    PropertyExpansion {
+      name: "outline-color".into(),
+      raw_value: color,
+    },
+    PropertyExpansion {
+      name: "outline-style".into(),
+      raw_value: style,
+    },
+    PropertyExpansion {
+      name: "outline-width".into(),
+      raw_value: width,
+    },
+  ])
+}
+
 fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
   if property == "flex" {
     let trimmed = raw_value.trim();
@@ -477,6 +940,16 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
           raw_value: "solid".into(),
         },
       ];
+    }
+  }
+
+  if property == "padding" || property == "margin" {
+    return expand_box_shorthand(property, raw_value);
+  }
+
+  if property == "outline" {
+    if let Some(expanded) = expand_outline_shorthand(raw_value) {
+      return expanded;
     }
   }
 
@@ -761,21 +1234,17 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         .collect::<Vec<_>>()
     };
 
-    let at_rule_label: String = if rule.at_rules.is_empty() {
+    let mut at_rule_label = if rule.at_rules.is_empty() {
       "undefined".to_string()
     } else {
-      rule
-        .at_rules
-        .iter()
-        .map(|input| {
-          format!(
-            "{}{}",
-            input.name.trim(),
-            minify_at_rule_params(&input.params)
-          )
-        })
-        .collect()
+      String::new()
     };
+    if !rule.at_rules.is_empty() {
+      for input in &rule.at_rules {
+        at_rule_label.push_str(input.name.trim());
+        at_rule_label.push_str(&minify_at_rule_params(&input.params));
+      }
+    }
     let prefix = options.class_hash_prefix.as_deref().unwrap_or("");
     let expansions = expand_property(rule.property.as_str(), &rule.raw_value);
 
