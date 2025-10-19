@@ -1,4 +1,5 @@
 use crate::hash::hash;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -87,22 +88,68 @@ pub struct CssRuleInput {
   pub important: bool,
 }
 
+fn normalize_pseudo_element_colons(selector: &str) -> Cow<'_, str> {
+  if !selector.contains("::") {
+    return Cow::Borrowed(selector);
+  }
+
+  let mut output = String::with_capacity(selector.len());
+  let mut chars = selector.chars().peekable();
+  let mut in_single_quote = false;
+  let mut in_double_quote = false;
+  let mut escape_next = false;
+
+  while let Some(ch) = chars.next() {
+    if escape_next {
+      output.push(ch);
+      escape_next = false;
+      continue;
+    }
+
+    match ch {
+      '\\' => {
+        escape_next = true;
+        output.push(ch);
+      }
+      '\'' if !in_double_quote => {
+        in_single_quote = !in_single_quote;
+        output.push(ch);
+      }
+      '"' if !in_single_quote => {
+        in_double_quote = !in_double_quote;
+        output.push(ch);
+      }
+      ':' if !in_single_quote && !in_double_quote => {
+        output.push(':');
+        if matches!(chars.peek(), Some(':')) {
+          chars.next();
+        }
+      }
+      _ => output.push(ch),
+    }
+  }
+
+  Cow::Owned(output)
+}
+
 pub fn normalize_selector(selector: Option<&str>) -> String {
   match selector {
     None => "&".to_string(),
     Some(raw) => {
       let trimmed = raw.trim();
-      if trimmed.contains('&') {
-        if trimmed.starts_with(':') {
-          return format!("&{}", trimmed);
+      let pseudo_normalized = normalize_pseudo_element_colons(trimmed);
+      let normalized = minify_selector(pseudo_normalized.as_ref());
+      if normalized.contains('&') {
+        if normalized.starts_with(':') {
+          return format!("&{}", normalized);
         }
-        trimmed.to_string()
-      } else if trimmed.is_empty() {
+        normalized
+      } else if normalized.is_empty() {
         "&".to_string()
-      } else if trimmed.starts_with(':') || trimmed.starts_with('[') {
-        format!("&{}", trimmed)
+      } else if normalized.starts_with(':') || normalized.starts_with('[') {
+        format!("&{}", normalized)
       } else {
-        format!("& {}", trimmed)
+        format!("& {}", normalized)
       }
     }
   }
@@ -221,6 +268,7 @@ fn named_color_hex(value: &str) -> Option<&'static str> {
     "plum" => Some("#dda0dd"),
     "powderblue" => Some("#b0e0e6"),
     "purple" => Some("#800080"),
+    "rebeccapurple" => Some("#663399"),
     "red" => Some("#ff0000"),
     "rosybrown" => Some("#bc8f8f"),
     "royalblue" => Some("#4169e1"),
@@ -343,6 +391,36 @@ fn minify_whitespace(value: &str) -> String {
   output
 }
 
+fn strip_decimal_leading_zeros(value: &str) -> String {
+  let mut output = String::with_capacity(value.len());
+  let mut chars = value.chars().peekable();
+  let mut prev: Option<char> = None;
+
+  while let Some(ch) = chars.next() {
+    if ch == '0' {
+      if let Some('.') = chars.peek().copied() {
+        let mut lookahead = chars.clone();
+        lookahead.next();
+        if let Some(next_digit) = lookahead.peek() {
+          if next_digit.is_ascii_digit()
+            && !prev.map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false)
+          {
+            chars.next();
+            output.push('.');
+            prev = Some('.');
+            continue;
+          }
+        }
+      }
+    }
+
+    output.push(ch);
+    prev = Some(ch);
+  }
+
+  output
+}
+
 pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -371,12 +449,13 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   }
   semantic = lowercase_hex_literals(&semantic);
   semantic = shorten_hex_literals(&semantic);
+  semantic = strip_decimal_leading_zeros(&semantic);
   semantic = convert_length_units(&semantic);
   semantic = strip_zero_units(&semantic);
   let output = minify_whitespace(&semantic);
 
   NormalizedCssValue {
-    hash_value: semantic,
+    hash_value: output.clone(),
     output_value: output,
   }
 }
@@ -902,6 +981,104 @@ fn expand_outline_shorthand(raw_value: &str) -> Option<Vec<PropertyExpansion>> {
   ])
 }
 
+fn is_text_decoration_color_token(value: &str) -> bool {
+  let lower = value.to_ascii_lowercase();
+  if lower.starts_with('#') && lower.len() > 1 && lower[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+    return true;
+  }
+  if named_color_hex(lower.as_str()).is_some() {
+    return true;
+  }
+  if matches!(lower.as_str(), "transparent" | "currentcolor") {
+    return true;
+  }
+  if lower.starts_with("rgb(")
+    || lower.starts_with("rgba(")
+    || lower.starts_with("hsl(")
+    || lower.starts_with("hsla(")
+    || lower.starts_with("hwb(")
+    || lower.starts_with("lab(")
+    || lower.starts_with("lch(")
+    || lower.starts_with("oklab(")
+    || lower.starts_with("oklch(")
+    || lower.starts_with("color(")
+    || lower.starts_with("var(")
+  {
+    return true;
+  }
+  false
+}
+
+fn expand_text_decoration(raw_value: &str) -> Option<Vec<PropertyExpansion>> {
+  let trimmed = raw_value.trim();
+  if trimmed.is_empty() {
+    return Some(Vec::new());
+  }
+
+  const GLOBAL_VALUES: &[&str] = &["inherit", "initial", "unset", "revert", "revert-layer"];
+  const LINE_KEYWORDS: &[&str] = &["none", "underline", "overline", "line-through", "blink"];
+  const STYLE_KEYWORDS: &[&str] = &["solid", "double", "dotted", "dashed", "wavy"];
+
+  let mut line_values: Vec<String> = Vec::new();
+  let mut style_value: Option<String> = None;
+  let mut color_value: Option<String> = None;
+
+  for token in trimmed.split_whitespace() {
+    let lower = token.to_ascii_lowercase();
+    if LINE_KEYWORDS.contains(&lower.as_str()) || GLOBAL_VALUES.contains(&lower.as_str()) {
+      if line_values.contains(&lower) {
+        return Some(Vec::new());
+      }
+      line_values.push(lower);
+      continue;
+    }
+    if STYLE_KEYWORDS.contains(&lower.as_str()) || GLOBAL_VALUES.contains(&lower.as_str()) {
+      if style_value.is_some() {
+        return Some(Vec::new());
+      }
+      style_value = Some(lower);
+      continue;
+    }
+    if is_text_decoration_color_token(&lower) {
+      if color_value.is_some() {
+        return Some(Vec::new());
+      }
+      let normalized = if lower == "currentcolor" {
+        "currentColor".to_string()
+      } else {
+        lower
+      };
+      color_value = Some(normalized);
+      continue;
+    }
+    return Some(Vec::new());
+  }
+
+  line_values.sort();
+  let resolved_line = if line_values.is_empty() {
+    "none".to_string()
+  } else {
+    line_values.join(" ")
+  };
+  let color = color_value.unwrap_or_else(|| "currentColor".into());
+  let style = style_value.unwrap_or_else(|| "solid".into());
+
+  Some(vec![
+    PropertyExpansion {
+      name: "text-decoration-color".into(),
+      raw_value: color,
+    },
+    PropertyExpansion {
+      name: "text-decoration-line".into(),
+      raw_value: resolved_line,
+    },
+    PropertyExpansion {
+      name: "text-decoration-style".into(),
+      raw_value: style,
+    },
+  ])
+}
+
 fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
   if property == "flex" {
     let trimmed = raw_value.trim();
@@ -924,22 +1101,8 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
   }
 
   if property == "text-decoration" {
-    let trimmed = raw_value.trim();
-    if trimmed.eq_ignore_ascii_case("none") {
-      return vec![
-        PropertyExpansion {
-          name: "text-decoration-line".into(),
-          raw_value: "none".into(),
-        },
-        PropertyExpansion {
-          name: "text-decoration-color".into(),
-          raw_value: "initial".into(),
-        },
-        PropertyExpansion {
-          name: "text-decoration-style".into(),
-          raw_value: "solid".into(),
-        },
-      ];
+    if let Some(expanded) = expand_text_decoration(raw_value) {
+      return expanded;
     }
   }
 
@@ -1103,6 +1266,45 @@ fn replace_nesting(selector: &str, class_name: &str) -> String {
   selector.replace('&', &format!(".{}", class_name))
 }
 
+fn minify_selector(selector: &str) -> String {
+  let mut result = String::with_capacity(selector.len());
+  let mut chars = selector.chars().peekable();
+
+  while let Some(ch) = chars.next() {
+    if ch.is_ascii_whitespace() {
+      while matches!(chars.peek(), Some(next) if next.is_ascii_whitespace()) {
+        chars.next();
+      }
+      let prev_is_combinator = result
+        .chars()
+        .rev()
+        .find(|c| !c.is_ascii_whitespace())
+        .map(|c| matches!(c, '>' | '+' | '~' | ','))
+        .unwrap_or(false);
+      let next_is_combinator = chars
+        .peek()
+        .map(|c| matches!(c, '>' | '+' | '~' | ','))
+        .unwrap_or(false);
+      if prev_is_combinator || next_is_combinator {
+        continue;
+      }
+      result.push(' ');
+    } else if matches!(ch, '>' | '+' | '~' | ',') {
+      while result.ends_with(' ') {
+        result.pop();
+      }
+      result.push(ch);
+      while matches!(chars.peek(), Some(next) if next.is_ascii_whitespace()) {
+        chars.next();
+      }
+    } else {
+      result.push(ch);
+    }
+  }
+
+  result
+}
+
 fn join_selectors(selectors: &[String], class_name: &str) -> String {
   selectors
     .iter()
@@ -1169,7 +1371,7 @@ fn apply_increase_specificity(selector: &str) -> String {
   result
 }
 
-fn minify_at_rule_params(raw: &str) -> String {
+pub(crate) fn minify_at_rule_params(raw: &str) -> String {
   let mut result = String::with_capacity(raw.len());
   let mut chars = raw.chars().peekable();
   let mut pending_space = false;
@@ -1417,7 +1619,7 @@ pub fn atomicize_literal(css: &str, options: &CssOptions) -> CssArtifacts {
 mod tests {
   use super::{
     CssOptions, CssRuleInput, atomicize_literal, atomicize_rules, minify_at_rule_params,
-    normalize_css_value, vendor_prefixed_values,
+    normalize_css_value, normalize_selector, vendor_prefixed_values,
   };
 
   #[test]
@@ -1597,6 +1799,17 @@ mod tests {
     assert_eq!(
       minify_at_rule_params("screen and (min-width: 90rem)"),
       "screen and (min-width:90rem)"
+    );
+  }
+
+  #[test]
+  fn normalize_selector_collapses_pseudo_element_colons() {
+    assert_eq!(normalize_selector(Some("span::before")), "& span:before");
+    assert_eq!(normalize_selector(Some("::after")), "&:after");
+    assert_eq!(normalize_selector(Some("&::before")), "&:before");
+    assert_eq!(
+      normalize_selector(Some("[data-attr=\"a::b\"]")),
+      "&[data-attr=\"a::b\"]"
     );
   }
 }

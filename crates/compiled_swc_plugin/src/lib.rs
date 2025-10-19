@@ -4,7 +4,8 @@ pub mod hash;
 
 use crate::css::{
   AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizedCssValue, add_unit_if_needed,
-  atomicize_literal, atomicize_rules, normalize_css_value, normalize_selector, wrap_at_rules,
+  atomicize_literal, atomicize_rules, minify_at_rule_params, normalize_css_value,
+  normalize_selector, wrap_at_rules,
 };
 use crate::hash::hash;
 use indexmap::IndexMap;
@@ -435,7 +436,7 @@ fn evaluate_static(
         );
         if let Some(expr) = template.exprs.get(index) {
           let value = evaluate_static(expr, bindings)?;
-          result.push_str(value.as_str()?);
+          result.push_str(&value.to_js_string()?);
         }
       }
       Some(StaticValue::Str(result))
@@ -503,6 +504,12 @@ fn evaluate_static(
               map.shift_remove(&name);
               map.insert(name, value);
             }
+            Prop::Shorthand(ident) => {
+              let name = ident.sym.to_string();
+              let value = bindings.get(&to_id(ident)).cloned()?;
+              map.shift_remove(&name);
+              map.insert(name, value);
+            }
             _ => return None,
           },
           PropOrSpread::Spread(SpreadElement { expr, .. }) => {
@@ -550,15 +557,15 @@ fn record_var_decl(
   for decl in &var.decls {
     if let Pat::Ident(BindingIdent { id, .. }) = &decl.name {
       if let Some(init) = &decl.init {
-        if let Some(value) = evaluate_static(init, bindings)
-          .or_else(|| {
-            evaluate_compiled_css_expr(init, css_idents, css_map_idents, css_options, bindings)
-          })
-          .or_else(|| evaluate_keyframes_expr(init, keyframes_idents))
-        {
-          bindings.insert(to_id(id), value.clone());
-          recorded.push((id.clone(), value));
-        }
+      let evaluated = evaluate_static(init, bindings)
+        .or_else(|| {
+          evaluate_compiled_css_expr(init, css_idents, css_map_idents, css_options, bindings)
+        })
+        .or_else(|| evaluate_keyframes_expr(init, keyframes_idents));
+      if let Some(value) = evaluated {
+        bindings.insert(to_id(id), value.clone());
+        recorded.push((id.clone(), value));
+      }
       }
     }
   }
@@ -614,10 +621,14 @@ fn evaluate_compiled_css_expr(
         return None;
       }
 
-      if values.is_empty() {
-        Some(StaticValue::Null)
-      } else if values.len() == 1 {
-        values.into_iter().next()
+      if is_css {
+        if values.is_empty() {
+          Some(StaticValue::Null)
+        } else if values.len() == 1 {
+          values.into_iter().next()
+        } else {
+          Some(StaticValue::Array(values))
+        }
       } else {
         Some(StaticValue::Array(values))
       }
@@ -1484,6 +1495,512 @@ fn push_css_value(
   true
 }
 
+fn skip_whitespace_and_comments(css: &str, idx: &mut usize) {
+  let bytes = css.as_bytes();
+  let len = bytes.len();
+  loop {
+    while *idx < len && bytes[*idx].is_ascii_whitespace() {
+      *idx += 1;
+    }
+    if *idx + 1 < len && bytes[*idx] == b'/' && bytes[*idx + 1] == b'*' {
+      *idx += 2;
+      while *idx + 1 < len && !(bytes[*idx] == b'*' && bytes[*idx + 1] == b'/') {
+        *idx += 1;
+      }
+      if *idx + 1 < len {
+        *idx += 2;
+      }
+      continue;
+    }
+    break;
+  }
+}
+
+fn extract_block_content(css: &str, idx: &mut usize) -> Option<String> {
+  let bytes = css.as_bytes();
+  let len = bytes.len();
+  if *idx >= len || bytes[*idx] != b'{' {
+    return None;
+  }
+  *idx += 1;
+  let start = *idx;
+  let mut depth = 1usize;
+  let mut in_single = false;
+  let mut in_double = false;
+  let mut in_comment = false;
+  while *idx < len {
+    let ch = bytes[*idx];
+    if in_comment {
+      if ch == b'*' && *idx + 1 < len && bytes[*idx + 1] == b'/' {
+        in_comment = false;
+        *idx += 2;
+        continue;
+      }
+      *idx += 1;
+      continue;
+    }
+    if in_single {
+      if ch == b'\\' {
+        *idx += 2;
+        continue;
+      }
+      if ch == b'\'' {
+        in_single = false;
+      }
+      *idx += 1;
+      continue;
+    }
+    if in_double {
+      if ch == b'\\' {
+        *idx += 2;
+        continue;
+      }
+      if ch == b'"' {
+        in_double = false;
+      }
+      *idx += 1;
+      continue;
+    }
+    match ch {
+      b'/' if *idx + 1 < len && bytes[*idx + 1] == b'*' => {
+        in_comment = true;
+        *idx += 2;
+      }
+      b'\'' => {
+        in_single = true;
+        *idx += 1;
+      }
+      b'"' => {
+        in_double = true;
+        *idx += 1;
+      }
+      b'{' => {
+        depth += 1;
+        *idx += 1;
+      }
+      b'}' => {
+        depth -= 1;
+        if depth == 0 {
+          let content = css[start..*idx].to_string();
+          *idx += 1;
+          return Some(content);
+        }
+        *idx += 1;
+      }
+      _ => {
+        *idx += 1;
+      }
+    }
+  }
+  None
+}
+
+fn read_property_value(css: &str, idx: &mut usize) -> String {
+  skip_whitespace_and_comments(css, idx);
+  let bytes = css.as_bytes();
+  let len = bytes.len();
+  let start = *idx;
+  let mut in_single = false;
+  let mut in_double = false;
+  let mut in_comment = false;
+  let mut paren_depth = 0usize;
+  while *idx < len {
+    let ch = bytes[*idx];
+    if in_comment {
+      if ch == b'*' && *idx + 1 < len && bytes[*idx + 1] == b'/' {
+        in_comment = false;
+        *idx += 2;
+        continue;
+      }
+      *idx += 1;
+      continue;
+    }
+    if in_single {
+      if ch == b'\\' {
+        *idx += 2;
+        continue;
+      }
+      if ch == b'\'' {
+        in_single = false;
+      }
+      *idx += 1;
+      continue;
+    }
+    if in_double {
+      if ch == b'\\' {
+        *idx += 2;
+        continue;
+      }
+      if ch == b'"' {
+        in_double = false;
+      }
+      *idx += 1;
+      continue;
+    }
+    match ch {
+      b'/' if *idx + 1 < len && bytes[*idx + 1] == b'*' => {
+        in_comment = true;
+        *idx += 2;
+      }
+      b'\'' => {
+        in_single = true;
+        *idx += 1;
+      }
+      b'"' => {
+        in_double = true;
+        *idx += 1;
+      }
+      b'(' => {
+        paren_depth += 1;
+        *idx += 1;
+      }
+      b')' => {
+        if paren_depth > 0 {
+          paren_depth -= 1;
+        }
+        *idx += 1;
+      }
+      b';' if paren_depth == 0 => {
+        let value = css[start..*idx].trim().to_string();
+        *idx += 1;
+        return value;
+      }
+      b'}' if paren_depth == 0 => {
+        let value = css[start..*idx].trim().to_string();
+        return value;
+      }
+      _ => {
+        *idx += 1;
+      }
+    }
+  }
+  css[start..*idx].trim().to_string()
+}
+
+fn parse_css_literal_block(
+  css: &str,
+  selectors: &[String],
+  at_rules: &[AtRuleInput],
+  flatten_selectors: bool,
+  out: &mut Vec<CssRuleInput>,
+  raw_rules: &mut Vec<String>,
+) -> bool {
+  let mut idx = 0usize;
+  let len = css.len();
+  while idx < len {
+    skip_whitespace_and_comments(css, &mut idx);
+    if idx >= len {
+      break;
+    }
+    let bytes = css.as_bytes();
+    if bytes[idx] == b'}' {
+      idx += 1;
+      continue;
+    }
+    if bytes[idx] == b'@' {
+      idx += 1;
+      let name_start = idx;
+      while idx < len {
+        let ch = bytes[idx];
+        if ch.is_ascii_alphabetic() || ch == b'-' {
+          idx += 1;
+        } else {
+          break;
+        }
+      }
+      let name = css[name_start..idx].trim().to_string();
+      let name_lower = name.to_ascii_lowercase();
+      skip_whitespace_and_comments(css, &mut idx);
+      let params_start = idx;
+      let mut params_has_block = false;
+      let mut in_single = false;
+      let mut in_double = false;
+      let mut in_comment = false;
+      let bytes = css.as_bytes();
+      while idx < len {
+        let ch = bytes[idx];
+        if in_comment {
+          if ch == b'*' && idx + 1 < len && bytes[idx + 1] == b'/' {
+            in_comment = false;
+            idx += 2;
+            continue;
+          }
+          idx += 1;
+          continue;
+        }
+        if in_single {
+          if ch == b'\\' {
+            idx += 2;
+            continue;
+          }
+          if ch == b'\'' {
+            in_single = false;
+          }
+          idx += 1;
+          continue;
+        }
+        if in_double {
+          if ch == b'\\' {
+            idx += 2;
+            continue;
+          }
+          if ch == b'"' {
+            in_double = false;
+          }
+          idx += 1;
+          continue;
+        }
+        match ch {
+          b'/' if idx + 1 < len && bytes[idx + 1] == b'*' => {
+            in_comment = true;
+            idx += 2;
+          }
+          b'\'' => {
+            in_single = true;
+            idx += 1;
+          }
+          b'"' => {
+            in_double = true;
+            idx += 1;
+          }
+          b'{' => {
+            params_has_block = true;
+            break;
+          }
+          b';' => {
+            let params = css[params_start..idx].trim();
+            let mut rule = format!("@{}", name);
+            if !params.is_empty() {
+              rule.push(' ');
+              rule.push_str(params);
+            }
+            rule.push(';');
+            idx += 1;
+            raw_rules.push(rule);
+            params_has_block = false;
+            break;
+          }
+          _ => {
+            idx += 1;
+          }
+        }
+        if params_has_block {
+          break;
+        }
+      }
+      if !params_has_block {
+        continue;
+      }
+      let params = css[params_start..idx].trim();
+      if idx >= len || bytes[idx] != b'{' {
+        return false;
+      }
+      let mut next_idx = idx;
+      let block = match extract_block_content(css, &mut next_idx) {
+        Some(content) => content,
+        None => return false,
+      };
+      idx = next_idx;
+      if NON_ATOMIC_AT_RULES.contains(&name_lower.as_str()) {
+        let wrapped = wrap_at_rules(
+          block.trim().to_string(),
+          &[AtRuleInput {
+            name: name.clone(),
+            params: minify_at_rule_params(params).to_string(),
+          }],
+        );
+        raw_rules.push(wrapped);
+        continue;
+      }
+      if !ATOMIC_AT_RULES.contains(&name_lower.as_str()) {
+        return false;
+      }
+      let mut nested_at_rules = at_rules.to_vec();
+      nested_at_rules.push(AtRuleInput {
+        name: name.clone(),
+        params: minify_at_rule_params(params).to_string(),
+      });
+      if !parse_css_literal_block(
+        &block,
+        selectors,
+        &nested_at_rules,
+        flatten_selectors,
+        out,
+        raw_rules,
+      ) {
+        return false;
+      }
+      continue;
+    }
+
+    let mut cursor = idx;
+    let mut colon_pos = None;
+    let mut brace_pos = None;
+    let mut semicolon_pos = None;
+    let bytes = css.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_comment = false;
+    let mut paren_depth = 0usize;
+    while cursor < len {
+      let ch = bytes[cursor];
+      if in_comment {
+        if ch == b'*' && cursor + 1 < len && bytes[cursor + 1] == b'/' {
+          in_comment = false;
+          cursor += 2;
+          continue;
+        }
+        cursor += 1;
+        continue;
+      }
+      if in_single {
+        if ch == b'\\' {
+          cursor += 2;
+          continue;
+        }
+        if ch == b'\'' {
+          in_single = false;
+        }
+        cursor += 1;
+        continue;
+      }
+      if in_double {
+        if ch == b'\\' {
+          cursor += 2;
+          continue;
+        }
+        if ch == b'"' {
+          in_double = false;
+        }
+        cursor += 1;
+        continue;
+      }
+      match ch {
+        b'/' if cursor + 1 < len && bytes[cursor + 1] == b'*' => {
+          in_comment = true;
+          cursor += 2;
+        }
+        b'\'' => {
+          in_single = true;
+          cursor += 1;
+        }
+        b'"' => {
+          in_double = true;
+          cursor += 1;
+        }
+        b'(' => {
+          paren_depth += 1;
+          cursor += 1;
+        }
+        b')' => {
+          if paren_depth > 0 {
+            paren_depth -= 1;
+          }
+          cursor += 1;
+        }
+        b':' if paren_depth == 0 && colon_pos.is_none() => {
+          colon_pos = Some(cursor);
+          cursor += 1;
+        }
+        b'{' if paren_depth == 0 => {
+          brace_pos = Some(cursor);
+          break;
+        }
+        b';' if paren_depth == 0 => {
+          semicolon_pos = Some(cursor);
+          break;
+        }
+        b'}' if paren_depth == 0 => {
+          break;
+        }
+        _ => {
+          cursor += 1;
+        }
+      }
+    }
+
+    if let Some(colon_index) = colon_pos {
+      let treat_as_declaration = match (semicolon_pos, brace_pos) {
+        (Some(semicolon), Some(brace)) => semicolon < brace,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => true,
+      };
+      if treat_as_declaration {
+        let property = css[idx..colon_index].trim();
+        let mut value_idx = colon_index + 1;
+        let value = read_property_value(css, &mut value_idx);
+        if !property.is_empty() {
+          let static_value = StaticValue::Str(value);
+          if !push_css_value(
+            property,
+            &static_value,
+            selectors,
+            at_rules,
+            out,
+            flatten_selectors,
+          ) {
+            return false;
+          }
+        }
+        idx = value_idx;
+        continue;
+      } else {
+        // treat as selector block
+      }
+    }
+
+    let brace_index = match brace_pos {
+      Some(pos) => pos,
+      None => break,
+    };
+    let selector_text = css[idx..brace_index].trim();
+    if selector_text.is_empty() {
+      return false;
+    }
+    let mut block_start = brace_index;
+    let block_content = match extract_block_content(css, &mut block_start) {
+      Some(content) => content,
+      None => return false,
+    };
+    idx = block_start;
+
+    let extended_selectors = extend_selectors(selectors, selector_text);
+    if !parse_css_literal_block(
+      &block_content,
+      &extended_selectors,
+      at_rules,
+      flatten_selectors,
+      out,
+      raw_rules,
+    ) {
+      return false;
+    }
+  }
+  true
+}
+
+fn css_artifacts_from_literal(css: &str, options: &CssOptions) -> Option<CssArtifacts> {
+  let mut rules = Vec::new();
+  let mut raw_rules = Vec::new();
+  let base_selectors = vec![normalize_selector(None)];
+  if !parse_css_literal_block(
+    css,
+    &base_selectors,
+    &[],
+    options.flatten_multiple_selectors,
+    &mut rules,
+    &mut raw_rules,
+  ) {
+    return None;
+  }
+  let mut artifacts = atomicize_rules(&rules, options);
+  for css in raw_rules {
+    artifacts.push_raw(css);
+  }
+  Some(artifacts)
+}
+
 fn flatten_css_object(
   map: &IndexMap<String, StaticValue>,
   selectors: &[String],
@@ -1492,7 +2009,9 @@ fn flatten_css_object(
   raw_rules: &mut Vec<String>,
   flatten_selectors: bool,
 ) -> bool {
-  for (key, value) in map {
+  let mut entries: Vec<(&String, &StaticValue)> = map.iter().collect();
+  entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+  for (key, value) in entries {
     if key == "selectors" {
       let nested = match value.as_object() {
         Some(obj) => obj,
@@ -1663,7 +2182,8 @@ fn css_artifacts_from_static_value(
 ) -> Option<CssArtifacts> {
   match value {
     StaticValue::Object(map) => css_artifacts_from_static_object(map, options),
-    StaticValue::Str(text) => Some(atomicize_literal(text, options)),
+    StaticValue::Str(text) => css_artifacts_from_literal(text, options)
+      .or_else(|| Some(atomicize_literal(text, options))),
     StaticValue::Array(items) => {
       let mut combined = CssArtifacts::default();
       for item in items {
@@ -2245,6 +2765,35 @@ impl<'a> TransformVisitor<'a> {
     css_options_from_plugin_options(self.options)
   }
 
+  fn finalize_runtime_sheets(&self, sheets: Vec<String>) -> Vec<String> {
+    use std::collections::HashSet;
+
+    if self.keyframes_rules.is_empty() {
+      return merge_at_rule_sheets(sheets);
+    }
+
+    if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
+      eprintln!(
+        "[compiled-debug] keyframes available: {:?}",
+        self.keyframes_rules.keys().collect::<Vec<_>>()
+      );
+    }
+
+    let mut expanded = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for sheet in sheets {
+      for (name, rule) in &self.keyframes_rules {
+        if sheet.contains(name) && seen.insert(rule.clone()) {
+          expanded.push(rule.clone());
+        }
+      }
+      if seen.insert(sheet.clone()) {
+        expanded.push(sheet);
+      }
+    }
+    merge_at_rule_sheets(expanded)
+  }
+
   fn should_import_react_namespace(&self) -> bool {
     self.options.import_react.unwrap_or(true)
   }
@@ -2620,7 +3169,8 @@ impl<'a> TransformVisitor<'a> {
 
   fn handle_css_template(&mut self, template: &TaggedTpl) -> Option<Expr> {
     let css = self.evaluate_template(template)?;
-    let artifacts = atomicize_literal(&css, &self.css_options());
+    let artifacts = css_artifacts_from_literal(&css, &self.css_options())
+      .or_else(|| Some(atomicize_literal(&css, &self.css_options())))?;
     for rule in artifacts.rules {
       self.register_rule(rule.css);
     }
@@ -2664,6 +3214,9 @@ impl<'a> TransformVisitor<'a> {
     let expression_code = emit_expression(expression);
     let name = format!("k{}", hash(&expression_code, 0));
     let rule = format!("@keyframes {}{{{}}}", name, normalized);
+    if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
+      eprintln!("[compiled-debug] register keyframes {} -> {}", name, rule);
+    }
     self.register_rule(rule.clone());
     self.keyframes_rules.insert(name, rule);
     Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP })))
@@ -2955,9 +3508,9 @@ impl<'a> TransformVisitor<'a> {
 
   fn append_display_names(&mut self, module: &mut Module) {
     for (ident, display_name) in self.styled_display_names.drain(..) {
-      let condition = Expr::Bin(BinExpr {
+      let test = Expr::Bin(BinExpr {
         span: DUMMY_SP,
-        op: BinaryOp::EqEqEq,
+        op: BinaryOp::NotEqEq,
         left: Box::new(Expr::Member(MemberExpr {
           span: DUMMY_SP,
           obj: Box::new(Expr::Member(MemberExpr {
@@ -2968,11 +3521,6 @@ impl<'a> TransformVisitor<'a> {
           prop: MemberProp::Ident(quote_ident!("NODE_ENV")),
         })),
         right: Box::new(Expr::Lit(Lit::Str(Str::from("production")))),
-      });
-      let test = Expr::Unary(UnaryExpr {
-        span: DUMMY_SP,
-        op: UnaryOp::Bang,
-        arg: Box::new(condition),
       });
       let stmt = Stmt::If(IfStmt {
         span: DUMMY_SP,
@@ -3218,23 +3766,7 @@ impl<'a> TransformVisitor<'a> {
       }
     }
 
-    let runtime_sheets = if self.keyframes_rules.is_empty() {
-      merge_at_rule_sheets(runtime_sheets)
-    } else {
-      let mut expanded_sheets = Vec::new();
-      let mut seen_sheets: HashSet<String> = HashSet::new();
-      for sheet in runtime_sheets {
-        for (name, rule) in &self.keyframes_rules {
-          if sheet.contains(name) && seen_sheets.insert(rule.clone()) {
-            expanded_sheets.push(rule.clone());
-          }
-        }
-        if seen_sheets.insert(sheet.clone()) {
-          expanded_sheets.push(sheet);
-        }
-      }
-      merge_at_rule_sheets(expanded_sheets)
-    };
+    let runtime_sheets = self.finalize_runtime_sheets(runtime_sheets);
 
     self.needs_runtime_ax = true;
     self.needs_jsx_runtime = true;
@@ -3293,7 +3825,11 @@ impl<'a> TransformVisitor<'a> {
       }
     }
 
-    let merged_class_entries = merge_adjacent_string_entries(class_entries);
+    let merged_class_entries = if class_index.is_some() {
+      class_entries
+    } else {
+      merge_adjacent_string_entries(class_entries)
+    };
 
     let class_attr = JSXAttrOrSpread::JSXAttr(JSXAttr {
       span: DUMMY_SP,
@@ -3911,6 +4447,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
     for css in &artifacts.raw_rules {
       runtime_sheets.push(css.clone());
     }
+    let runtime_sheets = self.finalize_runtime_sheets(runtime_sheets);
     self.needs_react_namespace = true;
     self.needs_jsx_runtime = true;
     self.needs_runtime_ax = true;
