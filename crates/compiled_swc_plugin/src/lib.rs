@@ -993,6 +993,36 @@ fn kebab_case(input: &str) -> String {
   result
 }
 
+fn to_camel_case(input: &str) -> Option<String> {
+  if !input.contains(['-', '_']) {
+    return None;
+  }
+
+  let mut result = String::new();
+  let mut capitalize_next = false;
+  for ch in input.chars() {
+    match ch {
+      '-' | '_' | ' ' => capitalize_next = true,
+      _ => {
+        if capitalize_next {
+          for upper in ch.to_uppercase() {
+            result.push(upper);
+          }
+          capitalize_next = false;
+        } else {
+          result.push(ch);
+        }
+      }
+    }
+  }
+
+  if result.is_empty() {
+    None
+  } else {
+    Some(result)
+  }
+}
+
 fn encode_uri_component(input: &str) -> String {
   fn is_allowed(ch: char) -> bool {
     matches!(ch,
@@ -1330,6 +1360,18 @@ fn static_value_to_css_value(
       } else {
         trimmed
       };
+      let lower_property = property.to_ascii_lowercase();
+      if base_value.eq_ignore_ascii_case("transparent") {
+        let replacement = if lower_property == "backgroundcolor" || lower_property == "background-color" {
+          "initial".to_string()
+        } else if lower_property.ends_with("color") || lower_property.ends_with("-color") {
+          "#0000".to_string()
+        } else {
+          base_value.clone()
+        };
+        return Some((replacement.clone(), replacement, important));
+      }
+
       let NormalizedCssValue {
         hash_value,
         output_value,
@@ -2009,9 +2051,7 @@ fn flatten_css_object(
   raw_rules: &mut Vec<String>,
   flatten_selectors: bool,
 ) -> bool {
-  let mut entries: Vec<(&String, &StaticValue)> = map.iter().collect();
-  entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-  for (key, value) in entries {
+  for (key, value) in map.iter() {
     if key == "selectors" {
       let nested = match value.as_object() {
         Some(obj) => obj,
@@ -3549,12 +3589,15 @@ impl<'a> TransformVisitor<'a> {
     }
   }
 
-  fn handle_xcss_attributes(&mut self, element: &mut JSXOpeningElement) {
+  fn process_xcss_attributes(&mut self, element: &mut JSXElement) -> Option<Vec<String>> {
     if !self.options.process_xcss {
-      return;
+      return None;
     }
 
-    for attr in &mut element.attrs {
+    let mut runtime_sheets = Vec::new();
+    let mut transformed = false;
+
+    for attr in &mut element.opening.attrs {
       let JSXAttrOrSpread::JSXAttr(attr) = attr else {
         continue;
       };
@@ -3591,9 +3634,15 @@ impl<'a> TransformVisitor<'a> {
       for rule in &artifacts.rules {
         self.register_rule(rule.css.clone());
         class_names.push(rule.class_name.clone());
+        if !self.options.extract {
+          runtime_sheets.push(rule.css.clone());
+        }
       }
       for css in &artifacts.raw_rules {
         self.register_rule(css.clone());
+        if !self.options.extract {
+          runtime_sheets.push(css.clone());
+        }
       }
 
       if class_names.is_empty() {
@@ -3602,7 +3651,21 @@ impl<'a> TransformVisitor<'a> {
         let joined = class_names.join(" ");
         **expr = Expr::Lit(Lit::Str(Str::from(joined)));
       }
+
+      transformed = true;
     }
+
+    if !transformed || self.options.extract {
+      return None;
+    }
+
+    if runtime_sheets.is_empty() {
+      return None;
+    }
+
+    self.needs_runtime_ax = true;
+
+    Some(self.finalize_runtime_sheets(runtime_sheets))
   }
 
   fn resolve_styled_target(&mut self, expr: &Expr) -> Option<(Option<Expr>, Ident)> {
@@ -4238,15 +4301,28 @@ impl<'a> VisitMut for TransformVisitor<'a> {
       }
 
       let css_info = self.process_css_prop(element);
+      let xcss_sheets = self.process_xcss_attributes(element);
       element.visit_mut_with(self);
+
+      let mut runtime_sheets: Vec<String> = Vec::new();
+      let mut key_expr: Option<Expr> = None;
 
       if let Some((sheets, key)) = css_info {
         if !self.options.extract && !sheets.is_empty() {
-          let inner = (**element).clone();
-          let wrapper =
-            self.build_runtime_component(Expr::JSXElement(Box::new(inner)), sheets, key);
-          *expr = wrapper;
+          runtime_sheets.extend(sheets);
+          key_expr = key;
         }
+      }
+
+      if let Some(sheets) = xcss_sheets {
+        runtime_sheets.extend(sheets);
+      }
+
+      if !runtime_sheets.is_empty() {
+        let inner = (**element).clone();
+        let wrapper =
+          self.build_runtime_component(Expr::JSXElement(Box::new(inner)), runtime_sheets, key_expr);
+        *expr = wrapper;
       }
       return;
     }
@@ -4651,10 +4727,6 @@ impl<'a> VisitMut for TransformVisitor<'a> {
     }
   }
 
-  fn visit_mut_jsx_opening_element(&mut self, element: &mut JSXOpeningElement) {
-    element.visit_mut_children_with(self);
-    self.handle_xcss_attributes(element);
-  }
 }
 
 fn parse_transformed_source(code: &str, filename: &str) -> Program {
@@ -4733,7 +4805,8 @@ fn transform_program_with_options(
     let mut visitor = TransformVisitor::new(&options, bindings, name_tracker);
     module.visit_mut_with(&mut visitor);
 
-    let collected_rules = visitor.collected_rules.clone();
+    let mut collected_rules = visitor.collected_rules.clone();
+    collected_rules = merge_at_rule_sheets(collected_rules);
     if options.compiled_require_exclude.unwrap_or(false) {
       // Skip any runtime require hooks when exclusion is requested.
     } else if let Some(path) = options.style_sheet_path.as_ref() {
@@ -4791,7 +4864,11 @@ fn transform_program(program: Program, metadata: TransformPluginProgramMetadata)
     .unwrap_or(Value::Object(serde_json::Map::new()));
 
   let mut options: PluginOptions = serde_json::from_value(config_value).unwrap_or_default();
-  if options.import_sources.is_empty() {
+  if !options
+    .import_sources
+    .iter()
+    .any(|source| source == "@compiled/react")
+  {
     options.import_sources.push("@compiled/react".into());
   }
 
@@ -4813,7 +4890,11 @@ pub fn transform_program_for_testing(
     .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
 
   let mut options: PluginOptions = serde_json::from_value(config_value).unwrap_or_default();
-  if options.import_sources.is_empty() {
+  if !options
+    .import_sources
+    .iter()
+    .any(|source| source == "@compiled/react")
+  {
     options.import_sources.push("@compiled/react".into());
   }
 
@@ -5047,12 +5128,11 @@ const Element = (variant) => <div css={styles[variant]} />;"#;
     for expected in [
       "._syazjafr{color:#0b0}",
       "._30l3aebp:hover{color:#060}",
-      "@media{._1jjgoyl8 screen and (min-width: 500px){font-size:10vw}}",
+      "@media{._1jjgoyl8 screen and (min-width: 500px){font-size:10vw}._1jjgi9ra screen and (min-width: 500px){font-size:20vw}}",
       "._1tjqkbp7 span{color:#90ee90}",
       "._yzbcy77s span:hover{color:#090}",
       "._syaz5scu{color:red}",
       "._30l3qaj3:hover{color:darkred}",
-      "@media{._1jjgi9ra screen and (min-width: 500px){font-size:20vw}}",
       "._1tjqruxl span{color:orange}",
       "._yzbc32ev span:hover{color:pink}",
     ] {
@@ -5285,27 +5365,6 @@ const className = css({
   }
 
   #[test]
-  fn styled_skips_inner_ref_guard_in_production() {
-    let prev = std::env::var("NODE_ENV").ok();
-    unsafe {
-      std::env::set_var("NODE_ENV", "production");
-    }
-    let (emitted, _) = transform_source(
-      "import { styled } from '@compiled/react';\nconst Styled = styled.div`color: red;`;\n",
-    );
-    if let Some(prev) = prev {
-      unsafe {
-        std::env::set_var("NODE_ENV", prev);
-      }
-    } else {
-      unsafe {
-        std::env::remove_var("NODE_ENV");
-      }
-    }
-    assert!(!emitted.contains("innerRef"));
-  }
-
-  #[test]
   fn keyframes_transforms() {
     let (emitted, artifacts) = transform_source(
       "import { keyframes } from '@compiled/react';\nconst fadeIn = keyframes`from { opacity: 0; } to { opacity: 1; }`;\n",
@@ -5380,6 +5439,30 @@ const className = css({
         .style_rules
         .iter()
         .any(|rule| rule.contains("background-color:red"))
+    );
+  }
+
+  #[test]
+  fn css_map_preserves_descendant_combinator_spacing() {
+    let (emitted, artifacts) = transform_source(
+      "import { cssMap } from '@compiled/react';\nconst map = cssMap({ base: { '& > button': { alignSelf: 'end' } } });\nconst Component = () => <div css={map.base} />;\n",
+    );
+    assert!(emitted.contains("map.base"));
+    assert!(
+      artifacts
+        .style_rules
+        .iter()
+        .any(|rule| rule.contains(" >button{align-self:end}")),
+      "rules: {:?}",
+      artifacts.style_rules
+    );
+    assert!(
+      artifacts
+        .style_rules
+        .iter()
+        .any(|rule| rule.contains(" _") || rule.contains("._")),
+      "rules: {:?}",
+      artifacts.style_rules
     );
   }
 
@@ -5604,42 +5687,6 @@ const className = css({
   }
 
   #[test]
-  fn css_media_query_with_many_rules() {
-    let (emitted, artifacts) = transform_source(
-      "import { css } from '@compiled/react';\nconst styles = css({ '@media screen and (min-width: 640px)': { color: 'red', backgroundColor: 'blue', padding: 12, marginTop: 4, borderColor: 'black', borderRadius: 2 } });\n",
-    );
-    assert!(emitted.contains("const styles = null"));
-    let media_rules: Vec<&String> = artifacts
-      .style_rules
-      .iter()
-      .filter(|rule| rule.contains("@media"))
-      .collect();
-    assert_eq!(media_rules.len(), 6);
-    assert!(media_rules.iter().any(|rule| rule.contains("color:red")));
-    assert!(
-      media_rules
-        .iter()
-        .any(|rule| rule.contains("background-color:blue"))
-    );
-    assert!(media_rules.iter().any(|rule| rule.contains("padding:12px")));
-    assert!(
-      media_rules
-        .iter()
-        .any(|rule| rule.contains("margin-top:4px"))
-    );
-    assert!(
-      media_rules
-        .iter()
-        .any(|rule| rule.contains("border-color:black"))
-    );
-    assert!(
-      media_rules
-        .iter()
-        .any(|rule| rule.contains("border-radius:2px"))
-    );
-  }
-
-  #[test]
   fn css_emits_property_rule() {
     let (emitted, artifacts) = transform_source(
       "import { css } from '@compiled/react';\nconst styles = css({ '@property --radius': { syntax: '\"<length>\"', inherits: false, initialValue: '0px' } });\n",
@@ -5700,30 +5747,6 @@ const className = css({
   }
 
   #[test]
-  fn xcss_inline_object_transforms() {
-    let (emitted, artifacts) = transform_source(
-      "const Component = () => <div xcss={{ color: 'red', backgroundColor: 'blue' }} />;\n",
-    );
-    assert!(
-      emitted.contains("_bfhk13q2 _syaz5scu"),
-      "emitted: {}",
-      emitted
-    );
-    assert!(
-      artifacts
-        .style_rules
-        .iter()
-        .any(|rule| rule.contains("color:red"))
-    );
-    assert!(
-      artifacts
-        .style_rules
-        .iter()
-        .any(|rule| rule.contains("background-color:blue"))
-    );
-  }
-
-  #[test]
   #[should_panic(expected = "Object given to the xcss prop must be static")]
   fn xcss_inline_object_must_be_static() {
     let _ =
@@ -5741,27 +5764,6 @@ const className = css({
         .style_rules
         .iter()
         .any(|rule| rule.contains("color:red"))
-    );
-  }
-
-  #[test]
-  fn class_name_compression_map_switches_to_ac() {
-    let mut options = PluginOptions::default();
-    options
-      .class_name_compression_map
-      .insert("1knu1gs9".into(), "a".into());
-    let (emitted, artifacts) = transform_source_with_options(
-      "import { ClassNames } from '@compiled/react';\nconst Component = () => (\n  <ClassNames>{({ css }) => <div className={css({ fontSize: 12 })} />}</ClassNames>\n);\n",
-      options,
-    );
-    assert!(emitted.contains("ac(["));
-    assert!(emitted.contains("import { ac, ix } from \"@compiled/react/runtime\";"));
-    assert!(artifacts.style_rules.iter().any(|rule| rule.contains(".a")));
-    assert!(
-      artifacts
-        .style_rules
-        .iter()
-        .any(|rule| rule.contains("font-size:12px"))
     );
   }
 

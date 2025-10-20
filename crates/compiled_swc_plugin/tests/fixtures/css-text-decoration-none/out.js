@@ -1,10 +1,10 @@
 import * as React from 'react';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
-const _ = '._1kt9b3bt:before{content:""}';
-const _1 = '._aetr1e8g:after{content:"hello"}';
-const _2 = "._1q7w1isi span:before{content:attr(data-label)}";
-const styles = null;
+const _ = "._4bfu18uv{text-decoration-color:initial}";
+const _1 = "._1hmsglyw{text-decoration-line:none}";
+const _2 = "._ajmmnqa1{text-decoration-style:solid}";
+const base = null;
 export const Component = ()=>(jsxs(CC, {
         children: [
             jsx(CS, {
@@ -16,11 +16,9 @@ export const Component = ()=>(jsxs(CC, {
             }),
             jsx("div", {
                 className: ax([
-                    "_1kt9b3bt _aetr1e8g _1q7w1isi"
+                    "_4bfu18uv _1hmsglyw _ajmmnqa1"
                 ]),
-                children: jsx("span", {
-                    "data-label": "test"
-                })
+                children: "Hello"
             })
         ]
     }));

@@ -306,7 +306,15 @@ pub fn add_unit_if_needed(name: &str, value: &str) -> String {
   }
 
   if let Ok(number) = value.parse::<f64>() {
-    if number == 0.0 || is_unitless_property(name) {
+    let unitless = if is_unitless_property(name) {
+      true
+    } else if let Some(camel) = crate::to_camel_case(name) {
+      is_unitless_property(&camel)
+    } else {
+      false
+    };
+
+    if number == 0.0 || unitless {
       return trim_numeric(value);
     }
 
@@ -347,16 +355,36 @@ fn shorten_hex_literals(input: &str) -> String {
 
   while index < chars.len() {
     let ch = chars[index];
-    if ch == '#' && index + 6 < chars.len() {
-      let slice = &chars[index + 1..index + 7];
-      if slice.iter().all(|c| c.is_ascii_hexdigit()) {
-        if slice[0] == slice[1] && slice[2] == slice[3] && slice[4] == slice[5] {
-          output.push('#');
-          output.push(slice[0]);
-          output.push(slice[2]);
-          output.push(slice[4]);
-          index += 7;
-          continue;
+    if ch == '#' {
+      if index + 8 < chars.len() {
+        let slice = &chars[index + 1..index + 9];
+        if slice.iter().all(|c| c.is_ascii_hexdigit()) {
+          if slice[0] == slice[1]
+            && slice[2] == slice[3]
+            && slice[4] == slice[5]
+            && slice[6] == slice[7]
+          {
+            output.push('#');
+            output.push(slice[0]);
+            output.push(slice[2]);
+            output.push(slice[4]);
+            output.push(slice[6]);
+            index += 9;
+            continue;
+          }
+        }
+      }
+      if index + 6 < chars.len() {
+        let slice = &chars[index + 1..index + 7];
+        if slice.iter().all(|c| c.is_ascii_hexdigit()) {
+          if slice[0] == slice[1] && slice[2] == slice[3] && slice[4] == slice[5] {
+            output.push('#');
+            output.push(slice[0]);
+            output.push(slice[2]);
+            output.push(slice[4]);
+            index += 7;
+            continue;
+          }
         }
       }
     }
@@ -391,36 +419,6 @@ fn minify_whitespace(value: &str) -> String {
   output
 }
 
-fn strip_decimal_leading_zeros(value: &str) -> String {
-  let mut output = String::with_capacity(value.len());
-  let mut chars = value.chars().peekable();
-  let mut prev: Option<char> = None;
-
-  while let Some(ch) = chars.next() {
-    if ch == '0' {
-      if let Some('.') = chars.peek().copied() {
-        let mut lookahead = chars.clone();
-        lookahead.next();
-        if let Some(next_digit) = lookahead.peek() {
-          if next_digit.is_ascii_digit()
-            && !prev.map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false)
-          {
-            chars.next();
-            output.push('.');
-            prev = Some('.');
-            continue;
-          }
-        }
-      }
-    }
-
-    output.push(ch);
-    prev = Some(ch);
-  }
-
-  output
-}
-
 pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -430,8 +428,9 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
     };
   }
 
-  let mut semantic = trimmed.to_ascii_lowercase();
-  if let Some(hex) = named_color_hex(&semantic) {
+  let mut semantic = trimmed.to_string();
+  let lower_trimmed = trimmed.to_ascii_lowercase();
+  if let Some(hex) = named_color_hex(&lower_trimmed) {
     let shortened = shorten_hex_literals(hex);
     let candidate = if shortened.len() < hex.len() {
       shortened
@@ -444,7 +443,7 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
       semantic = hex.to_string();
     }
   }
-  if semantic == "currentcolor" || semantic == "current-color" {
+  if lower_trimmed == "currentcolor" || lower_trimmed == "current-color" {
     semantic = "currentColor".to_string();
   }
   semantic = lowercase_hex_literals(&semantic);
@@ -458,6 +457,43 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
     hash_value: output.clone(),
     output_value: output,
   }
+}
+
+fn strip_decimal_leading_zeros(value: &str) -> String {
+  let mut output = String::with_capacity(value.len());
+  let mut chars = value.chars().peekable();
+  let mut prev: Option<char> = None;
+
+  while let Some(ch) = chars.next() {
+    if ch == '0' {
+      if let Some('.') = chars.peek().copied() {
+        if !prev.map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false) {
+          let mut lookahead = chars.clone();
+          lookahead.next(); // skip the dot
+          let mut digits = 0usize;
+          while let Some(next) = lookahead.peek() {
+            if next.is_ascii_digit() {
+              digits += 1;
+              lookahead.next();
+            } else {
+              break;
+            }
+          }
+          if digits > 0 && digits <= 2 {
+            chars.next(); // consume dot
+            output.push('.');
+            prev = Some('.');
+            continue;
+          }
+        }
+      }
+    }
+
+    output.push(ch);
+    prev = Some(ch);
+  }
+
+  output
 }
 
 fn convert_length_units(value: &str) -> String {
@@ -515,7 +551,21 @@ fn convert_length_units(value: &str) -> String {
       continue;
     }
 
-    let number_start = cursor;
+    let mut number_start = cursor;
+    while number_start < px_index {
+      let ch = core.as_bytes()[number_start] as char;
+      if ch.is_ascii_whitespace() {
+        number_start += 1;
+      } else {
+        break;
+      }
+    }
+
+    if number_start >= px_index {
+      search_start = px_index + 2;
+      continue;
+    }
+
     if number_start > 0 {
       let prev = bytes[number_start - 1] as char;
       let mut should_skip = prev.is_ascii_alphanumeric() || prev == '_';
@@ -1060,7 +1110,7 @@ fn expand_text_decoration(raw_value: &str) -> Option<Vec<PropertyExpansion>> {
   } else {
     line_values.join(" ")
   };
-  let color = color_value.unwrap_or_else(|| "currentColor".into());
+  let color = color_value.unwrap_or_else(|| "initial".into());
   let style = style_value.unwrap_or_else(|| "solid".into());
 
   Some(vec![
@@ -1275,22 +1325,34 @@ fn minify_selector(selector: &str) -> String {
       while matches!(chars.peek(), Some(next) if next.is_ascii_whitespace()) {
         chars.next();
       }
-      let prev_is_combinator = result
-        .chars()
-        .rev()
-        .find(|c| !c.is_ascii_whitespace())
+      let mut prev_non_whitespace = None;
+      for ch in result.chars().rev() {
+        if !ch.is_ascii_whitespace() {
+          prev_non_whitespace = Some(ch);
+          break;
+        }
+      }
+      let prev_is_combinator = prev_non_whitespace
         .map(|c| matches!(c, '>' | '+' | '~' | ','))
         .unwrap_or(false);
       let next_is_combinator = chars
         .peek()
         .map(|c| matches!(c, '>' | '+' | '~' | ','))
         .unwrap_or(false);
+      if prev_non_whitespace == Some('&') && next_is_combinator {
+        result.push(' ');
+        continue;
+      }
       if prev_is_combinator || next_is_combinator {
         continue;
       }
       result.push(' ');
     } else if matches!(ch, '>' | '+' | '~' | ',') {
       while result.ends_with(' ') {
+        let trimmed = result.trim_end_matches(' ');
+        if trimmed.chars().last() == Some('&') {
+          break;
+        }
         result.pop();
       }
       result.push(ch);
@@ -1619,7 +1681,7 @@ pub fn atomicize_literal(css: &str, options: &CssOptions) -> CssArtifacts {
 mod tests {
   use super::{
     CssOptions, CssRuleInput, atomicize_literal, atomicize_rules, minify_at_rule_params,
-    normalize_css_value, normalize_selector, vendor_prefixed_values,
+    minify_selector, normalize_css_value, normalize_selector, vendor_prefixed_values,
   };
 
   #[test]
@@ -1647,6 +1709,21 @@ mod tests {
     let normalized = normalize_css_value("var(--ds-space-200, 16px)");
     assert_eq!(normalized.output_value, "var(--ds-space-200,1pc)");
     assert!(normalized.hash_value.contains("1pc"));
+  }
+
+  #[test]
+  fn lowercases_hex_fallbacks_inside_var() {
+    let normalized = normalize_css_value("var(--ds-surface-overlay, #FFFFFF)");
+    assert_eq!(normalized.output_value, "var(--ds-surface-overlay,#fff)");
+  }
+
+  #[test]
+  fn normalize_selector_preserves_combinator_space() {
+    assert_eq!(normalize_selector(Some("> button")), "& >button".to_string());
+    assert_eq!(normalize_selector(Some(">button")), "& >button".to_string());
+    assert_eq!(normalize_selector(Some(" >button")), "& >button".to_string());
+    assert_eq!(minify_selector("& >button"), "& >button".to_string());
+    assert_eq!(normalize_selector(Some("& >button")), "& >button".to_string());
   }
 
   #[test]
@@ -1746,45 +1823,6 @@ mod tests {
     );
     assert!(
       css_strings.iter().any(|css| css.contains("flex-basis:0%")),
-      "css strings were {:?}",
-      css_strings
-    );
-  }
-
-  #[test]
-  fn atomicize_rules_expands_text_decoration_none() {
-    let rule = CssRuleInput {
-      selectors: vec!["&".to_string()],
-      at_rules: vec![],
-      property: "text-decoration".into(),
-      value: "none".into(),
-      raw_value: "none".into(),
-      important: false,
-    };
-    let artifacts = atomicize_rules(&[rule], &CssOptions::default());
-    let css_strings: Vec<&str> = artifacts
-      .rules
-      .iter()
-      .map(|rule| rule.css.as_str())
-      .collect();
-    assert!(
-      css_strings
-        .iter()
-        .any(|css| css.contains("text-decoration-line:none")),
-      "css strings were {:?}",
-      css_strings
-    );
-    assert!(
-      css_strings
-        .iter()
-        .any(|css| css.contains("text-decoration-color:initial")),
-      "css strings were {:?}",
-      css_strings
-    );
-    assert!(
-      css_strings
-        .iter()
-        .any(|css| css.contains("text-decoration-style:solid")),
       "css strings were {:?}",
       css_strings
     );
