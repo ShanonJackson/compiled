@@ -5,7 +5,7 @@ const _6 = "@media (min-width:50em){._r5zo1r31:focus{outline-color:currentColor}
 const _5 = "._30l3u67f:hover{color:#fff}";
 const _4 = "._hkegnqa1>span{text-decoration-style:solid}";
 const _3 = "._16fv8stv>span{text-decoration-line:underline}";
-const _2 = "._1h9x18uv>span{text-decoration-color:initial}";
+const _2 = "._1h9x1r31>span{text-decoration-color:currentColor}";
 const _ = "._syaz143u{color:navy}";
 const styles = null;
 export const Component = () => <CC>

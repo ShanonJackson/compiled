@@ -3,8 +3,8 @@ use std::fs;
 mod support;
 
 use support::{
-  canonicalize_output, emit_program, fixtures_dir, load_fixture_config, parse_program, run_transform,
-  EnvGuard,
+  EnvGuard, canonicalize_output, emit_program, fixtures_dir, load_fixture_config, parse_program,
+  run_transform,
 };
 
 #[test]
@@ -17,6 +17,16 @@ fn fixture_outputs_match() {
       continue;
     }
     let fixture_path = entry.path();
+    if let Ok(filter) = std::env::var("FIXTURE_FILTER") {
+      if fixture_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name != filter)
+        .unwrap_or(true)
+      {
+        continue;
+      }
+    }
     let input_path = fixture_path.join("in.jsx");
     let expected_path = fixture_path.join("out.js");
     if !input_path.exists() || !expected_path.exists() {
@@ -32,9 +42,16 @@ fn fixture_outputs_match() {
     let (config_json, node_env, babel_env) = load_fixture_config(&fixture_path);
     let _guard = EnvGuard::new(node_env.as_deref(), babel_env.as_deref());
     let actual = canonicalize_output(&run_transform(&input_path, &input, &config_json));
-    if fixture_path.file_name().and_then(|n| n.to_str()) == Some("complex-runtime-combo") {
-      println!("expected:\n{}", normalize(&expected));
-      println!("actual:\n{}", normalize(&actual));
+    if let Ok(filter) = std::env::var("FIXTURE_DEBUG") {
+      if fixture_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|name| name == filter)
+        .unwrap_or(false)
+      {
+        println!("expected:\n{}", normalize(&expected));
+        println!("actual:\n{}", normalize(&actual));
+      }
     }
     assert_eq!(
       normalize(&expected),

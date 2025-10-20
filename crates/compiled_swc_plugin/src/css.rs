@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use swc_core::ecma::ast::Expr;
 
 const INCREASE_SPECIFICITY_SELECTOR: &str = ":not(#\\#)";
 
@@ -47,10 +48,35 @@ pub struct AtomicRule {
   pub css: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+pub struct RuntimeCssVariable {
+  pub name: String,
+  pub expression: Expr,
+  pub prefix: Option<String>,
+  pub suffix: Option<String>,
+}
+
+impl RuntimeCssVariable {
+  pub fn new(
+    name: String,
+    expression: Expr,
+    prefix: Option<String>,
+    suffix: Option<String>,
+  ) -> Self {
+    Self {
+      name,
+      expression,
+      prefix,
+      suffix,
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
 pub struct CssArtifacts {
   pub rules: Vec<AtomicRule>,
   pub raw_rules: Vec<String>,
+  pub runtime_variables: Vec<RuntimeCssVariable>,
 }
 
 impl CssArtifacts {
@@ -65,10 +91,25 @@ impl CssArtifacts {
   pub fn merge(&mut self, other: CssArtifacts) {
     self.rules.extend(other.rules);
     self.raw_rules.extend(other.raw_rules);
+    self.runtime_variables.extend(other.runtime_variables);
+  }
+
+  pub fn push_variable(&mut self, variable: RuntimeCssVariable) {
+    self.runtime_variables.push(variable);
   }
 
   pub fn class_names(&self) -> impl Iterator<Item = &str> {
     self.rules.iter().map(|rule| rule.class_name.as_str())
+  }
+}
+
+impl Default for CssArtifacts {
+  fn default() -> Self {
+    Self {
+      rules: Vec::new(),
+      raw_rules: Vec::new(),
+      runtime_variables: Vec::new(),
+    }
   }
 }
 
@@ -452,9 +493,10 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = convert_length_units(&semantic);
   semantic = strip_zero_units(&semantic);
   let output = minify_whitespace(&semantic);
+  let hash_value = output.clone();
 
   NormalizedCssValue {
-    hash_value: output.clone(),
+    hash_value,
     output_value: output,
   }
 }
@@ -467,7 +509,10 @@ fn strip_decimal_leading_zeros(value: &str) -> String {
   while let Some(ch) = chars.next() {
     if ch == '0' {
       if let Some('.') = chars.peek().copied() {
-        if !prev.map(|c| c.is_ascii_digit() || c == '.').unwrap_or(false) {
+        if !prev
+          .map(|c| c.is_ascii_digit() || c == '.')
+          .unwrap_or(false)
+        {
           let mut lookahead = chars.clone();
           lookahead.next(); // skip the dot
           let mut digits = 0usize;
@@ -1033,7 +1078,8 @@ fn expand_outline_shorthand(raw_value: &str) -> Option<Vec<PropertyExpansion>> {
 
 fn is_text_decoration_color_token(value: &str) -> bool {
   let lower = value.to_ascii_lowercase();
-  if lower.starts_with('#') && lower.len() > 1 && lower[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+  if lower.starts_with('#') && lower.len() > 1 && lower[1..].chars().all(|c| c.is_ascii_hexdigit())
+  {
     return true;
   }
   if named_color_hex(lower.as_str()).is_some() {
@@ -1719,11 +1765,20 @@ mod tests {
 
   #[test]
   fn normalize_selector_preserves_combinator_space() {
-    assert_eq!(normalize_selector(Some("> button")), "& >button".to_string());
+    assert_eq!(
+      normalize_selector(Some("> button")),
+      "& >button".to_string()
+    );
     assert_eq!(normalize_selector(Some(">button")), "& >button".to_string());
-    assert_eq!(normalize_selector(Some(" >button")), "& >button".to_string());
+    assert_eq!(
+      normalize_selector(Some(" >button")),
+      "& >button".to_string()
+    );
     assert_eq!(minify_selector("& >button"), "& >button".to_string());
-    assert_eq!(normalize_selector(Some("& >button")), "& >button".to_string());
+    assert_eq!(
+      normalize_selector(Some("& >button")),
+      "& >button".to_string()
+    );
   }
 
   #[test]

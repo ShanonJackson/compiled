@@ -3,9 +3,9 @@ pub mod eval;
 pub mod hash;
 
 use crate::css::{
-  AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizedCssValue, add_unit_if_needed,
-  atomicize_literal, atomicize_rules, minify_at_rule_params, normalize_css_value,
-  normalize_selector, wrap_at_rules,
+  AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizedCssValue, RuntimeCssVariable,
+  add_unit_if_needed, atomicize_literal, atomicize_rules, minify_at_rule_params,
+  normalize_css_value, normalize_selector, wrap_at_rules,
 };
 use crate::hash::hash;
 use indexmap::IndexMap;
@@ -557,15 +557,15 @@ fn record_var_decl(
   for decl in &var.decls {
     if let Pat::Ident(BindingIdent { id, .. }) = &decl.name {
       if let Some(init) = &decl.init {
-      let evaluated = evaluate_static(init, bindings)
-        .or_else(|| {
-          evaluate_compiled_css_expr(init, css_idents, css_map_idents, css_options, bindings)
-        })
-        .or_else(|| evaluate_keyframes_expr(init, keyframes_idents));
-      if let Some(value) = evaluated {
-        bindings.insert(to_id(id), value.clone());
-        recorded.push((id.clone(), value));
-      }
+        let evaluated = evaluate_static(init, bindings)
+          .or_else(|| {
+            evaluate_compiled_css_expr(init, css_idents, css_map_idents, css_options, bindings)
+          })
+          .or_else(|| evaluate_keyframes_expr(init, keyframes_idents));
+        if let Some(value) = evaluated {
+          bindings.insert(to_id(id), value.clone());
+          recorded.push((id.clone(), value));
+        }
       }
     }
   }
@@ -1337,6 +1337,115 @@ fn normalize_content_value(raw: &str) -> String {
   format!("\"{}\"", trimmed)
 }
 
+const CSS_UNITS: &[&str] = &[
+  "em", "ex", "cap", "ch", "ic", "rem", "lh", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax", "cm",
+  "mm", "Q", "in", "pc", "pt", "px", "deg", "grad", "rad", "turn", "s", "ms", "Hz", "kHz", "dpi",
+  "dpcm", "dppx", "x", "fr", "%",
+];
+
+const INTERPOLATION_SUFFIX_TERMINATORS: &[char] = &[';', ',', '\n', ' ', ')'];
+
+#[derive(Debug, Clone)]
+struct BeforeInterpolationResult {
+  css: String,
+  variable_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AfterInterpolationResult {
+  css: String,
+  variable_suffix: Option<String>,
+}
+
+fn css_after_interpolation(after: &str) -> AfterInterpolationResult {
+  for unit in CSS_UNITS {
+    if after.starts_with(unit) {
+      let remainder = &after[unit.len()..];
+      let next = remainder.chars().next();
+      if next
+        .map(|ch| INTERPOLATION_SUFFIX_TERMINATORS.contains(&ch))
+        .unwrap_or(true)
+      {
+        return AfterInterpolationResult {
+          variable_suffix: Some(unit.to_string()),
+          css: remainder.to_string(),
+        };
+      }
+    }
+  }
+
+  if let Some(rest) = after.strip_prefix('"') {
+    return AfterInterpolationResult {
+      variable_suffix: Some("\"".to_string()),
+      css: rest.to_string(),
+    };
+  }
+
+  if let Some(rest) = after.strip_prefix('\'') {
+    return AfterInterpolationResult {
+      variable_suffix: Some("'".to_string()),
+      css: rest.to_string(),
+    };
+  }
+
+  AfterInterpolationResult {
+    variable_suffix: None,
+    css: after.to_string(),
+  }
+}
+
+fn css_before_interpolation(before: &str) -> BeforeInterpolationResult {
+  if let Some(rest) = before.strip_suffix('"') {
+    return BeforeInterpolationResult {
+      css: rest.to_string(),
+      variable_prefix: Some("\"".to_string()),
+    };
+  }
+
+  if let Some(rest) = before.strip_suffix('\'') {
+    return BeforeInterpolationResult {
+      css: rest.to_string(),
+      variable_prefix: Some("'".to_string()),
+    };
+  }
+
+  if let Some(rest) = before.strip_suffix('-') {
+    return BeforeInterpolationResult {
+      css: rest.to_string(),
+      variable_prefix: Some("-".to_string()),
+    };
+  }
+
+  BeforeInterpolationResult {
+    css: before.to_string(),
+    variable_prefix: None,
+  }
+}
+
+fn css_affix_interpolation(
+  before: &str,
+  after: &str,
+) -> (BeforeInterpolationResult, AfterInterpolationResult) {
+  if before.ends_with("url(") && after.starts_with(')') {
+    let trimmed_before = before.trim_end_matches("url(");
+    let trimmed_after = &after[1..];
+    return (
+      BeforeInterpolationResult {
+        css: trimmed_before.to_string(),
+        variable_prefix: Some("url(".to_string()),
+      },
+      AfterInterpolationResult {
+        variable_suffix: Some(")".to_string()),
+        css: trimmed_after.to_string(),
+      },
+    );
+  }
+
+  let before_result = css_before_interpolation(before);
+  let after_result = css_after_interpolation(after);
+  (before_result, after_result)
+}
+
 fn static_value_to_css_value(
   property: &str,
   value: &StaticValue,
@@ -1362,24 +1471,27 @@ fn static_value_to_css_value(
       };
       let lower_property = property.to_ascii_lowercase();
       if base_value.eq_ignore_ascii_case("transparent") {
-        let replacement = if lower_property == "backgroundcolor" || lower_property == "background-color" {
-          "initial".to_string()
-        } else if lower_property.ends_with("color") || lower_property.ends_with("-color") {
-          "#0000".to_string()
-        } else {
-          base_value.clone()
-        };
+        let replacement =
+          if lower_property == "backgroundcolor" || lower_property == "background-color" {
+            "initial".to_string()
+          } else if lower_property.ends_with("color") || lower_property.ends_with("-color") {
+            "#0000".to_string()
+          } else {
+            base_value.clone()
+          };
         return Some((replacement.clone(), replacement, important));
       }
 
+      let base_for_hash = base_value.clone();
       let NormalizedCssValue {
-        hash_value,
+        hash_value: _,
         output_value,
       } = normalize_css_value(&base_value);
+      let hash_source = base_for_hash;
       if output_value.is_empty() {
         return None;
       }
-      Some((output_value, hash_value, important))
+      Some((output_value, hash_source, important))
     }
     StaticValue::Num(num) => {
       let raw = if num.fract() == 0.0 {
@@ -1400,14 +1512,111 @@ fn static_value_to_css_value(
   }
 }
 
+fn split_selector_list(raw: &str) -> Vec<String> {
+  let mut segments = Vec::new();
+  let mut current = String::new();
+  let mut paren_depth = 0usize;
+  let mut bracket_depth = 0usize;
+  let mut brace_depth = 0usize;
+  let mut in_single_quote = false;
+  let mut in_double_quote = false;
+  let mut escape_next = false;
+
+  for ch in raw.chars() {
+    if escape_next {
+      current.push(ch);
+      escape_next = false;
+      continue;
+    }
+
+    match ch {
+      '\\' => {
+        current.push(ch);
+        escape_next = true;
+        continue;
+      }
+      '\'' => {
+        current.push(ch);
+        if !in_double_quote {
+          in_single_quote = !in_single_quote;
+        }
+        continue;
+      }
+      '"' => {
+        current.push(ch);
+        if !in_single_quote {
+          in_double_quote = !in_double_quote;
+        }
+        continue;
+      }
+      '(' if !in_single_quote && !in_double_quote => {
+        paren_depth += 1;
+        current.push(ch);
+        continue;
+      }
+      ')' if !in_single_quote && !in_double_quote => {
+        if paren_depth > 0 {
+          paren_depth -= 1;
+        }
+        current.push(ch);
+        continue;
+      }
+      '[' if !in_single_quote && !in_double_quote => {
+        bracket_depth += 1;
+        current.push(ch);
+        continue;
+      }
+      ']' if !in_single_quote && !in_double_quote => {
+        if bracket_depth > 0 {
+          bracket_depth -= 1;
+        }
+        current.push(ch);
+        continue;
+      }
+      '{' if !in_single_quote && !in_double_quote => {
+        brace_depth += 1;
+        current.push(ch);
+        continue;
+      }
+      '}' if !in_single_quote && !in_double_quote => {
+        if brace_depth > 0 {
+          brace_depth -= 1;
+        }
+        current.push(ch);
+        continue;
+      }
+      ','
+        if !in_single_quote
+          && !in_double_quote
+          && paren_depth == 0
+          && bracket_depth == 0
+          && brace_depth == 0 =>
+      {
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+          segments.push(trimmed.to_string());
+        }
+        current.clear();
+        continue;
+      }
+      _ => {}
+    }
+
+    current.push(ch);
+  }
+
+  let trimmed = current.trim();
+  if !trimmed.is_empty() {
+    segments.push(trimmed.to_string());
+  }
+
+  segments
+}
+
 fn extend_selectors(current: &[String], raw: &str) -> Vec<String> {
   let mut result = Vec::new();
   let mut seen = BTreeSet::new();
-  let segments: Vec<&str> = raw
-    .split(',')
-    .map(|part| part.trim())
-    .filter(|part| !part.is_empty())
-    .collect();
+  let segments = split_selector_list(raw);
 
   let parents = if current.is_empty() {
     vec![normalize_selector(None)]
@@ -2222,8 +2431,9 @@ fn css_artifacts_from_static_value(
 ) -> Option<CssArtifacts> {
   match value {
     StaticValue::Object(map) => css_artifacts_from_static_object(map, options),
-    StaticValue::Str(text) => css_artifacts_from_literal(text, options)
-      .or_else(|| Some(atomicize_literal(text, options))),
+    StaticValue::Str(text) => {
+      css_artifacts_from_literal(text, options).or_else(|| Some(atomicize_literal(text, options)))
+    }
     StaticValue::Array(items) => {
       let mut combined = CssArtifacts::default();
       for item in items {
@@ -3006,6 +3216,266 @@ impl<'a> TransformVisitor<'a> {
       values.push(value);
     }
     Some(values)
+  }
+
+  fn process_styled_call_arguments(
+    &mut self,
+    call: &CallExpr,
+    props_ident: &Ident,
+  ) -> Option<CssArtifacts> {
+    let mut combined = CssArtifacts::default();
+    for arg in &call.args {
+      if arg.spread.is_some() {
+        return None;
+      }
+      match &*arg.expr {
+        Expr::Object(object) => {
+          let artifacts = self.process_dynamic_css_object(object, props_ident)?;
+          combined.merge(artifacts);
+        }
+        _ => return None,
+      }
+    }
+    Some(combined)
+  }
+
+  fn process_dynamic_css_object(
+    &mut self,
+    object: &ObjectLit,
+    props_ident: &Ident,
+  ) -> Option<CssArtifacts> {
+    let mut declarations = Vec::new();
+    let mut runtime_variables: Vec<RuntimeCssVariable> = Vec::new();
+
+    for prop in &object.props {
+      let PropOrSpread::Prop(prop) = prop else {
+        return None;
+      };
+      let Prop::KeyValue(kv) = &**prop else {
+        return None;
+      };
+      let property = match &kv.key {
+        PropName::Ident(ident) => ident.sym.as_ref().to_string(),
+        PropName::Str(str) => str.value.to_string(),
+        PropName::Num(num) => num.value.to_string(),
+        _ => return None,
+      };
+      let property_kebab = kebab_case(&property);
+
+      if let Expr::Tpl(template) = &*kv.value {
+        let (value, mut variables) =
+          self.process_dynamic_template_literal(template, props_ident)?;
+        declarations.push(format!("{}:{};", property_kebab, value));
+        runtime_variables.append(&mut variables);
+        continue;
+      }
+
+      if let Some(static_value) = evaluate_static(&kv.value, &self.bindings) {
+        if let Some((mut output, _, important)) =
+          static_value_to_css_value(&property_kebab, &static_value)
+        {
+          if important {
+            output.push_str("!important");
+          }
+          declarations.push(format!("{}:{};", property_kebab, output));
+          continue;
+        }
+      }
+
+      return None;
+    }
+
+    let css = declarations.join("");
+    let mut artifacts = css_artifacts_from_literal(&css, &self.css_options())?;
+    for variable in runtime_variables {
+      artifacts.push_variable(variable);
+    }
+    Some(artifacts)
+  }
+
+  fn process_dynamic_template_literal(
+    &mut self,
+    template: &Tpl,
+    props_ident: &Ident,
+  ) -> Option<(String, Vec<RuntimeCssVariable>)> {
+    if template.quasis.is_empty() {
+      return Some((String::new(), Vec::new()));
+    }
+
+    let mut segments: Vec<String> = template
+      .quasis
+      .iter()
+      .map(|quasi| quasi.raw.to_string())
+      .collect();
+
+    let mut result = String::new();
+    let mut runtime_variables = Vec::new();
+
+    for (index, expr) in template.exprs.iter().enumerate() {
+      let before_raw = segments.get(index).cloned().unwrap_or_else(String::new);
+      let after_raw = segments.get(index + 1).cloned().unwrap_or_else(String::new);
+      let (before_meta, after_meta) = css_affix_interpolation(&before_raw, &after_raw);
+      result.push_str(&before_meta.css);
+
+      let (expression, variable_input) = self.normalize_variable_expression(expr, props_ident)?;
+      let hash_value = hash(&variable_input, 0);
+      let mut variable_name = format!("--_{}", hash_value);
+      if matches!(before_meta.variable_prefix.as_deref(), Some("-")) {
+        variable_name.push('-');
+      }
+
+      result.push_str("var(");
+      result.push_str(&variable_name);
+      result.push(')');
+
+      if let Some(slot) = segments.get_mut(index + 1) {
+        *slot = after_meta.css.clone();
+      }
+
+      let prefix = before_meta
+        .variable_prefix
+        .clone()
+        .filter(|value| !value.is_empty());
+      let suffix = after_meta
+        .variable_suffix
+        .clone()
+        .filter(|value| !value.is_empty());
+      runtime_variables.push(RuntimeCssVariable::new(
+        variable_name,
+        expression,
+        prefix,
+        suffix,
+      ));
+    }
+
+    if let Some(tail) = segments.last() {
+      result.push_str(tail);
+    }
+
+    Some((result, runtime_variables))
+  }
+
+  fn normalize_variable_expression(
+    &self,
+    expr: &Expr,
+    props_ident: &Ident,
+  ) -> Option<(Expr, String)> {
+    match expr {
+      Expr::Arrow(arrow) => {
+        if arrow.params.len() != 1 {
+          return None;
+        }
+        let param_ident = match &arrow.params[0] {
+          Pat::Ident(binding) => binding.id.clone(),
+          _ => return None,
+        };
+        let mut body_expr = self.arrow_body_to_expr(arrow)?;
+        Self::rename_ident_in_expr(&mut body_expr, &param_ident, props_ident);
+        let variable_input = format!("{} => {}", props_ident.sym, emit_expression(&body_expr));
+        Some((body_expr, variable_input))
+      }
+      _ => None,
+    }
+  }
+
+  fn arrow_body_to_expr(&self, arrow: &ArrowExpr) -> Option<Expr> {
+    match arrow.body.as_ref() {
+      BlockStmtOrExpr::Expr(expr) => Some(expr.as_ref().clone()),
+      BlockStmtOrExpr::BlockStmt(block) => Some(Expr::Call(CallExpr {
+        span: DUMMY_SP,
+        ctxt: SyntaxContext::empty(),
+        callee: Callee::Expr(Box::new(Expr::Arrow(ArrowExpr {
+          span: DUMMY_SP,
+          ctxt: SyntaxContext::empty(),
+          params: Vec::new(),
+          body: Box::new(BlockStmtOrExpr::BlockStmt(block.clone())),
+          is_async: arrow.is_async,
+          is_generator: arrow.is_generator,
+          type_params: None,
+          return_type: None,
+        }))),
+        args: Vec::new(),
+        type_args: None,
+      })),
+    }
+  }
+
+  fn build_style_with_variables(
+    &mut self,
+    base_style_ident: &Ident,
+    variables: &[RuntimeCssVariable],
+  ) -> Expr {
+    let mut props = Vec::new();
+    props.push(PropOrSpread::Spread(SpreadElement {
+      dot3_token: DUMMY_SP,
+      expr: Box::new(Expr::Ident(base_style_ident.clone())),
+    }));
+
+    let mut seen = HashSet::new();
+    for variable in variables {
+      if !seen.insert(variable.name.clone()) {
+        continue;
+      }
+      let mut ix_args = Vec::new();
+      ix_args.push(ExprOrSpread {
+        spread: None,
+        expr: Box::new(variable.expression.clone()),
+      });
+      if let Some(suffix) = &variable.suffix {
+        if !suffix.is_empty() {
+          ix_args.push(ExprOrSpread {
+            spread: None,
+            expr: Box::new(Expr::Lit(Lit::Str(Str::from(suffix.clone())))),
+          });
+          if let Some(prefix) = &variable.prefix {
+            if !prefix.is_empty() {
+              ix_args.push(ExprOrSpread {
+                spread: None,
+                expr: Box::new(Expr::Lit(Lit::Str(Str::from(prefix.clone())))),
+              });
+            }
+          }
+        }
+      }
+      let ix_call = Expr::Call(CallExpr {
+        span: DUMMY_SP,
+        ctxt: SyntaxContext::empty(),
+        callee: Callee::Expr(Box::new(Expr::Ident(self.runtime_ix_ident()))),
+        args: ix_args,
+        type_args: None,
+      });
+      props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+        key: PropName::Str(Str::from(variable.name.clone())),
+        value: Box::new(ix_call),
+      }))));
+    }
+
+    Expr::Object(ObjectLit {
+      span: DUMMY_SP,
+      props,
+    })
+  }
+
+  fn rename_ident_in_expr(expr: &mut Expr, from: &Ident, to: &Ident) {
+    struct IdentRenamer<'a> {
+      from: (Atom, SyntaxContext),
+      to: &'a Ident,
+    }
+
+    impl<'a> VisitMut for IdentRenamer<'a> {
+      fn visit_mut_ident(&mut self, ident: &mut Ident) {
+        if ident.sym == self.from.0 && ident.ctxt == self.from.1 {
+          ident.sym = self.to.sym.clone();
+          ident.ctxt = self.to.ctxt;
+        }
+      }
+    }
+
+    let mut renamer = IdentRenamer {
+      from: (from.sym.clone(), from.ctxt),
+      to,
+    };
+    expr.visit_mut_with(&mut renamer);
   }
 
   fn collect_class_names_bindings(
@@ -4438,7 +4908,10 @@ impl<'a> VisitMut for TransformVisitor<'a> {
       Some(init) => &mut **init,
       None => return,
     };
-    let (default_component_expr, artifacts) = match &*init_expr {
+
+    let props_ident = Ident::new("__cmplp".into(), DUMMY_SP, SyntaxContext::empty());
+
+    let (default_component_expr, mut artifacts) = match &*init_expr {
       Expr::TaggedTpl(tagged) => {
         let (component_expr, styled_ident) = match self.resolve_styled_target(&tagged.tag) {
           Some(res) => res,
@@ -4475,16 +4948,19 @@ impl<'a> VisitMut for TransformVisitor<'a> {
             return;
           }
         };
-        let values = match self.evaluate_call_arguments(call) {
-          Some(values) => values,
-          None => {
-            self.preserve_import_for_ident(&styled_ident);
-            return;
-          }
-        };
         let mut combined = CssArtifacts::default();
-        for value in &values {
-          match css_artifacts_from_static_value(value, &self.css_options()) {
+        if let Some(values) = self.evaluate_call_arguments(call) {
+          for value in &values {
+            match css_artifacts_from_static_value(value, &self.css_options()) {
+              Some(artifacts) => combined.merge(artifacts),
+              None => {
+                self.preserve_import_for_ident(&styled_ident);
+                return;
+              }
+            }
+          }
+        } else {
+          match self.process_styled_call_arguments(call, &props_ident) {
             Some(artifacts) => combined.merge(artifacts),
             None => {
               self.preserve_import_for_ident(&styled_ident);
@@ -4506,21 +4982,23 @@ impl<'a> VisitMut for TransformVisitor<'a> {
         return;
       }
     };
+
     let component_name = match &declarator.name {
       Pat::Ident(binding) => Some(binding.id.sym.to_string()),
       _ => None,
     };
-    for rule in &artifacts.rules {
-      self.register_rule(rule.css.clone());
-    }
-    for css in &artifacts.raw_rules {
-      self.register_rule(css.clone());
-    }
+
+    let style_ident = Ident::new("__cmpls".into(), DUMMY_SP, SyntaxContext::empty());
+    let ref_ident = Ident::new("__cmplr".into(), DUMMY_SP, SyntaxContext::empty());
+    let component_ident = Ident::new("C".into(), DUMMY_SP, SyntaxContext::empty());
+
     let mut runtime_sheets = Vec::new();
     for rule in &artifacts.rules {
+      self.register_rule(rule.css.clone());
       runtime_sheets.push(rule.css.clone());
     }
     for css in &artifacts.raw_rules {
+      self.register_rule(css.clone());
       runtime_sheets.push(css.clone());
     }
     let runtime_sheets = self.finalize_runtime_sheets(runtime_sheets);
@@ -4552,10 +5030,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
       });
     }
 
-    let props_ident = self.name_tracker.fresh_ident("__cmplp");
-    let style_ident = self.name_tracker.fresh_ident("__cmpls");
-    let ref_ident = self.name_tracker.fresh_ident("__cmplr");
-    let component_ident = self.name_tracker.fresh_ident("C");
+    let runtime_variables = artifacts.runtime_variables.clone();
 
     let mut object_props = Vec::new();
     object_props.push(ObjectPatProp::KeyValue(KeyValuePatProp {
@@ -4603,6 +5078,12 @@ impl<'a> VisitMut for TransformVisitor<'a> {
         .collect(),
     });
 
+    let style_prop_value = if runtime_variables.is_empty() {
+      Expr::Ident(style_ident.clone())
+    } else {
+      self.build_style_with_variables(&style_ident, &runtime_variables)
+    };
+
     let jsx_call = Expr::Call(CallExpr {
       span: DUMMY_SP,
       ctxt: SyntaxContext::empty(),
@@ -4623,7 +5104,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
               }),
               PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                 key: PropName::Ident(quote_ident!("style")),
-                value: Box::new(Expr::Ident(style_ident.clone())),
+                value: Box::new(style_prop_value),
               }))),
               PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                 key: PropName::Ident(quote_ident!("ref")),
@@ -4726,7 +5207,6 @@ impl<'a> VisitMut for TransformVisitor<'a> {
         .push((id.clone(), id.sym.to_string()));
     }
   }
-
 }
 
 fn parse_transformed_source(code: &str, filename: &str) -> Program {
