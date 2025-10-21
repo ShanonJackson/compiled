@@ -2659,7 +2659,7 @@ fn css_options_from_plugin_options(options: &PluginOptions) -> CssOptions {
     increase_specificity: options.increase_specificity.unwrap_or(false),
     sort_at_rules: options.sort_at_rules.unwrap_or(true),
     sort_shorthand: options.sort_shorthand.unwrap_or(true),
-    flatten_multiple_selectors: options.flatten_multiple_selectors.unwrap_or(true),
+    flatten_multiple_selectors: options.flatten_multiple_selectors.unwrap_or(false),
   }
 }
 
@@ -3282,6 +3282,21 @@ impl<'a> TransformVisitor<'a> {
         }
       }
 
+      if let Some((expression, variable_input)) =
+        self.normalize_variable_expression(&kv.value, props_ident)
+      {
+        let hash_value = hash(&variable_input, 0);
+        let variable_name = format!("--_{}", hash_value);
+        declarations.push(format!("{}:var({});", property_kebab, variable_name));
+        runtime_variables.push(RuntimeCssVariable::new(
+          variable_name,
+          expression,
+          None,
+          None,
+        ));
+        continue;
+      }
+
       return None;
     }
 
@@ -3355,6 +3370,122 @@ impl<'a> TransformVisitor<'a> {
     Some((result, runtime_variables))
   }
 
+  fn member_expr_from_key(base: Expr, key: &PropName) -> Option<Expr> {
+    let member = match key {
+      PropName::Ident(ident) => MemberExpr {
+        span: DUMMY_SP,
+        obj: Box::new(base),
+        prop: MemberProp::Ident(ident.clone()),
+      },
+      PropName::Str(str) => MemberExpr {
+        span: DUMMY_SP,
+        obj: Box::new(base),
+        prop: MemberProp::Computed(ComputedPropName {
+          span: DUMMY_SP,
+          expr: Box::new(Expr::Lit(Lit::Str(str.clone()))),
+        }),
+      },
+      PropName::Num(num) => MemberExpr {
+        span: DUMMY_SP,
+        obj: Box::new(base),
+        prop: MemberProp::Computed(ComputedPropName {
+          span: DUMMY_SP,
+          expr: Box::new(Expr::Lit(Lit::Num(num.clone()))),
+        }),
+      },
+      PropName::BigInt(bigint) => MemberExpr {
+        span: DUMMY_SP,
+        obj: Box::new(base),
+        prop: MemberProp::Computed(ComputedPropName {
+          span: DUMMY_SP,
+          expr: Box::new(Expr::Lit(Lit::BigInt(bigint.clone()))),
+        }),
+      },
+      PropName::Computed(_) => return None,
+    };
+    Some(Expr::Member(member))
+  }
+
+  fn collect_pattern_bindings(pattern: &Pat, target: Expr, out: &mut Vec<(Id, Expr)>) -> bool {
+    match pattern {
+      Pat::Ident(binding) => {
+        out.push((to_id(&binding.id), target));
+        true
+      }
+      Pat::Assign(assign) => Self::collect_pattern_bindings(&assign.left, target, out),
+      Pat::Object(object) => {
+        for prop in &object.props {
+          match prop {
+            ObjectPatProp::KeyValue(kv) => {
+              let Some(member_expr) = Self::member_expr_from_key(target.clone(), &kv.key) else {
+                return false;
+              };
+              if !Self::collect_pattern_bindings(&kv.value, member_expr, out) {
+                return false;
+              }
+            }
+            ObjectPatProp::Assign(assign) => {
+              let ident = assign.key.id.clone();
+              let member_expr = Expr::Member(MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(target.clone()),
+                prop: MemberProp::Ident(ident.clone().into()),
+              });
+              out.push((to_id(&ident), member_expr));
+            }
+            ObjectPatProp::Rest(_) => return false,
+          }
+        }
+        true
+      }
+      Pat::Array(array) => {
+        for (index, element) in array.elems.iter().enumerate() {
+          let Some(element_pat) = element else {
+            continue;
+          };
+          let member_expr = Expr::Member(MemberExpr {
+            span: DUMMY_SP,
+            obj: Box::new(target.clone()),
+            prop: MemberProp::Computed(ComputedPropName {
+              span: DUMMY_SP,
+              expr: Box::new(Expr::Lit(Lit::Num(Number {
+                span: DUMMY_SP,
+                value: index as f64,
+                raw: None,
+              }))),
+            }),
+          });
+          if !Self::collect_pattern_bindings(element_pat, member_expr, out) {
+            return false;
+          }
+        }
+        true
+      }
+      _ => false,
+    }
+  }
+
+  fn replace_idents_with_expr(expr: &mut Expr, mappings: &HashMap<Id, Expr>) {
+    struct Replacer<'a> {
+      mappings: &'a HashMap<Id, Expr>,
+    }
+
+    impl VisitMut for Replacer<'_> {
+      fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if let Expr::Ident(ident) = expr {
+          if let Some(replacement) = self.mappings.get(&to_id(ident)) {
+            *expr = replacement.clone();
+            return;
+          }
+        }
+        expr.visit_mut_children_with(self);
+      }
+    }
+
+    let mut replacer = Replacer { mappings };
+    expr.visit_mut_with(&mut replacer);
+  }
+
   fn normalize_variable_expression(
     &self,
     expr: &Expr,
@@ -3365,12 +3496,27 @@ impl<'a> TransformVisitor<'a> {
         if arrow.params.len() != 1 {
           return None;
         }
-        let param_ident = match &arrow.params[0] {
-          Pat::Ident(binding) => binding.id.clone(),
-          _ => return None,
-        };
         let mut body_expr = self.arrow_body_to_expr(arrow)?;
-        Self::rename_ident_in_expr(&mut body_expr, &param_ident, props_ident);
+        match &arrow.params[0] {
+          Pat::Ident(binding) => {
+            Self::rename_ident_in_expr(&mut body_expr, &binding.id, props_ident);
+          }
+          pattern => {
+            let mut bindings = Vec::new();
+            if !Self::collect_pattern_bindings(
+              pattern,
+              Expr::Ident(props_ident.clone()),
+              &mut bindings,
+            ) {
+              return None;
+            }
+            let mut mapping = HashMap::new();
+            for (id, expr) in bindings {
+              mapping.insert(id, expr);
+            }
+            Self::replace_idents_with_expr(&mut body_expr, &mapping);
+          }
+        }
         let variable_input = format!("{} => {}", props_ident.sym, emit_expression(&body_expr));
         Some((body_expr, variable_input))
       }

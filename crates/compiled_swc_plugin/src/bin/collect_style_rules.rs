@@ -104,7 +104,11 @@ fn main() -> Result<()> {
   let config: Value = serde_json::from_str(&config_raw)
     .with_context(|| format!("Failed to parse JSON from {}", config_path.display()))?;
 
-  let tokens_options = extract_tokens_options(&config);
+  let mut tokens_options = extract_tokens_options(&config);
+  // Align with the Babel collector, which always enables automatic fallbacks and
+  // forces default token fallbacks regardless of any project config overrides.
+  tokens_options.should_use_auto_fallback = true;
+  tokens_options.should_force_auto_fallback = true;
 
   let mut stats = Stats::default();
   let mut files: Vec<PathBuf> = WalkDir::new(&jira_root)

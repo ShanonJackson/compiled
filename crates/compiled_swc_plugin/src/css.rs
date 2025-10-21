@@ -37,7 +37,7 @@ impl Default for CssOptions {
       increase_specificity: false,
       sort_at_rules: true,
       sort_shorthand: true,
-      flatten_multiple_selectors: true,
+      flatten_multiple_selectors: false,
     }
   }
 }
@@ -415,17 +415,21 @@ fn shorten_hex_literals(input: &str) -> String {
           }
         }
       }
-      if index + 6 < chars.len() {
+      if index + 6 < chars.len()
+        && !(index + 7 < chars.len() && chars[index + 7].is_ascii_hexdigit())
+      {
         let slice = &chars[index + 1..index + 7];
-        if slice.iter().all(|c| c.is_ascii_hexdigit()) {
-          if slice[0] == slice[1] && slice[2] == slice[3] && slice[4] == slice[5] {
-            output.push('#');
-            output.push(slice[0]);
-            output.push(slice[2]);
-            output.push(slice[4]);
-            index += 7;
-            continue;
-          }
+        if slice.iter().all(|c| c.is_ascii_hexdigit())
+          && slice[0] == slice[1]
+          && slice[2] == slice[3]
+          && slice[4] == slice[5]
+        {
+          output.push('#');
+          output.push(slice[0]);
+          output.push(slice[2]);
+          output.push(slice[4]);
+          index += 7;
+          continue;
         }
       }
     }
@@ -491,6 +495,9 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = shorten_hex_literals(&semantic);
   semantic = strip_decimal_leading_zeros(&semantic);
   semantic = convert_length_units(&semantic);
+  semantic = convert_color_functions_to_hex(&semantic);
+  semantic = lowercase_hex_literals(&semantic);
+  semantic = shorten_hex_literals(&semantic);
   semantic = strip_zero_units(&semantic);
   let output = minify_whitespace(&semantic);
   let hash_value = output.clone();
@@ -747,6 +754,132 @@ fn strip_zero_units(value: &str) -> String {
 
     output.push(current as char);
     index += 1;
+  }
+
+  output
+}
+
+fn parse_rgb_component(component: &str) -> Option<u8> {
+  let trimmed = component.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if let Some(stripped) = trimmed.strip_suffix('%') {
+    let value: f64 = stripped.trim().parse().ok()?;
+    let clamped = value.max(0.0).min(100.0);
+    Some((clamped * 255.0 / 100.0).round().max(0.0).min(255.0) as u8)
+  } else {
+    let value: f64 = trimmed.parse().ok()?;
+    let clamped = value.max(0.0).min(255.0);
+    Some(clamped.round().max(0.0).min(255.0) as u8)
+  }
+}
+
+fn parse_alpha_component(component: &str) -> Option<u8> {
+  let trimmed = component.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if let Some(stripped) = trimmed.strip_suffix('%') {
+    let value: f64 = stripped.trim().parse().ok()?;
+    let clamped = value.max(0.0).min(100.0);
+    Some((clamped * 255.0 / 100.0).round().max(0.0).min(255.0) as u8)
+  } else {
+    let value: f64 = trimmed.parse().ok()?;
+    let clamped = value.max(0.0).min(1.0);
+    Some((clamped * 255.0).round().max(0.0).min(255.0) as u8)
+  }
+}
+
+fn convert_rgb_like_to_hex(segment: &str, is_rgba: bool) -> Option<(String, usize)> {
+  let prefix_len = if is_rgba { 4 } else { 3 };
+  if segment.len() <= prefix_len || !segment.as_bytes()[prefix_len].eq(&b'(') {
+    return None;
+  }
+  let start = prefix_len + 1;
+  let end_rel = segment[start..].find(')')?;
+  let end = start + end_rel;
+  let inner = &segment[start..end];
+  let consumed = end + 1;
+  let components: Vec<&str> = inner.split(',').map(|part| part.trim()).collect();
+  if is_rgba && components.len() != 4 {
+    return None;
+  }
+  if !is_rgba && components.len() != 3 {
+    return None;
+  }
+
+  let r = parse_rgb_component(components.get(0)?.trim())?;
+  let g = parse_rgb_component(components.get(1)?.trim())?;
+  let b = parse_rgb_component(components.get(2)?.trim())?;
+
+  if is_rgba {
+    let a = parse_alpha_component(components.get(3)?.trim())?;
+    if a == 255 {
+      Some((format!("#{:02x}{:02x}{:02x}", r, g, b), consumed))
+    } else {
+      Some((format!("#{:02x}{:02x}{:02x}{:02x}", r, g, b, a), consumed))
+    }
+  } else {
+    Some((format!("#{:02x}{:02x}{:02x}", r, g, b), consumed))
+  }
+}
+
+fn convert_color_functions_to_hex(value: &str) -> String {
+  let mut output = String::with_capacity(value.len());
+  let mut index = 0usize;
+
+  while index < value.len() {
+    let rest = &value[index..];
+    let mut consumed = 0usize;
+
+    if rest.len() >= 5 && rest[..4].eq_ignore_ascii_case("rgba") {
+      if let Some(result) = convert_rgb_like_to_hex(rest, true) {
+        output.push_str(&result.0);
+        consumed = result.1;
+      }
+    } else if rest.len() >= 4 && rest[..3].eq_ignore_ascii_case("rgb") {
+      if let Some(result) = convert_rgb_like_to_hex(rest, false) {
+        output.push_str(&result.0);
+        consumed = result.1;
+      }
+    }
+
+    if consumed > 0 {
+      index += consumed;
+      continue;
+    }
+
+    let mut chars = rest.chars();
+    if let Some(ch) = chars.next() {
+      output.push(ch);
+      index += ch.len_utf8();
+    } else {
+      break;
+    }
+  }
+
+  output
+}
+
+fn canonicalize_selector_key(selector: &str) -> String {
+  let mut output = String::with_capacity(selector.len());
+  let mut chars = selector.chars().peekable();
+
+  while let Some(ch) = chars.next() {
+    if ch == '.' && matches!(chars.peek(), Some('_')) {
+      output.push_str("._HASH");
+      chars.next();
+      while let Some(next) = chars.peek() {
+        if next.is_ascii_alphanumeric() || *next == '_' {
+          chars.next();
+        } else {
+          break;
+        }
+      }
+      continue;
+    }
+    output.push(ch);
   }
 
   output
@@ -1631,9 +1764,17 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
       }
 
       if !options.flatten_multiple_selectors && per_selector_outputs.len() > 1 {
-        let combined_selector = per_selector_outputs
+        let mut selector_parts = per_selector_outputs
           .iter()
-          .map(|(_, selector, _)| selector.as_str())
+          .map(|(_, selector, _)| {
+            let canonical = canonicalize_selector_key(selector.as_str());
+            (canonical, selector.as_str())
+          })
+          .collect::<Vec<_>>();
+        selector_parts.sort_by(|a, b| a.0.cmp(&b.0));
+        let combined_selector = selector_parts
+          .iter()
+          .map(|(_, original)| *original)
           .collect::<Vec<_>>()
           .join(", ");
         let combined_css = wrap_at_rules(
@@ -1761,6 +1902,12 @@ mod tests {
   fn lowercases_hex_fallbacks_inside_var() {
     let normalized = normalize_css_value("var(--ds-surface-overlay, #FFFFFF)");
     assert_eq!(normalized.output_value, "var(--ds-surface-overlay,#fff)");
+  }
+
+  #[test]
+  fn converts_rgba_to_hex() {
+    let normalized = normalize_css_value("rgba(10, 20, 30, 0.8)");
+    assert_eq!(normalized.output_value, "#0a141ecc");
   }
 
   #[test]
