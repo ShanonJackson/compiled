@@ -424,6 +424,9 @@ fn evaluate_static(
     Expr::Lit(Lit::Bool(boolean)) => Some(StaticValue::Bool(boolean.value)),
     Expr::Lit(Lit::Null(_)) => Some(StaticValue::Null),
     Expr::Tpl(template) => {
+      if template.exprs.len() > 1 {
+        return None;
+      }
       let mut result = String::new();
       for (index, quasi) in template.quasis.iter().enumerate() {
         result.push_str(
@@ -480,6 +483,26 @@ fn evaluate_static(
             let right_str = right.to_js_string()?;
             Some(StaticValue::Str(format!("{}{}", left_str, right_str)))
           }
+        }
+        BinaryOp::Sub => {
+          let lhs = left.as_num()?;
+          let rhs = right.as_num()?;
+          Some(StaticValue::Num(lhs - rhs))
+        }
+        BinaryOp::Mul => {
+          let lhs = left.as_num()?;
+          let rhs = right.as_num()?;
+          Some(StaticValue::Num(lhs * rhs))
+        }
+        BinaryOp::Div => {
+          let lhs = left.as_num()?;
+          let rhs = right.as_num()?;
+          Some(StaticValue::Num(lhs / rhs))
+        }
+        BinaryOp::Mod => {
+          let lhs = left.as_num()?;
+          let rhs = right.as_num()?;
+          Some(StaticValue::Num(lhs % rhs))
         }
         _ => None,
       }
@@ -1225,6 +1248,8 @@ fn normalize_keyframe_step(step: &str) -> String {
   let trimmed = step.trim();
   if trimmed.eq_ignore_ascii_case("from") {
     "0%".to_string()
+  } else if trimmed == "100%" {
+    "to".to_string()
   } else if trimmed.eq_ignore_ascii_case("to") {
     "to".to_string()
   } else {
@@ -1262,7 +1287,12 @@ fn build_keyframe_declarations(map: &IndexMap<String, StaticValue>) -> Option<St
   let mut declarations = Vec::new();
   for (property, value) in map {
     let css_value = static_value_to_css(property, value)?;
-    declarations.push(format!("{}:{}", kebab_case(property), css_value));
+    let normalized = normalize_css_value(&css_value);
+    declarations.push(format!(
+      "{}:{}",
+      kebab_case(property),
+      normalized.output_value
+    ));
   }
   Some(declarations.join(";"))
 }
@@ -1470,6 +1500,9 @@ fn static_value_to_css_value(
         trimmed
       };
       let lower_property = property.to_ascii_lowercase();
+      if lower_property == "white-space" && base_value.eq_ignore_ascii_case("initial") {
+        return Some(("normal".to_string(), "normal".to_string(), important));
+      }
       if base_value.eq_ignore_ascii_case("transparent") {
         let replacement =
           if lower_property == "backgroundcolor" || lower_property == "background-color" {
@@ -3520,6 +3553,10 @@ impl<'a> TransformVisitor<'a> {
         let variable_input = format!("{} => {}", props_ident.sym, emit_expression(&body_expr));
         Some((body_expr, variable_input))
       }
+      Expr::Ident(_) | Expr::Member(_) | Expr::Call(_) | Expr::Tpl(_) | Expr::Lit(_) => {
+        let variable_input = emit_expression(expr);
+        Some((expr.clone(), variable_input))
+      }
       _ => None,
     }
   }
@@ -3837,19 +3874,42 @@ impl<'a> TransformVisitor<'a> {
   }
 
   fn handle_css_call(&mut self, call: &CallExpr) -> Option<Expr> {
-    let values = self.evaluate_call_arguments(call)?;
-    let mut combined = CssArtifacts::default();
-    for value in &values {
-      let artifacts = css_artifacts_from_static_value(value, &self.css_options())?;
-      combined.merge(artifacts);
+    if let Some(values) = self.evaluate_call_arguments(call) {
+      let mut combined = CssArtifacts::default();
+      for value in &values {
+        let artifacts = css_artifacts_from_static_value(value, &self.css_options())?;
+        combined.merge(artifacts);
+      }
+      for rule in combined.rules {
+        self.register_rule(rule.css);
+      }
+      for css in combined.raw_rules {
+        self.register_rule(css);
+      }
+      Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP })))
+    } else {
+      let mut combined = CssArtifacts::default();
+      let props_ident = Ident::new("props".into(), DUMMY_SP, SyntaxContext::empty());
+      for arg in &call.args {
+        if arg.spread.is_some() {
+          return None;
+        }
+        match &*arg.expr {
+          Expr::Object(object) => {
+            let artifacts = self.process_dynamic_css_object(object, &props_ident)?;
+            combined.merge(artifacts);
+          }
+          _ => return None,
+        }
+      }
+      for rule in combined.rules {
+        self.register_rule(rule.css);
+      }
+      for css in combined.raw_rules {
+        self.register_rule(css);
+      }
+      Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP })))
     }
-    for rule in combined.rules {
-      self.register_rule(rule.css);
-    }
-    for css in combined.raw_rules {
-      self.register_rule(css);
-    }
-    Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP })))
   }
 
   fn handle_keyframes_template(&mut self, template: &TaggedTpl) -> Option<Expr> {
@@ -3864,9 +3924,7 @@ impl<'a> TransformVisitor<'a> {
   }
 
   fn emit_keyframes_rule(&mut self, css: &str, expression: &Expr) -> Option<Expr> {
-    let mut normalized: String = css.chars().filter(|c| !c.is_whitespace()).collect();
-    normalized = normalized.replace("from{", "0%{");
-    normalized = normalized.replace(";}", "}");
+    let mut normalized = css.replace(";}", "}");
     let expression_code = emit_expression(expression);
     let name = format!("k{}", hash(&expression_code, 0));
     let rule = format!("@keyframes {}{{{}}}", name, normalized);
@@ -6078,7 +6136,7 @@ const className = css({
       artifacts
         .style_rules
         .iter()
-        .any(|rule| rule.contains(" >button{align-self:end}")),
+        .any(|rule| rule.contains(">button{align-self:end}")),
       "rules: {:?}",
       artifacts.style_rules
     );

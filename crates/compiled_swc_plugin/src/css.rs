@@ -179,7 +179,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
     Some(raw) => {
       let trimmed = raw.trim();
       let pseudo_normalized = normalize_pseudo_element_colons(trimmed);
-      let normalized = minify_selector(pseudo_normalized.as_ref());
+      let normalized = normalize_attribute_selector_quotes(&minify_selector(pseudo_normalized.as_ref()));
       if normalized.contains('&') {
         if normalized.starts_with(':') {
           return format!("&{}", normalized);
@@ -194,6 +194,46 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
       }
     }
   }
+}
+
+fn normalize_attribute_selector_quotes(selector: &str) -> String {
+  let mut result = String::with_capacity(selector.len());
+  let mut in_attribute = false;
+  let mut current_quote: Option<char> = None;
+
+  for ch in selector.chars() {
+    match ch {
+      '[' if current_quote.is_none() => {
+        in_attribute = true;
+        result.push(ch);
+      }
+      ']' if current_quote.is_none() => {
+        in_attribute = false;
+        result.push(ch);
+      }
+      '\'' if in_attribute => {
+        if current_quote.is_none() {
+          current_quote = Some('"');
+        } else {
+          current_quote = None;
+        }
+        result.push('"');
+      }
+      '"' if in_attribute => {
+        if current_quote.is_none() {
+          current_quote = Some('"');
+        } else {
+          current_quote = None;
+        }
+        result.push('"');
+      }
+      _ => {
+        result.push(ch);
+      }
+    }
+  }
+
+  result
 }
 
 fn named_color_hex(value: &str) -> Option<&'static str> {
@@ -495,6 +535,7 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = shorten_hex_literals(&semantic);
   semantic = strip_decimal_leading_zeros(&semantic);
   semantic = convert_length_units(&semantic);
+  semantic = convert_time_units(&semantic);
   semantic = convert_color_functions_to_hex(&semantic);
   semantic = lowercase_hex_literals(&semantic);
   semantic = shorten_hex_literals(&semantic);
@@ -643,6 +684,26 @@ fn convert_length_units(value: &str) -> String {
       let mut best: Option<String> = None;
 
       if px_value != 0 {
+        if px_value % 96 == 0 {
+          let converted_abs = px_value.abs() / 96;
+          let mut candidate = String::new();
+          if px_value < 0 {
+            candidate.push('-');
+          }
+          candidate.push_str(&converted_abs.to_string());
+          candidate.push_str("in");
+          best = match best {
+            Some(existing) => {
+              if candidate.len() < existing.len() {
+                Some(candidate)
+              } else {
+                Some(existing)
+              }
+            }
+            None => Some(candidate),
+          };
+        }
+
         if px_value % 16 == 0 {
           let converted_abs = px_value.abs() / 16;
           let mut candidate = String::new();
@@ -651,7 +712,16 @@ fn convert_length_units(value: &str) -> String {
           }
           candidate.push_str(&converted_abs.to_string());
           candidate.push_str("pc");
-          best = Some(candidate);
+          best = match best {
+            Some(existing) => {
+              if candidate.len() < existing.len() {
+                Some(candidate)
+              } else {
+                Some(existing)
+              }
+            }
+            None => Some(candidate),
+          };
         }
 
         if px_value % 4 == 0 {
@@ -686,6 +756,115 @@ fn convert_length_units(value: &str) -> String {
     }
 
     search_start = px_index + 2;
+  }
+
+  if last_written == 0 {
+    if important_suffix.is_empty() {
+      core.to_string()
+    } else {
+      let mut result = core.to_string();
+      result.push_str(important_suffix);
+      result
+    }
+  } else {
+    output.push_str(&core[last_written..]);
+    if important_suffix.is_empty() {
+      output
+    } else {
+      output.push_str(important_suffix);
+      output
+    }
+  }
+}
+
+fn convert_time_units(value: &str) -> String {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return String::new();
+  }
+
+  let mut core = trimmed;
+  let mut important_suffix = "";
+  if let Some(stripped) = core.strip_suffix("!important") {
+    core = stripped.trim_end();
+    important_suffix = "!important";
+  }
+
+  let bytes = core.as_bytes();
+  let mut search_start = 0usize;
+  let mut last_written = 0usize;
+  let mut output = String::with_capacity(core.len());
+
+  while let Some(rel_pos) = core[search_start..].find("ms") {
+    let ms_index = search_start + rel_pos;
+    let mut cursor = ms_index;
+    let mut has_digit = false;
+    let mut seen_decimal = false;
+
+    while cursor > 0 {
+      let ch = bytes[cursor - 1] as char;
+      if ch.is_ascii_digit() {
+        has_digit = true;
+        cursor -= 1;
+        continue;
+      }
+      if ch == '.' {
+        seen_decimal = true;
+        cursor -= 1;
+        continue;
+      }
+      if (ch == '+' || ch == '-') && cursor - 1 < ms_index {
+        cursor -= 1;
+        break;
+      }
+      break;
+    }
+
+    if !has_digit || seen_decimal {
+      search_start = ms_index + 2;
+      continue;
+    }
+
+    if cursor > 0 {
+      let prev = bytes[cursor - 1] as char;
+      if prev.is_ascii_alphabetic() || prev == '_' || prev == '-' {
+        search_start = ms_index + 2;
+        continue;
+      }
+    }
+
+    let number_str = &core[cursor..ms_index];
+    if number_str.contains(',') || number_str.contains(' ') {
+      search_start = ms_index + 2;
+      continue;
+    }
+
+    if let Ok(ms_value) = number_str.parse::<i64>() {
+      let seconds = ms_value as f64 / 1000.0;
+      let mut seconds_str = format!("{}", seconds);
+      if seconds_str.contains('.') {
+        while seconds_str.ends_with('0') {
+          seconds_str.pop();
+        }
+        if seconds_str.ends_with('.') {
+          seconds_str.push('0');
+        }
+      }
+      if seconds_str.starts_with("0.") {
+        seconds_str.remove(0);
+      } else if seconds_str.starts_with("-0.") {
+        seconds_str.remove(1);
+      }
+      let candidate = format!("{}s", seconds_str);
+      let original_len = ms_index + 2 - cursor;
+      if candidate.len() < original_len {
+        output.push_str(&core[last_written..cursor]);
+        output.push_str(&candidate);
+        last_written = ms_index + 2;
+      }
+    }
+
+    search_start = ms_index + 2;
   }
 
   if last_written == 0 {
@@ -1327,6 +1506,23 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
         },
       ];
     }
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() == 3 {
+      return vec![
+        PropertyExpansion {
+          name: "flex-grow".into(),
+          raw_value: parts[0].to_string(),
+        },
+        PropertyExpansion {
+          name: "flex-shrink".into(),
+          raw_value: parts[1].to_string(),
+        },
+        PropertyExpansion {
+          name: "flex-basis".into(),
+          raw_value: parts[2].to_string(),
+        },
+      ];
+    }
   }
 
   if property == "text-decoration" {
@@ -1492,7 +1688,12 @@ fn is_unitless_property(name: &str) -> bool {
 }
 
 fn replace_nesting(selector: &str, class_name: &str) -> String {
-  selector.replace('&', &format!(".{}", class_name))
+  let replaced = selector.replace('&', &format!(".{}", class_name));
+  replaced
+    .replace(&format!(".{} >", class_name), &format!(".{}>", class_name))
+    .replace(&format!(".{} +", class_name), &format!(".{}+", class_name))
+    .replace(&format!(".{} ~", class_name), &format!(".{}~", class_name))
+    .replace(&format!(".{}>*:", class_name), &format!(".{}>:", class_name))
 }
 
 fn minify_selector(selector: &str) -> String {
