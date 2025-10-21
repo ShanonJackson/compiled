@@ -77,6 +77,7 @@ pub struct CssArtifacts {
   pub rules: Vec<AtomicRule>,
   pub raw_rules: Vec<String>,
   pub runtime_variables: Vec<RuntimeCssVariable>,
+  pub runtime_class_conditions: Vec<RuntimeClassCondition>,
 }
 
 impl CssArtifacts {
@@ -92,10 +93,17 @@ impl CssArtifacts {
     self.rules.extend(other.rules);
     self.raw_rules.extend(other.raw_rules);
     self.runtime_variables.extend(other.runtime_variables);
+    self
+      .runtime_class_conditions
+      .extend(other.runtime_class_conditions);
   }
 
   pub fn push_variable(&mut self, variable: RuntimeCssVariable) {
     self.runtime_variables.push(variable);
+  }
+
+  pub fn push_class_condition(&mut self, condition: RuntimeClassCondition) {
+    self.runtime_class_conditions.push(condition);
   }
 
   pub fn class_names(&self) -> impl Iterator<Item = &str> {
@@ -109,6 +117,24 @@ impl Default for CssArtifacts {
       rules: Vec::new(),
       raw_rules: Vec::new(),
       runtime_variables: Vec::new(),
+      runtime_class_conditions: Vec::new(),
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeClassCondition {
+  pub test: Expr,
+  pub when_true: Vec<String>,
+  pub when_false: Vec<String>,
+}
+
+impl RuntimeClassCondition {
+  pub fn new(test: Expr, when_true: Vec<String>, when_false: Vec<String>) -> Self {
+    Self {
+      test,
+      when_true,
+      when_false,
     }
   }
 }
@@ -179,7 +205,8 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
     Some(raw) => {
       let trimmed = raw.trim();
       let pseudo_normalized = normalize_pseudo_element_colons(trimmed);
-      let normalized = normalize_attribute_selector_quotes(&minify_selector(pseudo_normalized.as_ref()));
+      let normalized =
+        normalize_attribute_selector_quotes(&minify_selector(pseudo_normalized.as_ref()));
       if normalized.contains('&') {
         if normalized.starts_with(':') {
           return format!("&{}", normalized);
@@ -1693,7 +1720,10 @@ fn replace_nesting(selector: &str, class_name: &str) -> String {
     .replace(&format!(".{} >", class_name), &format!(".{}>", class_name))
     .replace(&format!(".{} +", class_name), &format!(".{}+", class_name))
     .replace(&format!(".{} ~", class_name), &format!(".{}~", class_name))
-    .replace(&format!(".{}>*:", class_name), &format!(".{}>:", class_name))
+    .replace(
+      &format!(".{}>*:", class_name),
+      &format!(".{}>:", class_name),
+    )
 }
 
 fn minify_selector(selector: &str) -> String {

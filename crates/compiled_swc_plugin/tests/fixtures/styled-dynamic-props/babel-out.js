@@ -3,7 +3,7 @@ import { forwardRef } from 'react';
 import * as React from 'react';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 const _8 = "._bfhk13q2{background-color:blue}";
-const _7 = "._t9ecu6to{transform:translate(-5px,-5px)}";
+const _7 = "._t9ecni0c{transform:translate(-5px,-5px)}";
 const _6 = "._4t3i19bv{height:10px}";
 const _5 = "._1bsb19bv{width:10px}";
 const _4 = "._kqswstnw{position:absolute}";
@@ -24,7 +24,7 @@ const Dot = forwardRef(({
       ...__cmpls,
       "--_r3iodj": ix(__cmplp.y, "px"),
       "--_gzeubk": ix(__cmplp.x, "px")
-    }} ref={__cmplr} className={ax(["_2rko1q3h _154i1yuh _1ltv9q3e _kqswstnw _1bsb19bv _4t3i19bv _t9ecu6to _bfhk13q2", __cmplp.className])} />
+    }} ref={__cmplr} className={ax(["_2rko1q3h _154i1yuh _1ltv9q3e _kqswstnw _1bsb19bv _4t3i19bv _t9ecni0c _bfhk13q2", __cmplp.className])} />
       </CC>;
 });
 if (process.env.NODE_ENV !== 'production') {
