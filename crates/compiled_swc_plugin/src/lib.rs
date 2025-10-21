@@ -1,6 +1,7 @@
 pub mod css;
 pub mod eval;
 pub mod hash;
+mod token_utils;
 
 use crate::css::{
   AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizedCssValue, RuntimeClassCondition,
@@ -30,6 +31,7 @@ use swc_core::ecma::utils::quote_ident;
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 use swc_core::plugin::proxies::{PluginSourceMapProxy, TransformPluginProgramMetadata};
 use swc_plugin_macro::plugin_transform;
+use crate::token_utils::resolve_token_expression;
 
 static LATEST_ARTIFACTS: Lazy<Mutex<HashMap<ThreadId, StyleArtifacts>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
@@ -560,6 +562,7 @@ fn evaluate_static(
       }
       Some(StaticValue::Array(values))
     }
+    Expr::Call(_) => resolve_token_expression(expr).map(StaticValue::Str),
     Expr::Ident(ident) => bindings.get(&to_id(ident)).cloned(),
     _ => None,
   }
@@ -3632,13 +3635,13 @@ impl<'a> TransformVisitor<'a> {
       .map(|rule| rule.class_name.clone())
       .collect();
     Some((artifacts, class_names))
-  }
+}
 
-  fn process_dynamic_template_literal(
-    &mut self,
-    template: &Tpl,
-    props_ident: &Ident,
-  ) -> Option<(String, Vec<RuntimeCssVariable>)> {
+fn process_dynamic_template_literal(
+  &mut self,
+  template: &Tpl,
+  props_ident: &Ident,
+) -> Option<(String, Vec<RuntimeCssVariable>)> {
     if template.quasis.is_empty() {
       return Some((String::new(), Vec::new()));
     }
@@ -3654,9 +3657,31 @@ impl<'a> TransformVisitor<'a> {
 
     for (index, expr) in template.exprs.iter().enumerate() {
       let before_raw = segments.get(index).cloned().unwrap_or_else(String::new);
-      let after_raw = segments.get(index + 1).cloned().unwrap_or_else(String::new);
-      let (before_meta, after_meta) = css_affix_interpolation(&before_raw, &after_raw);
-      result.push_str(&before_meta.css);
+    let after_raw = segments.get(index + 1).cloned().unwrap_or_else(String::new);
+    let (before_meta, after_meta) = css_affix_interpolation(&before_raw, &after_raw);
+    result.push_str(&before_meta.css);
+
+    if let Some(token_value) = resolve_token_expression(expr) {
+      result.push_str(&token_value);
+      if let Some(suffix) = &after_meta.variable_suffix {
+        result.push_str(suffix);
+      }
+      if let Some(slot) = segments.get_mut(index + 1) {
+        *slot = after_meta.css.clone();
+      }
+      continue;
+    }
+
+    if let Some(static_text) = self.evaluate_static_to_css_string(expr) {
+      result.push_str(&static_text);
+      if let Some(suffix) = &after_meta.variable_suffix {
+        result.push_str(suffix);
+        }
+        if let Some(slot) = segments.get_mut(index + 1) {
+          *slot = after_meta.css.clone();
+        }
+        continue;
+      }
 
       let (expression, variable_input) = self.normalize_variable_expression(expr, props_ident)?;
       let hash_value = hash(&variable_input, 0);
@@ -3693,7 +3718,26 @@ impl<'a> TransformVisitor<'a> {
       result.push_str(tail);
     }
 
-    Some((result, runtime_variables))
+    let compact = result
+      .lines()
+      .map(|line| line.trim())
+      .collect::<String>();
+    let mut substituted = compact.clone();
+    let mut retained_variables = Vec::new();
+    for variable in runtime_variables {
+      if let Some(static_value) = self
+        .evaluate_static_to_css_string(&variable.expression)
+        .or_else(|| resolve_token_expression(&variable.expression))
+      {
+        let needle = format!("var({})", variable.name);
+        substituted = substituted.replace(&needle, &static_value);
+      } else {
+        retained_variables.push(variable);
+      }
+    }
+    let normalized = normalize_css_value(&substituted);
+
+    Some((normalized.output_value, retained_variables))
   }
 
   fn evaluate_static_to_css_string(&self, expr: &Expr) -> Option<String> {

@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use swc_core::ecma::ast::{Expr, Lit};
 use thiserror::Error;
 
+use crate::token_utils::resolve_token_expression;
+
 #[derive(Debug, Error)]
 pub enum EvaluationError {
   #[error("unsupported expression kind")]
@@ -67,6 +69,13 @@ impl StaticEvaluator {
           })
           .collect::<String>();
         Ok(Some(EvaluatedValue::String(cooked)))
+      }
+      Expr::Call(_) => {
+        if let Some(value) = resolve_token_expression(expr) {
+          Ok(Some(EvaluatedValue::String(value)))
+        } else {
+          Err(EvaluationError::Unsupported)
+        }
       }
       Expr::Ident(_) => Ok(None),
       _ => Err(EvaluationError::Unsupported),

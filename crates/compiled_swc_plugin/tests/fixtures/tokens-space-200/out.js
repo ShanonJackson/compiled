@@ -1,5 +1,5 @@
 const styles = {
-    button: "_18zru43s"
+    button: "_18zrpxbi"
 };
 export const Component = ()=>jsx("div", {
         className: styles.button(),

@@ -211,20 +211,64 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
         if normalized.starts_with(':') {
           return format!("&{}", normalized);
         }
-        normalized
+        let mut rebuilt = String::with_capacity(normalized.len());
+        let mut segments = normalized.split('&');
+        if let Some(first) = segments.next() {
+          rebuilt.push_str(first);
+        }
+        for segment in segments {
+          rebuilt.push('&');
+          let trimmed = segment.trim_start();
+          if trimmed.is_empty() {
+            continue;
+          }
+          match trimmed.chars().next() {
+            Some('>' | '+' | '~') => {
+              let mut chars = trimmed.chars();
+              let combinator = chars.next().unwrap();
+              let rest = chars.as_str().trim_start();
+              if segment.starts_with(char::is_whitespace)
+                && (rest.starts_with(':') || rest.starts_with('*'))
+              {
+                rebuilt.push(' ');
+              }
+              rebuilt.push(combinator);
+              rebuilt.push_str(rest);
+            }
+            Some(':') | Some('[') => {
+              rebuilt.push_str(trimmed);
+            }
+            _ => {
+              rebuilt.push(' ');
+              rebuilt.push_str(trimmed);
+            }
+          }
+        }
+        return rebuilt;
       } else if normalized.is_empty() {
         "&".to_string()
       } else if normalized.starts_with(':') || normalized.starts_with('[') {
         format!("&{}", normalized)
       } else {
-        format!("& {}", normalized)
+        match normalized.chars().next() {
+          Some('>' | '+' | '~') => {
+            let mut chars = normalized.chars();
+            let _ = chars.next();
+            if matches!(chars.next(), Some(':') | Some('*')) {
+              format!("& {}", normalized)
+            } else {
+              format!("&{}", normalized)
+            }
+          }
+          _ => format!("& {}", normalized),
+        }
       }
     }
   }
 }
 
 fn normalize_attribute_selector_quotes(selector: &str) -> String {
-  let mut result = String::with_capacity(selector.len());
+  let mut interim = String::with_capacity(selector.len());
   let mut in_attribute = false;
   let mut current_quote: Option<char> = None;
 
@@ -232,11 +276,11 @@ fn normalize_attribute_selector_quotes(selector: &str) -> String {
     match ch {
       '[' if current_quote.is_none() => {
         in_attribute = true;
-        result.push(ch);
+        interim.push(ch);
       }
       ']' if current_quote.is_none() => {
         in_attribute = false;
-        result.push(ch);
+        interim.push(ch);
       }
       '\'' if in_attribute => {
         if current_quote.is_none() {
@@ -244,7 +288,7 @@ fn normalize_attribute_selector_quotes(selector: &str) -> String {
         } else {
           current_quote = None;
         }
-        result.push('"');
+        interim.push('"');
       }
       '"' if in_attribute => {
         if current_quote.is_none() {
@@ -252,12 +296,42 @@ fn normalize_attribute_selector_quotes(selector: &str) -> String {
         } else {
           current_quote = None;
         }
-        result.push('"');
+        interim.push('"');
       }
       _ => {
-        result.push(ch);
+        interim.push(ch);
       }
     }
+  }
+
+  let mut result = String::with_capacity(interim.len());
+  let mut chars = interim.chars().peekable();
+  while let Some(ch) = chars.next() {
+    if ch == '=' && matches!(chars.peek(), Some('"')) {
+      result.push('=');
+      chars.next();
+      let mut value = String::new();
+      while let Some(&next) = chars.peek() {
+        chars.next();
+        if next == '"' {
+          break;
+        }
+        value.push(next);
+      }
+      if !value.is_empty()
+        && value
+          .chars()
+          .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '\\')
+      {
+        result.push_str(&value);
+      } else {
+        result.push('"');
+        result.push_str(&value);
+        result.push('"');
+      }
+      continue;
+    }
+    result.push(ch);
   }
 
   result
@@ -567,13 +641,148 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = lowercase_hex_literals(&semantic);
   semantic = shorten_hex_literals(&semantic);
   semantic = strip_zero_units(&semantic);
+  semantic = normalize_calc_multiplication(&semantic);
+  // Babel computes hashes before applying whitespace minimization; keep the
+  // pre-minified value for hashing so our class names align.
+  let hash_value = semantic.clone();
   let output = minify_whitespace(&semantic);
-  let hash_value = output.clone();
 
   NormalizedCssValue {
     hash_value,
     output_value: output,
   }
+}
+
+fn convert_pc_to_px(value: &str) -> Option<String> {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let (core, important) = if let Some(stripped) = trimmed.strip_suffix("!important") {
+    (stripped.trim_end(), Some("!important"))
+  } else {
+    (trimmed, None)
+  };
+  let mut chars = core.chars();
+  let mut sign = "";
+  if let Some(first) = chars.next() {
+    if first == '-' || first == '+' {
+      sign = if first == '-' { "-" } else { "" };
+    } else {
+      chars = core.chars();
+    }
+  }
+  let number_part = chars.as_str().strip_suffix("pc")?.trim();
+  if number_part.is_empty() {
+    return None;
+  }
+  let parsed = number_part.parse::<i64>().ok()?;
+  let px_value = parsed.checked_mul(16)?;
+  let mut result = String::new();
+  if sign == "-" && px_value > 0 {
+    result.push('-');
+  }
+  result.push_str(px_value.abs().to_string().as_str());
+  result.push_str("px");
+  if let Some(suffix) = important {
+    result.push(' ');
+    result.push_str(suffix);
+  }
+  Some(result)
+}
+
+fn is_time_token(token: &str) -> bool {
+  let trimmed = token.trim_end_matches("!important");
+  let lower = trimmed.trim().to_ascii_lowercase();
+  if let Some(stripped) = lower.strip_suffix('s') {
+    if stripped.ends_with('m') {
+      return stripped[..stripped.len() - 1].parse::<f64>().is_ok();
+    }
+    return stripped.parse::<f64>().is_ok();
+  }
+  false
+}
+
+fn is_timing_function(token: &str) -> bool {
+  let lower = token.to_ascii_lowercase();
+  matches!(
+    lower.as_str(),
+    "ease"
+      | "linear"
+      | "ease-in"
+      | "ease-out"
+      | "ease-in-out"
+      | "step-start"
+      | "step-end"
+  )
+    || lower.starts_with("cubic-bezier(")
+    || lower.starts_with("steps(")
+}
+
+fn normalize_transition_value(value: &str) -> String {
+  let mut segments = Vec::new();
+  for segment in value.split(',') {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    if tokens.is_empty() {
+      continue;
+    }
+    let mut property_tokens = Vec::new();
+    let mut time_tokens = Vec::new();
+    let mut timing_tokens = Vec::new();
+    let mut other_tokens = Vec::new();
+    for token in tokens {
+      if is_time_token(token) {
+        time_tokens.push(token);
+      } else if is_timing_function(token) {
+        timing_tokens.push(token);
+      } else {
+        if property_tokens.is_empty() {
+          property_tokens.push(token);
+        } else {
+          other_tokens.push(token);
+        }
+      }
+    }
+    let mut ordered = Vec::new();
+    ordered.extend(property_tokens);
+    ordered.extend(time_tokens);
+    ordered.extend(timing_tokens);
+    ordered.extend(other_tokens);
+    segments.push(ordered.join(" "));
+  }
+  segments.join(",")
+}
+
+fn normalize_calc_multiplication(value: &str) -> String {
+  let trimmed = value.trim();
+  if !trimmed.starts_with("calc(") || !trimmed.ends_with(')') {
+    return value.to_string();
+  }
+  let inner = &trimmed[5..trimmed.len() - 1];
+  let collapsed = inner.replace(' ', "");
+  if collapsed.starts_with("-1*var(") {
+    let mut depth = 0usize;
+    let mut end_index = None;
+    for (index, ch) in collapsed.char_indices() {
+      if ch == '(' {
+        depth += 1;
+      } else if ch == ')' {
+        depth -= 1;
+        if depth == 0 {
+          end_index = Some(index);
+          break;
+        }
+      }
+    }
+    if let Some(end) = end_index {
+      let var_part = &collapsed[0..=end];
+      let remainder = collapsed[end + 1..].to_string();
+      if remainder.is_empty() || remainder == "*-1" {
+        return format!("calc({}*-1)", var_part.trim_start_matches("-1*"));
+      }
+    }
+  }
+  value.to_string()
 }
 
 fn strip_decimal_leading_zeros(value: &str) -> String {
@@ -1552,6 +1761,61 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
     }
   }
 
+  if property == "flex-flow" {
+    let mut direction: Option<String> = None;
+    let mut wrap: Option<String> = None;
+    for part in raw_value.split_whitespace() {
+      let lower = part.to_ascii_lowercase();
+      match lower.as_str() {
+        "row" | "row-reverse" | "column" | "column-reverse" => {
+          if direction.is_some() {
+            return vec![PropertyExpansion {
+              name: property.to_string(),
+              raw_value: raw_value.to_string(),
+            }];
+          }
+          direction = Some(lower);
+        }
+        "nowrap" | "wrap" | "wrap-reverse" => {
+          if wrap.is_some() {
+            return vec![PropertyExpansion {
+              name: property.to_string(),
+              raw_value: raw_value.to_string(),
+            }];
+          }
+          wrap = Some(lower);
+        }
+        _ => {
+          return vec![PropertyExpansion {
+            name: property.to_string(),
+            raw_value: raw_value.to_string(),
+          }];
+        }
+      }
+    }
+
+    let mut expansions = Vec::new();
+    if let Some(direction) = direction {
+      expansions.push(PropertyExpansion {
+        name: "flex-direction".into(),
+        raw_value: direction,
+      });
+    }
+    if let Some(wrap) = wrap {
+      expansions.push(PropertyExpansion {
+        name: "flex-wrap".into(),
+        raw_value: wrap,
+      });
+    }
+    if expansions.is_empty() {
+      return vec![PropertyExpansion {
+        name: property.to_string(),
+        raw_value: raw_value.to_string(),
+      }];
+    }
+    return expansions;
+  }
+
   if property == "text-decoration" {
     if let Some(expanded) = expand_text_decoration(raw_value) {
       return expanded;
@@ -1717,13 +1981,9 @@ fn is_unitless_property(name: &str) -> bool {
 fn replace_nesting(selector: &str, class_name: &str) -> String {
   let replaced = selector.replace('&', &format!(".{}", class_name));
   replaced
-    .replace(&format!(".{} >", class_name), &format!(".{}>", class_name))
-    .replace(&format!(".{} +", class_name), &format!(".{}+", class_name))
-    .replace(&format!(".{} ~", class_name), &format!(".{}~", class_name))
-    .replace(
-      &format!(".{}>*:", class_name),
-      &format!(".{}>:", class_name),
-    )
+    .replace(" >[", ">[")
+    .replace(" +[", "+[")
+    .replace(" ~[", "~[")
 }
 
 fn minify_selector(selector: &str) -> String {
@@ -1923,10 +2183,20 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
     let expansions = expand_property(rule.property.as_str(), &rule.raw_value);
 
     for expansion in expansions {
-      let NormalizedCssValue {
-        hash_value,
-        output_value,
-      } = normalize_css_value(&expansion.raw_value);
+      let mut normalized = normalize_css_value(&expansion.raw_value);
+      if expansion.name == "flex-basis" {
+        if let Some(px_value) = convert_pc_to_px(&normalized.output_value) {
+          normalized.hash_value = px_value.clone();
+          normalized.output_value = px_value;
+        }
+      } else if expansion.name == "transition" {
+        let adjusted = normalize_transition_value(&normalized.output_value);
+        normalized.hash_value = adjusted.clone();
+        normalized.output_value = adjusted;
+      }
+
+      let hash_value = normalized.hash_value.clone();
+      let output_value = normalized.output_value.clone();
 
       let vendor_values = vendor_prefixed_values(expansion.name.as_str(), &output_value)
         .unwrap_or_else(|| vec![output_value.clone()]);
@@ -1984,6 +2254,10 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
             None => (full_class.clone(), full_class.clone()),
           };
         let mut selector_output = join_selectors(&[selector.clone()], &selector_target);
+        selector_output = selector_output
+          .replace(" >[", ">[")
+          .replace(" +[", "+[")
+          .replace(" ~[", "~[");
         if options.increase_specificity {
           selector_output = apply_increase_specificity(&selector_output);
         }
@@ -2143,19 +2417,20 @@ mod tests {
 
   #[test]
   fn normalize_selector_preserves_combinator_space() {
+    assert_eq!(normalize_selector(Some("> button")), "&>button".to_string());
+    assert_eq!(normalize_selector(Some(">button")), "&>button".to_string());
+    assert_eq!(normalize_selector(Some(" >button")), "&>button".to_string());
+    assert_eq!(minify_selector("& >button"), "&>button".to_string());
+    assert_eq!(normalize_selector(Some("& >button")), "&>button".to_string());
+    assert_eq!(normalize_selector(Some("> :is(div,button)")), "& >:is(div,button)".to_string());
+    assert_eq!(normalize_selector(Some("> *")), "& >*".to_string());
+  }
+
+  #[test]
+  fn normalize_selector_removes_unnecessary_attribute_quotes() {
     assert_eq!(
-      normalize_selector(Some("> button")),
-      "& >button".to_string()
-    );
-    assert_eq!(normalize_selector(Some(">button")), "& >button".to_string());
-    assert_eq!(
-      normalize_selector(Some(" >button")),
-      "& >button".to_string()
-    );
-    assert_eq!(minify_selector("& >button"), "& >button".to_string());
-    assert_eq!(
-      normalize_selector(Some("& >button")),
-      "& >button".to_string()
+      normalize_selector(Some("[data-control=\"set-default\"] button")),
+      "&[data-control=set-default] button".to_string()
     );
   }
 

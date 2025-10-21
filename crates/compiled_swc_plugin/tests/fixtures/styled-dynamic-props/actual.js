@@ -8,7 +8,7 @@ const _2 = "._1ltv9q3e{left:var(--_gzeubk)}";
 const _3 = "._kqswstnw{position:absolute}";
 const _4 = "._1bsb19bv{width:10px}";
 const _5 = "._4t3i19bv{height:10px}";
-const _6 = "._t9ec14n8{transform:translate(-5px,-5px)}";
+const _6 = "._t9ecni0c{transform:translate(-5px,-5px)}";
 const _7 = "._bfhk13q2{background-color:blue}";
 const Dot = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=>{
     if (__cmplp.innerRef) {
@@ -37,7 +37,7 @@ const Dot = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=
                 },
                 ref: __cmplr,
                 className: ax([
-                    "_2rko1q3h _154i1yuh _1ltv9q3e _kqswstnw _1bsb19bv _4t3i19bv _t9ec14n8 _bfhk13q2",
+                    "_2rko1q3h _154i1yuh _1ltv9q3e _kqswstnw _1bsb19bv _4t3i19bv _t9ecni0c _bfhk13q2",
                     __cmplp.className
                 ])
             })
