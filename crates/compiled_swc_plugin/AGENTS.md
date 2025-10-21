@@ -8,6 +8,7 @@
 - We have severael css-in-js API's css({..}) css`color: red;` cssMap (which is for variants), keyframes({..}) and finally styled.div({color: red}) or styled.div`color: red`; the supports complex css expressions and nesting, pseudo selectors, arbitary nesting.
 - We also have several behaviours around css attributes, xcss attributes and others, these behaviours need to match babel-plugin
 - Invesitgate packages/babel-plugin if you're ever confused about what the behaviour SHOULD be.
+- token('...') syntax is handled by a seperate plugin (platform/crates/swc-design-system-tokens) which inlines a css variable via another SWC/Rust native transformer.
 
 
 ## Differences we don't care about between the babel-plugin AND Rust/SWC transformer rewrite

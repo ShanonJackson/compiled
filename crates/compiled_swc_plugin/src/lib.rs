@@ -391,6 +391,50 @@ impl StaticValue {
       _ => None,
     }
   }
+
+  fn to_expr(&self) -> Option<Expr> {
+    match self {
+      StaticValue::Str(value) => Some(Expr::Lit(Lit::Str(Str::from(value.clone())))),
+      StaticValue::Num(value) => Some(Expr::Lit(Lit::Num(Number {
+        span: DUMMY_SP,
+        value: *value,
+        raw: None,
+      }))),
+      StaticValue::Bool(value) => Some(Expr::Lit(Lit::Bool(Bool {
+        span: DUMMY_SP,
+        value: *value,
+      }))),
+      StaticValue::Null => Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
+      StaticValue::Array(values) => {
+        let mut elems = Vec::with_capacity(values.len());
+        for value in values {
+          let expr = value.to_expr()?;
+          elems.push(Some(ExprOrSpread {
+            spread: None,
+            expr: Box::new(expr),
+          }));
+        }
+        Some(Expr::Array(ArrayLit {
+          span: DUMMY_SP,
+          elems,
+        }))
+      }
+      StaticValue::Object(map) => {
+        let mut props = Vec::with_capacity(map.len());
+        for (key, value) in map {
+          let expr = value.to_expr()?;
+          props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+            key: PropName::Str(Str::from(key.clone())),
+            value: Box::new(expr),
+          }))));
+        }
+        Some(Expr::Object(ObjectLit {
+          span: DUMMY_SP,
+          props,
+        }))
+      }
+    }
+  }
 }
 
 fn to_id(ident: &Ident) -> (Atom, SyntaxContext) {
@@ -426,9 +470,6 @@ fn evaluate_static(
     Expr::Lit(Lit::Bool(boolean)) => Some(StaticValue::Bool(boolean.value)),
     Expr::Lit(Lit::Null(_)) => Some(StaticValue::Null),
     Expr::Tpl(template) => {
-      if template.exprs.len() > 1 {
-        return None;
-      }
       let mut result = String::new();
       for (index, quasi) in template.quasis.iter().enumerate() {
         result.push_str(
@@ -3308,6 +3349,22 @@ impl<'a> TransformVisitor<'a> {
     let mut artifacts = CssArtifacts::default();
 
     for prop in &object.props {
+      if let PropOrSpread::Spread(spread) = prop {
+        let value = evaluate_static(&spread.expr, &self.bindings)?;
+        let expr = value.to_expr()?;
+        let Expr::Object(spread_object) = expr else {
+          return None;
+        };
+        let nested = self.process_dynamic_css_object_with_context(
+          &spread_object,
+          props_ident,
+          selectors,
+          at_rules,
+          options,
+        )?;
+        artifacts.merge(nested);
+        continue;
+      }
       let PropOrSpread::Prop(prop) = prop else {
         return None;
       };

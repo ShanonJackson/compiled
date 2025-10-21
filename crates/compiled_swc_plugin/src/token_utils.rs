@@ -75,5 +75,8 @@ fn resolve_token_call(call: &CallExpr) -> Option<String> {
     Some(fallback_value) => format!("var({}, {})", css_token, fallback_value),
     None => format!("var({})", css_token),
   };
+  if std::env::var_os("COMPILED_DEBUG_TOKENS").is_some() {
+    eprintln!("[compiled-token] expr='{}' -> '{}'", token_name, css);
+  }
   Some(css)
 }

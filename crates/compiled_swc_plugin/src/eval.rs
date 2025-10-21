@@ -57,18 +57,39 @@ impl StaticEvaluator {
         Lit::Null(_) => EvaluatedValue::Null,
         _ => return Err(EvaluationError::Unsupported),
       })),
-      Expr::Tpl(tpl) if tpl.exprs.is_empty() => {
-        let cooked = tpl
-          .quasis
-          .iter()
-          .map(|q| {
-            q.cooked
+      Expr::Tpl(tpl) => {
+        if tpl.exprs.is_empty() {
+          let cooked = tpl
+            .quasis
+            .iter()
+            .map(|q| {
+              q.cooked
+                .as_ref()
+                .map(|atom| atom.to_string())
+                .unwrap_or_else(|| q.raw.to_string())
+            })
+            .collect::<String>();
+          Ok(Some(EvaluatedValue::String(cooked)))
+        } else {
+          let mut result = String::new();
+          for (index, quasi) in tpl.quasis.iter().enumerate() {
+            let cooked = quasi
+              .cooked
               .as_ref()
               .map(|atom| atom.to_string())
-              .unwrap_or_else(|| q.raw.to_string())
-          })
-          .collect::<String>();
-        Ok(Some(EvaluatedValue::String(cooked)))
+              .unwrap_or_else(|| quasi.raw.to_string());
+            result.push_str(&cooked);
+            if index < tpl.exprs.len() {
+              let expr = &tpl.exprs[index];
+              match self.evaluate(expr)? {
+                Some(EvaluatedValue::String(value)) => result.push_str(&value),
+                Some(_) => return Err(EvaluationError::Unsupported),
+                None => return Ok(None),
+              }
+            }
+          }
+          Ok(Some(EvaluatedValue::String(result)))
+        }
       }
       Expr::Call(_) => {
         if let Some(value) = resolve_token_expression(expr) {

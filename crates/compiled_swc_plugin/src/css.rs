@@ -1319,6 +1319,10 @@ fn vendor_prefixed_values(property: &str, value: &str) -> Option<Vec<String>> {
     return Some(vec!["-moz-fit-content".into(), "fit-content".into()]);
   }
 
+  if applies_to_fit_content && normalized_value == "fill" {
+    return Some(vec!["-webkit-fill-available".into(), "fill".into()]);
+  }
+
   None
 }
 
@@ -2010,7 +2014,15 @@ fn minify_selector(selector: &str) -> String {
         .map(|c| matches!(c, '>' | '+' | '~' | ','))
         .unwrap_or(false);
       if prev_non_whitespace == Some('&') && next_is_combinator {
-        result.push(' ');
+        let mut lookahead = chars.clone();
+        lookahead.next();
+        while matches!(lookahead.peek(), Some(next) if next.is_ascii_whitespace()) {
+          lookahead.next();
+        }
+        let next_non_whitespace = lookahead.peek().copied();
+        if matches!(next_non_whitespace, Some(':') | Some('*')) {
+          result.push(' ');
+        }
         continue;
       }
       if prev_is_combinator || next_is_combinator {
@@ -2222,7 +2234,7 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
       let value_segment = &value_hash[..value_hash.len().min(4)];
 
       let mut per_selector_outputs = Vec::new();
-      for selector in &normalized_selectors {
+      for (selector_index, selector) in normalized_selectors.iter().enumerate() {
         let selectors_hash = selector.to_string();
         let group_hash = hash(
           &format!(
@@ -2258,6 +2270,21 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           .replace(" >[", ">[")
           .replace(" +[", "+[")
           .replace(" ~[", "~[");
+        if let Some(original_selector) = rule.selectors.get(selector_index) {
+          let trimmed_original = original_selector.trim_start();
+          if trimmed_original.starts_with('[') {
+            if let Some(close_index) = trimmed_original.find(']') {
+              let rest = trimmed_original[close_index + 1..].trim_start();
+              if rest.starts_with('+') || rest.starts_with('~') || rest.starts_with('>') {
+                let pattern = format!(".{}[", selector_target);
+                if selector_output.contains(&pattern) {
+                  selector_output = selector_output
+                    .replacen(&pattern, &format!(".{} [", selector_target), 1);
+                }
+              }
+            }
+          }
+        }
         if options.increase_specificity {
           selector_output = apply_increase_specificity(&selector_output);
         }
