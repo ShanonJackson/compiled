@@ -1014,7 +1014,21 @@ fn collect_module_statics_from_ast(
                       .insert(to_id(&default_spec.local), value.clone());
                   }
                 }
-                ImportSpecifier::Namespace(_) => {}
+                ImportSpecifier::Namespace(namespace) => {
+                  let mut entries: Vec<_> = imported
+                    .exports
+                    .iter()
+                    .filter(|(name, _)| name.as_str() != "default")
+                    .collect();
+                  entries.sort_by(|a, b| a.0.cmp(b.0));
+                  let mut map = IndexMap::new();
+                  for (name, value) in entries {
+                    map.insert(name.clone(), value.clone());
+                  }
+                  result
+                    .bindings
+                    .insert(to_id(&namespace.local), StaticValue::Object(map));
+                }
               }
             }
           }
@@ -3714,6 +3728,7 @@ impl<'a> TransformVisitor<'a> {
               artifacts.merge(branch_artifacts);
               classes
             }
+            None if Self::is_css_none_expr(&cond_expr.alt) => Vec::new(),
             None => {
               let branch_object = ObjectLit {
                 span: DUMMY_SP,
@@ -4438,6 +4453,49 @@ impl<'a> TransformVisitor<'a> {
     expr.visit_mut_with(&mut replacer);
   }
 
+  fn is_css_none_expr(expr: &Expr) -> bool {
+    match expr {
+      Expr::Ident(ident) => ident.sym.as_ref() == "undefined",
+      Expr::Lit(Lit::Null(_)) => true,
+      Expr::Paren(paren) => Self::is_css_none_expr(&paren.expr),
+      Expr::TsAs(assert) => Self::is_css_none_expr(&assert.expr),
+      Expr::TsTypeAssertion(assert) => Self::is_css_none_expr(&assert.expr),
+      Expr::TsConstAssertion(assert) => Self::is_css_none_expr(&assert.expr),
+      Expr::TsNonNull(non_null) => Self::is_css_none_expr(&non_null.expr),
+      _ => false,
+    }
+  }
+
+  fn strip_wrapping_parens(code: &str) -> String {
+    let trimmed = code.trim();
+    if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
+      return code.to_string();
+    }
+
+    let mut depth = 0usize;
+    for (index, ch) in trimmed.char_indices() {
+      match ch {
+        '(' => depth += 1,
+        ')' => {
+          if depth == 0 {
+            return code.to_string();
+          }
+          depth -= 1;
+          if depth == 0 && index != trimmed.len() - 1 {
+            return code.to_string();
+          }
+        }
+        _ => {}
+      }
+    }
+
+    if depth == 0 {
+      trimmed[1..trimmed.len() - 1].trim().to_string()
+    } else {
+      code.to_string()
+    }
+  }
+
   fn normalize_variable_expression(
     &self,
     expr: &Expr,
@@ -4469,7 +4527,16 @@ impl<'a> TransformVisitor<'a> {
             Self::replace_idents_with_expr(&mut body_expr, &mapping);
           }
         }
-        let variable_input = format!("{} => {}", props_ident.sym, emit_expression(&body_expr));
+        let body_code = emit_expression(&body_expr);
+        let normalized_body = if body_code.trim().starts_with('(')
+          && body_code.contains('?')
+          && body_code.contains(':')
+        {
+          Self::strip_wrapping_parens(&body_code)
+        } else {
+          body_code
+        };
+        let variable_input = format!("{} => {}", props_ident.sym, normalized_body);
         Some((body_expr, variable_input))
       }
       Expr::Ident(_) | Expr::Member(_) | Expr::Call(_) | Expr::Tpl(_) | Expr::Lit(_) => {

@@ -656,6 +656,9 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = shorten_hex_literals(&semantic);
   semantic = strip_zero_units(&semantic);
   semantic = normalize_calc_multiplication(&semantic);
+  semantic = normalize_calc_subtraction(&semantic);
+  semantic = convert_rotate_deg_to_turn(&semantic);
+  semantic = restore_calc_zero_fallbacks(&semantic);
   // Babel computes hashes before applying whitespace minimization; keep the
   // pre-minified value for hashing so our class names align.
   let hash_value = semantic.clone();
@@ -790,6 +793,284 @@ fn normalize_calc_multiplication(value: &str) -> String {
     }
   }
   value.to_string()
+}
+
+fn normalize_calc_subtraction(value: &str) -> String {
+  let trimmed = value.trim();
+  if !trimmed.starts_with("calc(") || !trimmed.ends_with(')') {
+    return value.to_string();
+  }
+
+  let inner = &trimmed[5..trimmed.len() - 1];
+  let mut result = String::with_capacity(inner.len());
+  let mut index = 0usize;
+  let inner_bytes = inner.as_bytes();
+
+  while index < inner_bytes.len() {
+    let remainder = &inner[index..];
+    if remainder.starts_with('-') {
+      let mut lookahead = index + 1;
+      while lookahead < inner_bytes.len() && inner_bytes[lookahead].is_ascii_whitespace() {
+        lookahead += 1;
+      }
+      if lookahead < inner_bytes.len() && inner_bytes[lookahead] == b'(' {
+        if let Some((group, consumed)) = extract_parenthesized(inner, lookahead) {
+          if let Some(terms) = split_top_level_plus(group) {
+            if !result.is_empty() && !result.ends_with(' ') {
+              result.push(' ');
+            }
+            result.push_str("- ");
+            let mut term_iter = terms.iter();
+            if let Some(first) = term_iter.next() {
+              result.push_str(first.trim());
+            }
+            for term in term_iter {
+              result.push_str(" - ");
+              result.push_str(term.trim());
+            }
+            index = lookahead + consumed;
+            continue;
+          }
+        }
+      }
+    }
+
+    let ch = remainder.chars().next().expect("valid utf-8");
+    result.push(ch);
+    index += ch.len_utf8();
+  }
+
+  format!("calc({})", result)
+}
+
+fn convert_rotate_deg_to_turn(value: &str) -> String {
+  const PREFIX: &str = "rotate(";
+
+  let len = value.len();
+  let mut index = 0usize;
+  let mut last_copied = 0usize;
+  let mut result: Option<String> = None;
+
+  while index < len {
+    if value[index..].starts_with(PREFIX) {
+      let mut cursor = index + PREFIX.len();
+      let mut depth = 0usize;
+      let mut close_idx: Option<usize> = None;
+
+      while cursor < len {
+        let ch = value[cursor..]
+          .chars()
+          .next()
+          .expect("cursor is valid character boundary");
+        let ch_len = ch.len_utf8();
+        match ch {
+          '(' => {
+            depth += 1;
+            cursor += ch_len;
+          }
+          ')' => {
+            if depth == 0 {
+              close_idx = Some(cursor);
+              cursor += ch_len;
+              break;
+            } else {
+              depth -= 1;
+              cursor += ch_len;
+            }
+          }
+          _ => {
+            cursor += ch_len;
+          }
+        }
+      }
+
+      if let Some(close_pos) = close_idx {
+        let inner = &value[index + PREFIX.len()..close_pos];
+        let trimmed = inner.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.ends_with("deg") {
+          let number_part = trimmed[..trimmed.len() - 3].trim();
+          if let Ok(angle_deg) = number_part.parse::<f64>() {
+            let turns = angle_deg / 360.0;
+            if turns.abs() >= 1e-9 {
+              let mut formatted = if (turns - turns.round()).abs() <= 1e-9 {
+                format!("{:.0}", turns.round())
+              } else {
+                let mut value = format!("{:.6}", turns);
+                while value.contains('.') && value.ends_with('0') {
+                  value.pop();
+                }
+                if value.ends_with('.') {
+                  value.pop();
+                }
+                value
+              };
+              if formatted == "-0" {
+                formatted = "0".to_string();
+              }
+
+              let buffer = result.get_or_insert_with(|| String::with_capacity(value.len()));
+              buffer.push_str(&value[last_copied..index]);
+              buffer.push_str("rotate(");
+              buffer.push_str(&formatted);
+              buffer.push_str("turn)");
+              last_copied = cursor;
+              index = cursor;
+              continue;
+            }
+          }
+        }
+      }
+    }
+    index += 1;
+  }
+
+  if let Some(mut output) = result {
+    if last_copied < len {
+      output.push_str(&value[last_copied..]);
+    }
+    output
+  } else {
+    value.to_string()
+  }
+}
+
+fn restore_calc_zero_fallbacks(value: &str) -> String {
+  let trimmed = value.trim();
+  if !trimmed.starts_with("calc(") {
+    return value.to_string();
+  }
+
+  let bytes = value.as_bytes();
+  let mut output = String::with_capacity(value.len());
+  let mut index = 0usize;
+
+  while index < bytes.len() {
+    if bytes[index..].starts_with(b"var(") {
+      let mut segment = String::from("var(");
+      index += 4;
+      let mut depth = 0usize;
+      let mut fallback_start: Option<usize> = None;
+      while index < bytes.len() {
+        let ch = bytes[index] as char;
+        segment.push(ch);
+        match ch {
+          '(' => depth += 1,
+          ')' => {
+            if depth == 0 {
+              index += 1;
+              break;
+            } else {
+              depth -= 1;
+            }
+          }
+          ',' if depth == 0 && fallback_start.is_none() => {
+            fallback_start = Some(segment.len());
+          }
+          _ => {}
+        }
+        index += 1;
+      }
+      if let Some(start) = fallback_start {
+        let end = segment.len().saturating_sub(1);
+        if start <= end {
+          let fallback_slice = &segment[start..end];
+          let whitespace_len = fallback_slice
+            .chars()
+            .take_while(|ch| ch.is_ascii_whitespace())
+            .map(|ch| ch.len_utf8())
+            .sum::<usize>();
+          let value_slice = &fallback_slice[whitespace_len..];
+          if value_slice.trim() == "0" {
+            let mut adjusted = String::with_capacity(segment.len() + 2);
+            adjusted.push_str(&segment[..start]);
+            if whitespace_len > 0 {
+              adjusted.push_str(&fallback_slice[..whitespace_len]);
+            } else {
+              adjusted.push(' ');
+            }
+            adjusted.push_str("0px");
+            adjusted.push(')');
+            segment = adjusted;
+          }
+        }
+      }
+      output.push_str(&segment);
+      continue;
+    }
+
+    output.push(bytes[index] as char);
+    index += 1;
+  }
+
+  output
+}
+
+fn extract_parenthesized<'a>(input: &'a str, start: usize) -> Option<(&'a str, usize)> {
+  let mut depth = 0usize;
+  for (offset, ch) in input[start..].char_indices() {
+    match ch {
+      '(' => depth += 1,
+      ')' => {
+        if depth == 0 {
+          return None;
+        }
+        depth -= 1;
+        if depth == 0 {
+          let end = start + offset;
+          let inner = &input[start + 1..end];
+          let consumed = offset + ch.len_utf8();
+          return Some((inner, consumed));
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn split_top_level_plus(input: &str) -> Option<Vec<String>> {
+  let mut parts = Vec::new();
+  let mut depth = 0usize;
+  let mut start = 0usize;
+  let mut saw_plus = false;
+
+  for (offset, ch) in input.char_indices() {
+    match ch {
+      '(' => depth += 1,
+      ')' => {
+        if depth == 0 {
+          return None;
+        }
+        depth -= 1;
+      }
+      '+' if depth == 0 => {
+        let segment = input[start..offset].trim();
+        if segment.is_empty() {
+          return None;
+        }
+        parts.push(segment.to_string());
+        start = offset + ch.len_utf8();
+        saw_plus = true;
+      }
+      '-' if depth == 0 => {
+        return None;
+      }
+      _ => {}
+    }
+  }
+
+  if depth != 0 {
+    return None;
+  }
+
+  let last = input[start..].trim();
+  if last.is_empty() || !saw_plus {
+    return None;
+  }
+  parts.push(last.to_string());
+
+  Some(parts)
 }
 
 fn strip_decimal_leading_zeros(value: &str) -> String {
