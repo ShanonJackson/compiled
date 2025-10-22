@@ -1,10 +1,10 @@
 import * as React from 'react';
-import { token } from '@atlaskit/tokens';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
 import { forwardRef } from "react";
-const _ = "._1itk2i0w{background-image:linear-gradient( to right,var(--ds-background-neutral,#091e420f) 10%,var(--ds-background-neutral-subtle,#0000) 30%,var(--ds-background-neutral,#091e420f) 50% )}";
-const Box = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=>{
+const _ = '._ect48cbs{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Roboto"}';
+const fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto'";
+export const Component = forwardRef(({ as: C = "span", style: __cmpls, ...__cmplp }, __cmplr)=>{
     if (__cmplp.innerRef) {
         throw new Error("Please use 'ref' instead of 'innerRef'.");
     }
@@ -20,14 +20,13 @@ const Box = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=
                 style: __cmpls,
                 ref: __cmplr,
                 className: ax([
-                    "_1itk2i0w",
+                    "_ect48cbs",
                     __cmplp.className
                 ])
             })
         ]
     });
 });
-export const Component = ()=>jsx(Box, {});
 if (process.env.NODE_ENV !== "production") {
-    Box.displayName = "Box";
+    Component.displayName = "Component";
 }

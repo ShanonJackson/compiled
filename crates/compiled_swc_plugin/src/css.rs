@@ -585,21 +585,35 @@ fn shorten_hex_literals(input: &str) -> String {
 fn minify_whitespace(value: &str) -> String {
   let mut output = String::with_capacity(value.len());
   let mut chars = value.chars().peekable();
+  let mut last_was_space = false;
 
   while let Some(ch) = chars.next() {
-    if ch == ' ' {
-      if matches!(chars.peek(), Some(next) if *next == ',') {
-        continue;
+    if ch.is_ascii_whitespace() {
+      if !last_was_space {
+        output.push(' ');
+        last_was_space = true;
       }
+      continue;
     }
 
-    output.push(ch);
-
     if ch == ',' {
+      if output.ends_with(' ') {
+        output.pop();
+      }
+      output.push(ch);
       while matches!(chars.peek(), Some(next) if next.is_ascii_whitespace()) {
         chars.next();
       }
+      last_was_space = false;
+      continue;
     }
+
+    last_was_space = false;
+    output.push(ch);
+  }
+
+  if output.ends_with(' ') {
+    output.pop();
   }
 
   output
@@ -707,15 +721,8 @@ fn is_timing_function(token: &str) -> bool {
   let lower = token.to_ascii_lowercase();
   matches!(
     lower.as_str(),
-    "ease"
-      | "linear"
-      | "ease-in"
-      | "ease-out"
-      | "ease-in-out"
-      | "step-start"
-      | "step-end"
-  )
-    || lower.starts_with("cubic-bezier(")
+    "ease" | "linear" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end"
+  ) || lower.starts_with("cubic-bezier(")
     || lower.starts_with("steps(")
 }
 
@@ -2278,8 +2285,8 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
               if rest.starts_with('+') || rest.starts_with('~') || rest.starts_with('>') {
                 let pattern = format!(".{}[", selector_target);
                 if selector_output.contains(&pattern) {
-                  selector_output = selector_output
-                    .replacen(&pattern, &format!(".{} [", selector_target), 1);
+                  selector_output =
+                    selector_output.replacen(&pattern, &format!(".{} [", selector_target), 1);
                 }
               }
             }
@@ -2448,8 +2455,14 @@ mod tests {
     assert_eq!(normalize_selector(Some(">button")), "&>button".to_string());
     assert_eq!(normalize_selector(Some(" >button")), "&>button".to_string());
     assert_eq!(minify_selector("& >button"), "&>button".to_string());
-    assert_eq!(normalize_selector(Some("& >button")), "&>button".to_string());
-    assert_eq!(normalize_selector(Some("> :is(div,button)")), "& >:is(div,button)".to_string());
+    assert_eq!(
+      normalize_selector(Some("& >button")),
+      "&>button".to_string()
+    );
+    assert_eq!(
+      normalize_selector(Some("> :is(div,button)")),
+      "& >:is(div,button)".to_string()
+    );
     assert_eq!(normalize_selector(Some("> *")), "& >*".to_string());
   }
 

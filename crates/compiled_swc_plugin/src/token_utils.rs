@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use swc_core::ecma::ast::{Callee, CallExpr, Expr, Lit};
+use swc_core::ecma::ast::{CallExpr, Callee, Expr, Lit};
 use swc_design_system_tokens::generated::{
   LIGHT_VALUES, SHAPE_VALUES, SPACING_VALUES, TOKEN_NAMES, TYPOGRAPHY_VALUES,
 };
@@ -57,11 +57,7 @@ fn resolve_token_call(call: &CallExpr) -> Option<String> {
     match &*second.expr {
       Expr::Lit(Lit::Str(lit)) => {
         let value = lit.value.to_string();
-        if value.is_empty() {
-          None
-        } else {
-          Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
       }
       _ => None,
     }

@@ -3,7 +3,7 @@ import { token } from '@atlaskit/tokens';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
 import { forwardRef } from "react";
-const _ = "._1itko93h{background-image:linear-gradient(\n    to right,var(--ds-background-neutral,#091e420f) 10%,var(--ds-background-neutral-subtle,#0000) 30%,var(--ds-background-neutral,#091e420f) 50%\n  )}";
+const _ = "._1itk2i0w{background-image:linear-gradient( to right,var(--ds-background-neutral,#091e420f) 10%,var(--ds-background-neutral-subtle,#0000) 30%,var(--ds-background-neutral,#091e420f) 50% )}";
 const Box = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=>{
     if (__cmplp.innerRef) {
         throw new Error("Please use 'ref' instead of 'innerRef'.");
@@ -20,7 +20,7 @@ const Box = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=
                 style: __cmpls,
                 ref: __cmplr,
                 className: ax([
-                    "_1itko93h",
+                    "_1itk2i0w",
                     __cmplp.className
                 ])
             })

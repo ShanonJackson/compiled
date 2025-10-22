@@ -9,6 +9,7 @@ use crate::css::{
   minify_at_rule_params, normalize_css_value, normalize_selector, wrap_at_rules,
 };
 use crate::hash::hash;
+use crate::token_utils::resolve_token_expression;
 use indexmap::IndexMap;
 use once_cell::sync::{Lazy, OnceCell};
 use oxc_resolver::{ResolveOptions, Resolver};
@@ -31,7 +32,6 @@ use swc_core::ecma::utils::quote_ident;
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 use swc_core::plugin::proxies::{PluginSourceMapProxy, TransformPluginProgramMetadata};
 use swc_plugin_macro::plugin_transform;
-use crate::token_utils::resolve_token_expression;
 
 static LATEST_ARTIFACTS: Lazy<Mutex<HashMap<ThreadId, StyleArtifacts>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
@@ -603,10 +603,93 @@ fn evaluate_static(
       }
       Some(StaticValue::Array(values))
     }
-    Expr::Call(_) => resolve_token_expression(expr).map(StaticValue::Str),
+    Expr::Call(call) => {
+      if let Some(token_value) = resolve_token_expression(expr) {
+        return Some(StaticValue::Str(token_value));
+      }
+      evaluate_static_call(call, bindings)
+    }
     Expr::Ident(ident) => bindings.get(&to_id(ident)).cloned(),
     _ => None,
   }
+}
+
+fn evaluate_static_call(
+  call: &CallExpr,
+  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
+) -> Option<StaticValue> {
+  let Callee::Expr(callee_expr) = &call.callee else {
+    return None;
+  };
+
+  let Expr::Member(member) = &**callee_expr else {
+    return None;
+  };
+
+  let Some(method_name) = member_prop_name(&member.prop, bindings) else {
+    return None;
+  };
+
+  match method_name.as_str() {
+    "replace" | "replaceAll" => {
+      let receiver = evaluate_static(&member.obj, bindings)?;
+      if receiver.as_str().is_some() {
+        return Some(match receiver {
+          StaticValue::Str(text) => StaticValue::Str(normalize_css_string_quotes(&text)),
+          other => other,
+        });
+      }
+    }
+    _ => {}
+  }
+
+  None
+}
+
+fn member_prop_name(
+  prop: &MemberProp,
+  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
+) -> Option<String> {
+  match prop {
+    MemberProp::Ident(ident) => Some(ident.sym.to_string()),
+    MemberProp::Computed(computed) => {
+      let value = evaluate_static(&computed.expr, bindings)?;
+      value.to_property_key()
+    }
+    MemberProp::PrivateName(_) => None,
+  }
+}
+
+fn normalize_css_string_quotes(value: &str) -> String {
+  let mut result = String::with_capacity(value.len());
+  let mut in_single = false;
+  let mut in_double = false;
+  let mut escape_next = false;
+
+  for ch in value.chars() {
+    if escape_next {
+      result.push(ch);
+      escape_next = false;
+      continue;
+    }
+    match ch {
+      '\\' => {
+        escape_next = true;
+        result.push(ch);
+      }
+      '"' if !in_single => {
+        in_double = !in_double;
+        result.push(ch);
+      }
+      '\'' if !in_double => {
+        in_single = !in_single;
+        result.push('"');
+      }
+      _ => result.push(ch),
+    }
+  }
+
+  if in_single { value.to_string() } else { result }
 }
 
 fn record_var_decl(
@@ -1538,12 +1621,18 @@ fn static_value_to_css_value(
         important = true;
         trimmed = stripped.trim_end().to_string();
       }
-      let base_value = if property == "content" {
+      let mut base_value = if property == "content" {
         normalize_content_value(&trimmed)
       } else {
         trimmed
       };
+      if base_value.contains('\n') {
+        base_value = base_value.split_whitespace().collect::<Vec<_>>().join(" ");
+      }
       let lower_property = property.to_ascii_lowercase();
+      if lower_property == "box-sizing" && base_value.eq_ignore_ascii_case("content-box") {
+        base_value = "initial".to_string();
+      }
       if lower_property == "white-space" && base_value.eq_ignore_ascii_case("initial") {
         return Some(("normal".to_string(), "normal".to_string(), important));
       }
@@ -2484,11 +2573,22 @@ fn css_artifacts_from_static_object(
   map: &IndexMap<String, StaticValue>,
   options: &CssOptions,
 ) -> Option<CssArtifacts> {
+  let mut adjusted: IndexMap<String, StaticValue> = IndexMap::new();
+  for (key, value) in map.iter() {
+    if key == "background" {
+      if let Some(new_key) = promote_background_key_if_needed(value) {
+        adjusted.insert(new_key, value.clone());
+        continue;
+      }
+    }
+    adjusted.insert(key.clone(), value.clone());
+  }
+
   let mut inputs = Vec::new();
   let base_selectors = vec![normalize_selector(None)];
   let mut raw_rules = Vec::new();
   if !flatten_css_object(
-    map,
+    &adjusted,
     &base_selectors,
     &[],
     &mut inputs,
@@ -2524,6 +2624,44 @@ fn css_artifacts_from_static_value(
     StaticValue::Null => Some(CssArtifacts::default()),
     _ => None,
   }
+}
+
+fn promote_background_key_if_needed(value: &StaticValue) -> Option<String> {
+  match value {
+    StaticValue::Str(text) => {
+      let normalized = normalize_css_value(text);
+      if should_promote_background_to_color(&normalized.output_value, text) {
+        return Some("background-color".to_string());
+      }
+    }
+    _ => {}
+  }
+  None
+}
+
+fn should_promote_background_to_color(value: &str, raw: &str) -> bool {
+  let trimmed = value.trim();
+  if trimmed.starts_with('#')
+    || trimmed.starts_with("rgb(")
+    || trimmed.starts_with("rgba(")
+    || trimmed.starts_with("hsl(")
+    || trimmed.starts_with("hsla(")
+  {
+    return true;
+  }
+
+  let raw_trimmed = raw.trim();
+  if raw_trimmed.is_empty() {
+    return false;
+  }
+  let lower_raw = raw_trimmed.to_ascii_lowercase();
+  if matches!(
+    lower_raw.as_str(),
+    "none" | "inherit" | "initial" | "unset" | "revert" | "transparent" | "currentcolor"
+  ) {
+    return false;
+  }
+  lower_raw.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 fn collect_precomputed_classes(value: &StaticValue, classes: &mut Vec<String>) {
@@ -3319,6 +3457,10 @@ impl<'a> TransformVisitor<'a> {
           let artifacts = self.process_dynamic_css_object(object, props_ident)?;
           combined.merge(artifacts);
         }
+        Expr::Arrow(_) | Expr::Fn(_) => {
+          let artifacts = self.process_dynamic_css_function(&arg.expr, props_ident)?;
+          combined.merge(artifacts);
+        }
         _ => return None,
       }
     }
@@ -3333,6 +3475,16 @@ impl<'a> TransformVisitor<'a> {
     let options = self.css_options();
     let selectors = vec![normalize_selector(None)];
     self.process_dynamic_css_object_with_context(object, props_ident, &selectors, &[], &options)
+  }
+
+  fn process_dynamic_css_function(
+    &mut self,
+    func: &Expr,
+    props_ident: &Ident,
+  ) -> Option<CssArtifacts> {
+    let options = self.css_options();
+    let (expression, _) = self.normalize_variable_expression(func, props_ident)?;
+    self.css_artifacts_from_dynamic_css_expression(&expression, &options)
   }
 
   fn process_dynamic_css_object_with_context(
@@ -3461,11 +3613,18 @@ impl<'a> TransformVisitor<'a> {
         if let Some((output, raw_value, important)) =
           static_value_to_css_value(&property_kebab, &static_value)
         {
+          let property_name = if property_kebab == "background"
+            && should_promote_background_to_color(&output, &raw_value)
+          {
+            "background-color".to_string()
+          } else {
+            property_kebab.clone()
+          };
           Self::push_rule_input(
             &mut rule_inputs,
             selectors,
             at_rules,
-            &property_kebab,
+            &property_name,
             output,
             raw_value,
             important,
@@ -3692,13 +3851,90 @@ impl<'a> TransformVisitor<'a> {
       .map(|rule| rule.class_name.clone())
       .collect();
     Some((artifacts, class_names))
-}
+  }
 
-fn process_dynamic_template_literal(
-  &mut self,
-  template: &Tpl,
-  props_ident: &Ident,
-) -> Option<(String, Vec<RuntimeCssVariable>)> {
+  fn css_artifacts_from_dynamic_css_expression(
+    &mut self,
+    expression: &Expr,
+    options: &CssOptions,
+  ) -> Option<CssArtifacts> {
+    let mut expr_ref = expression;
+    while let Expr::Paren(paren) = expr_ref {
+      expr_ref = &paren.expr;
+    }
+
+    match expr_ref {
+      Expr::Bin(bin) if matches!(bin.op, BinaryOp::LogicalAnd) => {
+        let condition = bin.left.as_ref().clone();
+        let value_text = self.evaluate_static_to_css_string(bin.right.as_ref())?;
+        if value_text.trim().is_empty() {
+          return Some(CssArtifacts::default());
+        }
+        let mut artifacts = self.css_artifacts_from_css_text(&value_text, options)?;
+        let class_names: Vec<String> = artifacts
+          .rules
+          .iter()
+          .map(|rule| rule.class_name.clone())
+          .collect();
+        if class_names.is_empty() {
+          return Some(artifacts);
+        }
+        artifacts.push_class_condition(RuntimeClassCondition::new(
+          condition,
+          class_names,
+          Vec::new(),
+        ));
+        Some(artifacts)
+      }
+      Expr::Cond(cond_expr) => {
+        let condition = cond_expr.test.as_ref().clone();
+        let mut combined = CssArtifacts::default();
+        let mut when_true = Vec::new();
+        let mut when_false = Vec::new();
+
+        if let Some(css_text) = self.evaluate_static_to_css_string(cond_expr.cons.as_ref()) {
+          if !css_text.trim().is_empty() {
+            let artifacts = self.css_artifacts_from_css_text(&css_text, options)?;
+            when_true.extend(artifacts.rules.iter().map(|rule| rule.class_name.clone()));
+            combined.merge(artifacts);
+          }
+        }
+
+        if let Some(css_text) = self.evaluate_static_to_css_string(cond_expr.alt.as_ref()) {
+          if !css_text.trim().is_empty() {
+            let artifacts = self.css_artifacts_from_css_text(&css_text, options)?;
+            when_false.extend(artifacts.rules.iter().map(|rule| rule.class_name.clone()));
+            combined.merge(artifacts);
+          }
+        }
+
+        if when_true.is_empty() && when_false.is_empty() {
+          return Some(combined);
+        }
+
+        combined.push_class_condition(RuntimeClassCondition::new(condition, when_true, when_false));
+        Some(combined)
+      }
+      _ => {
+        let css_text = self.evaluate_static_to_css_string(expr_ref)?;
+        if css_text.trim().is_empty() {
+          return Some(CssArtifacts::default());
+        }
+        self.css_artifacts_from_css_text(&css_text, options)
+      }
+    }
+  }
+
+  fn css_artifacts_from_css_text(&self, text: &str, options: &CssOptions) -> Option<CssArtifacts> {
+    let value = StaticValue::Str(text.to_string());
+    css_artifacts_from_static_value(&value, options)
+  }
+
+  fn process_dynamic_template_literal(
+    &mut self,
+    template: &Tpl,
+    props_ident: &Ident,
+  ) -> Option<(String, Vec<RuntimeCssVariable>)> {
     if template.quasis.is_empty() {
       return Some((String::new(), Vec::new()));
     }
@@ -3714,25 +3950,25 @@ fn process_dynamic_template_literal(
 
     for (index, expr) in template.exprs.iter().enumerate() {
       let before_raw = segments.get(index).cloned().unwrap_or_else(String::new);
-    let after_raw = segments.get(index + 1).cloned().unwrap_or_else(String::new);
-    let (before_meta, after_meta) = css_affix_interpolation(&before_raw, &after_raw);
-    result.push_str(&before_meta.css);
+      let after_raw = segments.get(index + 1).cloned().unwrap_or_else(String::new);
+      let (before_meta, after_meta) = css_affix_interpolation(&before_raw, &after_raw);
+      result.push_str(&before_meta.css);
 
-    if let Some(token_value) = resolve_token_expression(expr) {
-      result.push_str(&token_value);
-      if let Some(suffix) = &after_meta.variable_suffix {
-        result.push_str(suffix);
+      if let Some(token_value) = resolve_token_expression(expr) {
+        result.push_str(&token_value);
+        if let Some(suffix) = &after_meta.variable_suffix {
+          result.push_str(suffix);
+        }
+        if let Some(slot) = segments.get_mut(index + 1) {
+          *slot = after_meta.css.clone();
+        }
+        continue;
       }
-      if let Some(slot) = segments.get_mut(index + 1) {
-        *slot = after_meta.css.clone();
-      }
-      continue;
-    }
 
-    if let Some(static_text) = self.evaluate_static_to_css_string(expr) {
-      result.push_str(&static_text);
-      if let Some(suffix) = &after_meta.variable_suffix {
-        result.push_str(suffix);
+      if let Some(static_text) = self.evaluate_static_to_css_string(expr) {
+        result.push_str(&static_text);
+        if let Some(suffix) = &after_meta.variable_suffix {
+          result.push_str(suffix);
         }
         if let Some(slot) = segments.get_mut(index + 1) {
           *slot = after_meta.css.clone();
@@ -3775,10 +4011,7 @@ fn process_dynamic_template_literal(
       result.push_str(tail);
     }
 
-    let compact = result
-      .lines()
-      .map(|line| line.trim())
-      .collect::<String>();
+    let compact = result.lines().map(|line| line.trim()).collect::<String>();
     let mut substituted = compact.clone();
     let mut retained_variables = Vec::new();
     for variable in runtime_variables {
