@@ -787,17 +787,84 @@ fn is_timing_function(token: &str) -> bool {
     || lower.starts_with("steps(")
 }
 
-fn normalize_transition_value(value: &str) -> String {
+struct NormalizedTransitionValue {
+  hash_value: String,
+  output_value: String,
+}
+
+fn split_transition_segments(value: &str) -> Vec<String> {
   let mut segments = Vec::new();
-  for segment in value.split(',') {
+  let mut current = String::new();
+  let mut paren_depth = 0usize;
+  let mut in_single_quote = false;
+  let mut in_double_quote = false;
+  let mut escape_next = false;
+
+  for ch in value.chars() {
+    if escape_next {
+      current.push(ch);
+      escape_next = false;
+      continue;
+    }
+    match ch {
+      '\\' => {
+        current.push(ch);
+        escape_next = true;
+      }
+      '\'' => {
+        current.push(ch);
+        if !in_double_quote {
+          in_single_quote = !in_single_quote;
+        }
+      }
+      '"' => {
+        current.push(ch);
+        if !in_single_quote {
+          in_double_quote = !in_double_quote;
+        }
+      }
+      '(' if !in_single_quote && !in_double_quote => {
+        paren_depth += 1;
+        current.push(ch);
+      }
+      ')' if !in_single_quote && !in_double_quote => {
+        if paren_depth > 0 {
+          paren_depth -= 1;
+        }
+        current.push(ch);
+      }
+      ',' if paren_depth == 0 && !in_single_quote && !in_double_quote => {
+        if !current.trim().is_empty() {
+          segments.push(current.trim().to_string());
+        }
+        current.clear();
+      }
+      _ => current.push(ch),
+    }
+  }
+
+  if !current.trim().is_empty() {
+    segments.push(current.trim().to_string());
+  }
+
+  segments
+}
+
+fn normalize_transition_value(value: &str) -> NormalizedTransitionValue {
+  let mut hash_segments = Vec::new();
+  let mut output_segments = Vec::new();
+
+  for segment in split_transition_segments(value) {
     let tokens: Vec<&str> = segment.split_whitespace().collect();
     if tokens.is_empty() {
       continue;
     }
+
     let mut property_tokens = Vec::new();
     let mut time_tokens = Vec::new();
     let mut timing_tokens = Vec::new();
     let mut other_tokens = Vec::new();
+
     for token in tokens {
       if is_time_token(token) {
         time_tokens.push(token);
@@ -811,14 +878,31 @@ fn normalize_transition_value(value: &str) -> String {
         }
       }
     }
+
     let mut ordered = Vec::new();
     ordered.extend(property_tokens);
     ordered.extend(time_tokens);
     ordered.extend(timing_tokens);
     ordered.extend(other_tokens);
-    segments.push(ordered.join(" "));
+
+    let output_segment = ordered.join(" ");
+    let hash_segment = output_segment.clone();
+
+    output_segments.push(output_segment);
+    hash_segments.push(hash_segment);
   }
-  segments.join(",")
+
+  let hash_value = hash_segments.join(",");
+  if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
+    eprintln!(
+      "[compiled-debug] transition-hash segments={:?}",
+      hash_segments
+    );
+  }
+  NormalizedTransitionValue {
+    hash_value,
+    output_value: output_segments.join(","),
+  }
 }
 
 fn normalize_background_position(value: &str) -> Option<String> {
@@ -2803,8 +2887,8 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         }
       } else if expansion.name == "transition" {
         let adjusted = normalize_transition_value(&normalized.output_value);
-        normalized.hash_value = adjusted.clone();
-        normalized.output_value = adjusted;
+        normalized.hash_value = adjusted.hash_value;
+        normalized.output_value = adjusted.output_value;
       } else if expansion.name == "background-position" {
         if let Some(adjusted_hash) = normalize_background_position(&normalized.hash_value) {
           normalized.hash_value = adjusted_hash;
