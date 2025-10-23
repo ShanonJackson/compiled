@@ -1141,19 +1141,42 @@ fn collect_module_statics_from_ast(
 }
 
 fn kebab_case(input: &str) -> String {
+  const VENDOR_PREFIXES: [(&str, &str); 6] = [
+    ("Webkit", "-webkit-"),
+    ("Moz", "-moz-"),
+    ("ms", "-ms-"),
+    ("Ms", "-ms-"),
+    ("O", "-o-"),
+    ("Khtml", "-khtml-"),
+  ];
+
   let mut result = String::new();
+  let mut skip = 0usize;
+
+  for (prefix, replacement) in VENDOR_PREFIXES {
+    if input.starts_with(prefix) {
+      skip = prefix.len();
+      result.push_str(replacement);
+      break;
+    }
+  }
+
   for (index, ch) in input.chars().enumerate() {
+    if index < skip {
+      continue;
+    }
     if ch.is_uppercase() {
-      if index > 0 {
+      if !result.is_empty() && !result.ends_with('-') {
         result.push('-');
       }
-      for lower in ch.to_lowercase() {
-        result.push(lower);
+      for lower_ch in ch.to_lowercase() {
+        result.push(lower_ch);
       }
     } else {
       result.push(ch);
     }
   }
+
   result
 }
 
@@ -1772,8 +1795,8 @@ fn split_selector_list(raw: &str) -> Vec<String> {
           && bracket_depth == 0
           && brace_depth == 0 =>
       {
-        let trimmed = current.trim();
-        if !trimmed.is_empty() {
+        let trimmed = current.trim_end();
+        if !trimmed.trim().is_empty() {
           segments.push(trimmed.to_string());
         }
         current.clear();
@@ -1785,8 +1808,8 @@ fn split_selector_list(raw: &str) -> Vec<String> {
     current.push(ch);
   }
 
-  let trimmed = current.trim();
-  if !trimmed.is_empty() {
+  let trimmed = current.trim_end();
+  if !trimmed.trim().is_empty() {
     segments.push(trimmed.to_string());
   }
 
@@ -1811,7 +1834,47 @@ fn extend_selectors(current: &[String], raw: &str) -> Vec<String> {
   for parent in &parents {
     for segment in &segments {
       let normalized = normalize_selector(Some(segment));
-      let combined = normalized.replace('&', parent);
+      let explicit_self = segment.trim_start().starts_with('&');
+      let mut combined = String::with_capacity(normalized.len() + parent.len());
+      let mut last_index = 0usize;
+      let parent_trimmed = parent.trim();
+      let normalized_bytes = normalized.as_bytes();
+      let mut idx = 0usize;
+      while idx < normalized_bytes.len() {
+        if normalized_bytes[idx] == b'&' {
+          combined.push_str(&normalized[last_index..idx]);
+          combined.push_str(parent);
+          let remainder = &normalized[idx + 1..];
+          let next_char = remainder.chars().next();
+          if !explicit_self && parent_trimmed != "&" {
+            match next_char {
+              Some('[') => {
+                if !combined
+                  .chars()
+                  .rev()
+                  .find(|c| !c.is_ascii_whitespace())
+                  .map(|c| matches!(c, '>' | '+' | '~'))
+                  .unwrap_or(false)
+                  && !combined.ends_with(' ')
+                {
+                  combined.push(' ');
+                }
+              }
+              Some('>') | Some('+') | Some('~') => {
+                if !combined.ends_with(' ') {
+                  combined.push(' ');
+                }
+              }
+              _ => {}
+            }
+          }
+          idx += 1;
+          last_index = idx;
+        } else {
+          idx += 1;
+        }
+      }
+      combined.push_str(&normalized[last_index..]);
       if seen.insert(combined.clone()) {
         result.push(combined);
       }
@@ -2385,8 +2448,9 @@ fn parse_css_literal_block(
       Some(pos) => pos,
       None => break,
     };
-    let selector_text = css[idx..brace_index].trim();
-    if selector_text.is_empty() {
+    let raw_selector = &css[idx..brace_index];
+    let selector_text = raw_selector.trim_end();
+    if selector_text.trim().is_empty() {
       return false;
     }
     let mut block_start = brace_index;
