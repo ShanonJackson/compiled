@@ -30,8 +30,8 @@ fn main() -> Result<()> {
   let (config_json, node_env, babel_env) = support::load_fixture_config(&fixture_dir);
   let _guard = support::EnvGuard::new(node_env.as_deref(), babel_env.as_deref());
 
-  let output =
-    support::canonicalize_output(&support::run_transform(&input_path, &input, &config_json));
+  let (output_raw, _) = support::run_transform(&input_path, &input, &config_json);
+  let output = support::canonicalize_output(&output_raw);
   let actual_path = fixture_dir.join("actual.js");
   fs::write(&actual_path, format!("{}\n", output))
     .with_context(|| format!("failed to write {}", actual_path.display()))?;

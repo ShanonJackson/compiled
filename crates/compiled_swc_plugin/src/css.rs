@@ -54,6 +54,7 @@ pub struct RuntimeCssVariable {
   pub expression: Expr,
   pub prefix: Option<String>,
   pub suffix: Option<String>,
+  pub allow_static_substitution: bool,
 }
 
 impl RuntimeCssVariable {
@@ -68,6 +69,7 @@ impl RuntimeCssVariable {
       expression,
       prefix,
       suffix,
+      allow_static_substitution: true,
     }
   }
 }
@@ -233,7 +235,6 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
   match selector {
     None => "&".to_string(),
     Some(raw) => {
-      let had_leading_space = raw.starts_with(char::is_whitespace);
       let trimmed = raw.trim();
       let pseudo_normalized = normalize_pseudo_element_colons(trimmed);
       let normalized_minified =
@@ -262,12 +263,17 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
             Some('>' | '+' | '~') => {
               let mut chars = trimmed.chars();
               let combinator = chars.next().unwrap();
-              let rest = chars.as_str().trim_start();
-              if raw_segment.starts_with(char::is_whitespace) && !rebuilt.ends_with(' ') {
-                rebuilt.push(' ');
-              }
+              let rest_raw = chars.as_str();
+              let rest_trimmed = rest_raw.trim_start();
+              let rest: Cow<'_, str> = if let Some(after_star) = rest_trimmed.strip_prefix("*::") {
+                Cow::Owned(format!("::{}", after_star))
+              } else if let Some(after_star) = rest_trimmed.strip_prefix("*:") {
+                Cow::Owned(format!(":{}", after_star))
+              } else {
+                Cow::Borrowed(rest_trimmed)
+              };
               rebuilt.push(combinator);
-              rebuilt.push_str(rest);
+              rebuilt.push_str(&rest);
             }
             Some(':') | Some('[') => {
               if raw_segment.starts_with(char::is_whitespace) && !rebuilt.ends_with(' ') {
@@ -281,6 +287,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
             }
           }
         }
+        let rebuilt = rebuilt.replace("& >", "&>");
         return rebuilt;
       } else if normalized.is_empty() {
         "&".to_string()
@@ -291,19 +298,16 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
           Some('>' | '+' | '~') => {
             let mut chars = normalized.chars();
             let combinator = chars.next().unwrap();
-            let rest = chars.as_str();
-            let raw_after_combinator = raw.strip_prefix('>').unwrap_or(raw);
-            if had_leading_space
-              || raw_after_combinator.starts_with(char::is_whitespace)
-              || matches!(
-                rest.chars().next(),
-                Some(':') | Some('*') | Some('>') | Some('+') | Some('~')
-              )
-            {
-              format!("& {}{}", combinator, rest)
+            let rest_raw = chars.as_str();
+            let rest_trimmed = rest_raw.trim_start();
+            let rest: Cow<'_, str> = if let Some(after_star) = rest_trimmed.strip_prefix("*::") {
+              Cow::Owned(format!("::{}", after_star))
+            } else if let Some(after_star) = rest_trimmed.strip_prefix("*:") {
+              Cow::Owned(format!(":{}", after_star))
             } else {
-              format!("&{}{}", combinator, rest)
-            }
+              Cow::Borrowed(rest_trimmed)
+            };
+            format!("&{}{}", combinator, rest)
           }
           _ => format!("& {}", normalized),
         }
@@ -947,6 +951,75 @@ fn normalize_calc_multiplication(value: &str) -> String {
   let inner = &trimmed[5..trimmed.len() - 1];
   let collapsed = inner.replace(' ', "");
   if collapsed.starts_with("-1*var(") {
+    let bytes = inner.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+      index += 1;
+    }
+    if index >= bytes.len() || bytes[index] != b'-' {
+      return value.to_string();
+    }
+    index += 1;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+      index += 1;
+    }
+    if index >= bytes.len() || bytes[index] != b'1' {
+      return value.to_string();
+    }
+    index += 1;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+      index += 1;
+    }
+    if index >= bytes.len() || bytes[index] != b'*' {
+      return value.to_string();
+    }
+    index += 1;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+      index += 1;
+    }
+    if index >= bytes.len() || !inner[index..].starts_with("var(") {
+      return value.to_string();
+    }
+    let var_start = index;
+    let mut depth = 0usize;
+    let mut cursor = index;
+    let mut var_end: Option<usize> = None;
+    while cursor < bytes.len() {
+      let ch = inner[cursor..]
+        .chars()
+        .next()
+        .expect("cursor is valid character boundary");
+      let ch_len = ch.len_utf8();
+      match ch {
+        '(' => {
+          depth += 1;
+          cursor += ch_len;
+        }
+        ')' => {
+          if depth == 0 {
+            var_end = Some(cursor);
+            cursor += ch_len;
+            break;
+          } else {
+            depth -= 1;
+            cursor += ch_len;
+          }
+        }
+        _ => {
+          cursor += ch_len;
+        }
+      }
+    }
+    if let Some(end_index) = var_end {
+      let remainder: String = inner[end_index + 1..]
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+      if remainder.is_empty() || remainder == "*-1" {
+        let segment = inner[var_start..=end_index].trim();
+        return format!("calc({segment}*-1)");
+      }
+    }
     let mut depth = 0usize;
     let mut end_index = None;
     for (index, ch) in collapsed.char_indices() {
@@ -3152,25 +3225,19 @@ mod tests {
 
   #[test]
   fn normalize_selector_preserves_combinator_space() {
-    assert_eq!(
-      normalize_selector(Some("> button")),
-      "& >button".to_string()
-    );
+    assert_eq!(normalize_selector(Some("> button")), "&>button".to_string());
     assert_eq!(normalize_selector(Some(">button")), "&>button".to_string());
-    assert_eq!(
-      normalize_selector(Some(" >button")),
-      "& >button".to_string()
-    );
+    assert_eq!(normalize_selector(Some(" >button")), "&>button".to_string());
     assert_eq!(minify_selector("& >button"), "&>button".to_string());
     assert_eq!(
       normalize_selector(Some("& >button")),
-      "& >button".to_string()
+      "&>button".to_string()
     );
     assert_eq!(
       normalize_selector(Some("> :is(div,button)")),
-      "& >:is(div,button)".to_string()
+      "&>:is(div,button)".to_string()
     );
-    assert_eq!(normalize_selector(Some("> *")), "& >*".to_string());
+    assert_eq!(normalize_selector(Some("> *")), "&>*".to_string());
   }
 
   #[test]

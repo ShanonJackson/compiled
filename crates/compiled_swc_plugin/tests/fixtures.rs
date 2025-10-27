@@ -6,6 +6,7 @@ use support::{
   EnvGuard, canonicalize_output, emit_program, fixtures_dir, load_fixture_config, parse_program,
   run_transform,
 };
+use serde_json::Value;
 
 #[test]
 fn fixture_outputs_match() {
@@ -44,7 +45,8 @@ fn fixture_outputs_match() {
     )));
     let (config_json, node_env, babel_env) = load_fixture_config(&fixture_path);
     let _guard = EnvGuard::new(node_env.as_deref(), babel_env.as_deref());
-    let actual = canonicalize_output(&run_transform(&input_path, &input, &config_json));
+    let (actual_output, artifacts) = run_transform(&input_path, &input, &config_json);
+    let actual = canonicalize_output(&actual_output);
     if let Ok(filter) = std::env::var("FIXTURE_DEBUG") {
       if fixture_path
         .file_name()
@@ -62,9 +64,57 @@ fn fixture_outputs_match() {
       "fixture {:?} did not match",
       fixture_path.file_name().unwrap()
     );
+
+    let expected_style_rules_path = fixture_path.join("style-rules.json");
+    if expected_style_rules_path.exists() {
+      let expected_style_rules = load_expected_style_rules(&expected_style_rules_path);
+      let mut actual_rules = artifacts.style_rules.clone();
+      let mut expected_rules = expected_style_rules;
+      actual_rules.sort();
+      expected_rules.sort();
+      assert_eq!(
+        expected_rules, actual_rules,
+        "fixture {:?} style rules did not match",
+        fixture_path.file_name().unwrap()
+      );
+    }
   }
 }
 
 fn normalize(output: &str) -> String {
   output.replace("\r\n", "\n").trim().to_string()
+}
+
+fn load_expected_style_rules(path: &std::path::Path) -> Vec<String> {
+  let raw = fs::read_to_string(path).expect("failed to read style-rules.json");
+  let value: Value =
+    serde_json::from_str(&raw).expect("failed to parse style-rules.json as JSON");
+  match value {
+    Value::Array(items) => items
+      .into_iter()
+      .map(|item| {
+        item
+          .as_str()
+          .expect("expected style rule entries to be strings")
+          .to_string()
+      })
+      .collect(),
+    Value::Object(mut obj) => {
+      let rules = obj
+        .remove("styleRules")
+        .expect("expected 'styleRules' property in style-rules.json object");
+      rules
+        .as_array()
+        .expect("expected 'styleRules' to be an array")
+        .iter()
+        .map(|item| {
+          item
+            .as_str()
+            .expect("expected style rule entries to be strings")
+            .to_string()
+        })
+        .collect()
+    }
+    _ => panic!("style-rules.json must be an array or object with styleRules"),
+  }
 }

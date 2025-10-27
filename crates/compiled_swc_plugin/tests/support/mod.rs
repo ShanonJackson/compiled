@@ -1,4 +1,4 @@
-use compiled_swc_plugin::{take_latest_artifacts, transform_program_for_testing};
+use compiled_swc_plugin::{take_latest_artifacts, transform_program_for_testing, StyleArtifacts};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,7 +68,11 @@ pub fn emit_program(program: &Program) -> String {
   String::from_utf8(buf).expect("emitted JS should be utf8")
 }
 
-pub fn run_transform(input_path: &Path, source: &str, config_json: &str) -> String {
+pub fn run_transform(
+  input_path: &Path,
+  source: &str,
+  config_json: &str,
+) -> (String, StyleArtifacts) {
   GLOBALS.set(&Globals::new(), || {
     let program = parse_program(input_path, source);
     let mut transformed = transform_program_for_testing(
@@ -98,9 +102,9 @@ pub fn run_transform(input_path: &Path, source: &str, config_json: &str) -> Stri
         pass.process(&mut transformed);
       }
     }
-    // drain artifacts so subsequent fixtures start from a clean state
-    let _ = take_latest_artifacts();
-    emit_program(&transformed)
+    let output = emit_program(&transformed);
+    let artifacts = take_latest_artifacts();
+    (output, artifacts)
   })
 }
 
