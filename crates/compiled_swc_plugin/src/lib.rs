@@ -437,6 +437,31 @@ impl StaticValue {
   }
 }
 
+#[derive(Debug, Clone)]
+struct StaticEvalResult {
+  value: StaticValue,
+  depends_on_import: bool,
+  is_import_binding: bool,
+}
+
+impl StaticEvalResult {
+  fn new(value: StaticValue) -> Self {
+    Self {
+      value,
+      depends_on_import: false,
+      is_import_binding: false,
+    }
+  }
+
+  fn with_flags(value: StaticValue, depends_on_import: bool, is_import_binding: bool) -> Self {
+    Self {
+      value,
+      depends_on_import,
+      is_import_binding,
+    }
+  }
+}
+
 fn to_id(ident: &Ident) -> (Atom, SyntaxContext) {
   (ident.sym.clone(), ident.ctxt)
 }
@@ -447,7 +472,7 @@ fn collect_static_bindings(
   module_path: Option<&Path>,
   import_sources: &[String],
   css_options: &CssOptions,
-) -> HashMap<(Atom, SyntaxContext), StaticValue> {
+) -> HashMap<(Atom, SyntaxContext), StaticEvalResult> {
   let mut visiting = HashSet::new();
   collect_module_statics_from_ast(
     module,
@@ -460,17 +485,20 @@ fn collect_static_bindings(
   .bindings
 }
 
-fn evaluate_static(
+fn evaluate_static_with_info(
   expr: &Expr,
-  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
-) -> Option<StaticValue> {
+  bindings: &HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+) -> Option<StaticEvalResult> {
   match expr {
-    Expr::Lit(Lit::Str(str)) => Some(StaticValue::Str(str.value.to_string())),
-    Expr::Lit(Lit::Num(num)) => Some(StaticValue::Num(num.value)),
-    Expr::Lit(Lit::Bool(boolean)) => Some(StaticValue::Bool(boolean.value)),
-    Expr::Lit(Lit::Null(_)) => Some(StaticValue::Null),
+    Expr::Lit(Lit::Str(str)) => Some(StaticEvalResult::new(StaticValue::Str(
+      str.value.to_string(),
+    ))),
+    Expr::Lit(Lit::Num(num)) => Some(StaticEvalResult::new(StaticValue::Num(num.value))),
+    Expr::Lit(Lit::Bool(boolean)) => Some(StaticEvalResult::new(StaticValue::Bool(boolean.value))),
+    Expr::Lit(Lit::Null(_)) => Some(StaticEvalResult::new(StaticValue::Null)),
     Expr::Tpl(template) => {
       let mut result = String::new();
+      let mut depends_on_import = false;
       for (index, quasi) in template.quasis.iter().enumerate() {
         result.push_str(
           quasi
@@ -481,77 +509,116 @@ fn evaluate_static(
             .as_str(),
         );
         if let Some(expr) = template.exprs.get(index) {
-          let value = evaluate_static(expr, bindings)?;
-          result.push_str(&value.to_js_string()?);
+          let eval = evaluate_static_with_info(expr, bindings)?;
+          depends_on_import |= eval.depends_on_import || eval.is_import_binding;
+          result.push_str(&eval.value.to_js_string()?);
         }
       }
-      Some(StaticValue::Str(result))
+      Some(StaticEvalResult::with_flags(
+        StaticValue::Str(result),
+        depends_on_import,
+        false,
+      ))
     }
-    Expr::Paren(paren) => evaluate_static(&paren.expr, bindings),
-    Expr::TsAs(ts_as) => evaluate_static(&ts_as.expr, bindings),
-    Expr::TsTypeAssertion(assert) => evaluate_static(&assert.expr, bindings),
-    Expr::TsConstAssertion(assert) => evaluate_static(&assert.expr, bindings),
-    Expr::TsNonNull(non_null) => evaluate_static(&non_null.expr, bindings),
+    Expr::Paren(paren) => evaluate_static_with_info(&paren.expr, bindings),
+    Expr::TsAs(ts_as) => evaluate_static_with_info(&ts_as.expr, bindings),
+    Expr::TsTypeAssertion(assert) => evaluate_static_with_info(&assert.expr, bindings),
+    Expr::TsConstAssertion(assert) => evaluate_static_with_info(&assert.expr, bindings),
+    Expr::TsNonNull(non_null) => evaluate_static_with_info(&non_null.expr, bindings),
     Expr::SuperProp(_) => None,
     Expr::Member(member) => {
-      let object = evaluate_static(&member.obj, bindings)?;
+      let object = evaluate_static_with_info(&member.obj, bindings)?;
 
       let key = match &member.prop {
         MemberProp::Ident(ident) => ident.sym.to_string(),
         MemberProp::Computed(computed) => {
-          let evaluated = evaluate_static(&computed.expr, bindings)?;
-          evaluated.to_property_key()?
+          let evaluated = evaluate_static_with_info(&computed.expr, bindings)?;
+          evaluated.value.to_property_key()?
         }
         MemberProp::PrivateName(_) => return None,
       };
 
-      match &object {
-        StaticValue::Object(map) => map.get(&key).cloned(),
+      match &object.value {
+        StaticValue::Object(map) => map.get(&key).map(|value| {
+          StaticEvalResult::with_flags(value.clone(), object.depends_on_import, false)
+        }),
         StaticValue::Array(values) => {
           let index = key.parse::<usize>().ok()?;
-          values.get(index).cloned()
+          values
+            .get(index)
+            .cloned()
+            .map(|value| StaticEvalResult::with_flags(value, object.depends_on_import, false))
         }
         _ => None,
       }
     }
     Expr::Bin(bin) => {
-      let left = evaluate_static(&bin.left, bindings)?;
-      let right = evaluate_static(&bin.right, bindings)?;
+      let left = evaluate_static_with_info(&bin.left, bindings)?;
+      let right = evaluate_static_with_info(&bin.right, bindings)?;
+      let depends_on_import = left.depends_on_import
+        || right.depends_on_import
+        || left.is_import_binding
+        || right.is_import_binding;
       match bin.op {
         BinaryOp::Add => {
-          if let (Some(lhs), Some(rhs)) = (left.as_num(), right.as_num()) {
-            Some(StaticValue::Num(lhs + rhs))
+          if let (Some(lhs), Some(rhs)) = (left.value.as_num(), right.value.as_num()) {
+            Some(StaticEvalResult::with_flags(
+              StaticValue::Num(lhs + rhs),
+              depends_on_import,
+              false,
+            ))
           } else {
-            let left_str = left.to_js_string()?;
-            let right_str = right.to_js_string()?;
-            Some(StaticValue::Str(format!("{}{}", left_str, right_str)))
+            let left_str = left.value.to_js_string()?;
+            let right_str = right.value.to_js_string()?;
+            Some(StaticEvalResult::with_flags(
+              StaticValue::Str(format!("{}{}", left_str, right_str)),
+              depends_on_import,
+              false,
+            ))
           }
         }
         BinaryOp::Sub => {
-          let lhs = left.as_num()?;
-          let rhs = right.as_num()?;
-          Some(StaticValue::Num(lhs - rhs))
+          let lhs = left.value.as_num()?;
+          let rhs = right.value.as_num()?;
+          Some(StaticEvalResult::with_flags(
+            StaticValue::Num(lhs - rhs),
+            depends_on_import,
+            false,
+          ))
         }
         BinaryOp::Mul => {
-          let lhs = left.as_num()?;
-          let rhs = right.as_num()?;
-          Some(StaticValue::Num(lhs * rhs))
+          let lhs = left.value.as_num()?;
+          let rhs = right.value.as_num()?;
+          Some(StaticEvalResult::with_flags(
+            StaticValue::Num(lhs * rhs),
+            depends_on_import,
+            false,
+          ))
         }
         BinaryOp::Div => {
-          let lhs = left.as_num()?;
-          let rhs = right.as_num()?;
-          Some(StaticValue::Num(lhs / rhs))
+          let lhs = left.value.as_num()?;
+          let rhs = right.value.as_num()?;
+          Some(StaticEvalResult::with_flags(
+            StaticValue::Num(lhs / rhs),
+            depends_on_import,
+            false,
+          ))
         }
         BinaryOp::Mod => {
-          let lhs = left.as_num()?;
-          let rhs = right.as_num()?;
-          Some(StaticValue::Num(lhs % rhs))
+          let lhs = left.value.as_num()?;
+          let rhs = right.value.as_num()?;
+          Some(StaticEvalResult::with_flags(
+            StaticValue::Num(lhs % rhs),
+            depends_on_import,
+            false,
+          ))
         }
         _ => None,
       }
     }
     Expr::Object(obj) => {
       let mut map = IndexMap::new();
+      let mut depends_on_import = false;
       for prop in &obj.props {
         match prop {
           PropOrSpread::Prop(prop) => match &**prop {
@@ -561,26 +628,30 @@ fn evaluate_static(
                 PropName::Str(str) => str.value.to_string(),
                 PropName::Num(num) => num.value.to_string(),
                 PropName::Computed(computed) => {
-                  let evaluated = evaluate_static(&computed.expr, bindings)?;
-                  evaluated.to_property_key()?
+          let evaluated = evaluate_static_with_info(&computed.expr, bindings)?;
+          depends_on_import |= evaluated.depends_on_import;
+          evaluated.value.to_property_key()?
                 }
                 _ => return None,
               };
-              let value = evaluate_static(value, bindings)?;
+              let value = evaluate_static_with_info(value, bindings)?;
+              depends_on_import |= value.depends_on_import;
               map.shift_remove(&name);
-              map.insert(name, value);
+              map.insert(name, value.value);
             }
             Prop::Shorthand(ident) => {
               let name = ident.sym.to_string();
               let value = bindings.get(&to_id(ident)).cloned()?;
+              depends_on_import |= value.depends_on_import;
               map.shift_remove(&name);
-              map.insert(name, value);
+              map.insert(name, value.value);
             }
             _ => return None,
           },
           PropOrSpread::Spread(SpreadElement { expr, .. }) => {
-            let value = evaluate_static(expr, bindings)?;
-            if let StaticValue::Object(other) = value {
+            let value = evaluate_static_with_info(expr, bindings)?;
+            depends_on_import |= value.depends_on_import;
+            if let StaticValue::Object(other) = value.value {
               for (key, value) in other {
                 map.shift_remove(&key);
                 map.insert(key, value);
@@ -591,21 +662,31 @@ fn evaluate_static(
           }
         }
       }
-      Some(StaticValue::Object(map))
+      Some(StaticEvalResult::with_flags(
+        StaticValue::Object(map),
+        depends_on_import,
+        false,
+      ))
     }
     Expr::Array(array) => {
       let mut values = Vec::new();
+      let mut depends_on_import = false;
       for elem in &array.elems {
         if let Some(elem) = elem {
-          let value = evaluate_static(&elem.expr, bindings)?;
-          values.push(value);
+          let value = evaluate_static_with_info(&elem.expr, bindings)?;
+          depends_on_import |= value.depends_on_import;
+          values.push(value.value);
         }
       }
-      Some(StaticValue::Array(values))
+      Some(StaticEvalResult::with_flags(
+        StaticValue::Array(values),
+        depends_on_import,
+        false,
+      ))
     }
     Expr::Call(call) => {
       if let Some(token_value) = resolve_token_expression(expr) {
-        return Some(StaticValue::Str(token_value));
+        return Some(StaticEvalResult::new(StaticValue::Str(token_value)));
       }
       evaluate_static_call(call, bindings)
     }
@@ -614,10 +695,17 @@ fn evaluate_static(
   }
 }
 
+fn evaluate_static(
+  expr: &Expr,
+  bindings: &HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+) -> Option<StaticValue> {
+  evaluate_static_with_info(expr, bindings).map(|result| result.value)
+}
+
 fn evaluate_static_call(
   call: &CallExpr,
-  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
-) -> Option<StaticValue> {
+  bindings: &HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+) -> Option<StaticEvalResult> {
   let Callee::Expr(callee_expr) = &call.callee else {
     return None;
   };
@@ -632,11 +720,19 @@ fn evaluate_static_call(
 
   match method_name.as_str() {
     "replace" | "replaceAll" => {
-      let receiver = evaluate_static(&member.obj, bindings)?;
-      if receiver.as_str().is_some() {
-        return Some(match receiver {
-          StaticValue::Str(text) => StaticValue::Str(normalize_css_string_quotes(&text)),
-          other => other,
+      let receiver = evaluate_static_with_info(&member.obj, bindings)?;
+      if receiver.value.as_str().is_some() {
+        return Some(match receiver.value {
+          StaticValue::Str(text) => StaticEvalResult::with_flags(
+            StaticValue::Str(normalize_css_string_quotes(&text)),
+            receiver.depends_on_import || receiver.is_import_binding,
+            false,
+          ),
+          other => StaticEvalResult::with_flags(
+            other,
+            receiver.depends_on_import || receiver.is_import_binding,
+            false,
+          ),
         });
       }
     }
@@ -648,13 +744,13 @@ fn evaluate_static_call(
 
 fn member_prop_name(
   prop: &MemberProp,
-  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
+  bindings: &HashMap<(Atom, SyntaxContext), StaticEvalResult>,
 ) -> Option<String> {
   match prop {
     MemberProp::Ident(ident) => Some(ident.sym.to_string()),
     MemberProp::Computed(computed) => {
-      let value = evaluate_static(&computed.expr, bindings)?;
-      value.to_property_key()
+      let value = evaluate_static_with_info(&computed.expr, bindings)?;
+      value.value.to_property_key()
     }
     MemberProp::PrivateName(_) => None,
   }
@@ -692,14 +788,58 @@ fn normalize_css_string_quotes(value: &str) -> String {
   if in_single { value.to_string() } else { result }
 }
 
+fn replace_transparent_tokens(value: &str) -> Option<String> {
+  let target = "transparent";
+  let lower = value.to_ascii_lowercase();
+  if !lower.contains(target) {
+    return None;
+  }
+
+  let mut output = String::with_capacity(value.len());
+  let mut index = 0usize;
+  let mut changed = false;
+
+  while index < value.len() {
+    if lower[index..].starts_with(target) {
+      let prev_char = value[..index].chars().rev().next();
+      let next_index = index + target.len();
+      let next_char = if next_index < value.len() {
+        value[next_index..].chars().next()
+      } else {
+        None
+      };
+      if prev_char.map_or(true, |ch| !is_css_identifier_char(ch))
+        && next_char.map_or(true, |ch| !is_css_identifier_char(ch))
+      {
+        output.push_str("#0000");
+        index = next_index;
+        changed = true;
+        continue;
+      }
+    }
+    let ch = value[index..]
+      .chars()
+      .next()
+      .expect("css value should be valid utf8");
+    output.push(ch);
+    index += ch.len_utf8();
+  }
+
+  if changed { Some(output) } else { None }
+}
+
+fn is_css_identifier_char(ch: char) -> bool {
+  ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')
+}
+
 fn record_var_decl(
   var: &VarDecl,
   css_idents: &HashSet<(Atom, SyntaxContext)>,
   css_map_idents: &HashSet<(Atom, SyntaxContext)>,
   keyframes_idents: &HashSet<(Atom, SyntaxContext)>,
   css_options: &CssOptions,
-  bindings: &mut HashMap<(Atom, SyntaxContext), StaticValue>,
-) -> Vec<(Ident, StaticValue)> {
+  bindings: &mut HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+) -> Vec<(Ident, StaticEvalResult)> {
   let mut recorded = Vec::new();
   if var.kind != VarDeclKind::Const {
     return recorded;
@@ -707,7 +847,7 @@ fn record_var_decl(
   for decl in &var.decls {
     if let Pat::Ident(BindingIdent { id, .. }) = &decl.name {
       if let Some(init) = &decl.init {
-        let evaluated = evaluate_static(init, bindings)
+        let evaluated = evaluate_static_with_info(init, bindings)
           .or_else(|| {
             evaluate_compiled_css_expr(init, css_idents, css_map_idents, css_options, bindings)
           })
@@ -727,8 +867,8 @@ fn evaluate_compiled_css_expr(
   css_idents: &HashSet<(Atom, SyntaxContext)>,
   css_map_idents: &HashSet<(Atom, SyntaxContext)>,
   css_options: &CssOptions,
-  bindings: &HashMap<(Atom, SyntaxContext), StaticValue>,
-) -> Option<StaticValue> {
+  bindings: &HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+) -> Option<StaticEvalResult> {
   match expr {
     Expr::Call(call) => {
       let callee_ident = match &call.callee {
@@ -750,8 +890,11 @@ fn evaluate_compiled_css_expr(
         if arg.spread.is_some() {
           return None;
         }
-        let value = evaluate_static(&arg.expr, bindings)?;
-        values.push(value);
+        let value = evaluate_static_with_info(&arg.expr, bindings)?;
+        if value.depends_on_import {
+          return None;
+        }
+        values.push(value.value);
       }
 
       if is_css_map {
@@ -766,21 +909,21 @@ fn evaluate_compiled_css_expr(
             }
             result.insert(key, StaticValue::Str(class_names.join(" ")));
           }
-          return Some(StaticValue::Object(result));
+          return Some(StaticEvalResult::new(StaticValue::Object(result)));
         }
         return None;
       }
 
       if is_css {
         if values.is_empty() {
-          Some(StaticValue::Null)
+          Some(StaticEvalResult::new(StaticValue::Null))
         } else if values.len() == 1 {
-          values.into_iter().next()
+          Some(StaticEvalResult::new(values.into_iter().next().unwrap()))
         } else {
-          Some(StaticValue::Array(values))
+          Some(StaticEvalResult::new(StaticValue::Array(values)))
         }
       } else {
-        Some(StaticValue::Array(values))
+        Some(StaticEvalResult::new(StaticValue::Array(values)))
       }
     }
     Expr::TaggedTpl(tagged) => {
@@ -802,11 +945,14 @@ fn evaluate_compiled_css_expr(
             .as_str(),
         );
         if let Some(expr) = tagged.tpl.exprs.get(index) {
-          let value = evaluate_static(expr, bindings)?;
-          result.push_str(value.as_str()?);
+          let value = evaluate_static_with_info(expr, bindings)?;
+          if value.depends_on_import {
+            return None;
+          }
+          result.push_str(value.value.as_str()?);
         }
       }
-      Some(StaticValue::Str(result))
+      Some(StaticEvalResult::new(StaticValue::Str(result)))
     }
     _ => None,
   }
@@ -815,7 +961,7 @@ fn evaluate_compiled_css_expr(
 fn evaluate_keyframes_expr(
   expr: &Expr,
   keyframes_idents: &HashSet<(Atom, SyntaxContext)>,
-) -> Option<StaticValue> {
+) -> Option<StaticEvalResult> {
   if let Expr::Call(call) = expr {
     let callee_ident = match &call.callee {
       Callee::Expr(callee) => match &**callee {
@@ -828,12 +974,12 @@ fn evaluate_keyframes_expr(
       return None;
     }
     let name = format!("k{}", hash(&emit_expression(expr), 0));
-    Some(StaticValue::Str(name))
+    Some(StaticEvalResult::new(StaticValue::Str(name)))
   } else if let Expr::TaggedTpl(tagged) = expr {
     if let Expr::Ident(ident) = &*tagged.tag {
       if keyframes_idents.contains(&to_id(ident)) {
         let name = format!("k{}", hash(&emit_expression(expr), 0));
-        return Some(StaticValue::Str(name));
+        return Some(StaticEvalResult::new(StaticValue::Str(name)));
       }
     }
     None
@@ -846,8 +992,8 @@ const DEFAULT_RESOLVE_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mj
 
 #[derive(Clone, Default)]
 struct ModuleStaticResult {
-  bindings: HashMap<(Atom, SyntaxContext), StaticValue>,
-  exports: HashMap<String, StaticValue>,
+  bindings: HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+  exports: HashMap<String, StaticEvalResult>,
 }
 
 struct ModuleEvaluator {
@@ -1004,14 +1150,16 @@ fn collect_module_statics_from_ast(
                     None => named.local.sym.to_string(),
                   };
                   if let Some(value) = imported.exports.get(&export_name) {
-                    result.bindings.insert(to_id(&named.local), value.clone());
+                    let mut binding = value.clone();
+                    binding.is_import_binding = true;
+                    result.bindings.insert(to_id(&named.local), binding);
                   }
                 }
                 ImportSpecifier::Default(default_spec) => {
                   if let Some(value) = imported.exports.get("default") {
-                    result
-                      .bindings
-                      .insert(to_id(&default_spec.local), value.clone());
+                    let mut binding = value.clone();
+                    binding.is_import_binding = true;
+                    result.bindings.insert(to_id(&default_spec.local), binding);
                   }
                 }
                 ImportSpecifier::Namespace(namespace) => {
@@ -1022,12 +1170,15 @@ fn collect_module_statics_from_ast(
                     .collect();
                   entries.sort_by(|a, b| a.0.cmp(b.0));
                   let mut map = IndexMap::new();
+                  let mut depends_on_import = false;
                   for (name, value) in entries {
-                    map.insert(name.clone(), value.clone());
+                    depends_on_import |= value.depends_on_import;
+                    map.insert(name.clone(), value.value.clone());
                   }
-                  result
-                    .bindings
-                    .insert(to_id(&namespace.local), StaticValue::Object(map));
+                  result.bindings.insert(
+                    to_id(&namespace.local),
+                    StaticEvalResult::with_flags(StaticValue::Object(map), depends_on_import, true),
+                  );
                 }
               }
             }
@@ -1129,7 +1280,7 @@ fn collect_module_statics_from_ast(
         }
       }
       ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(default_expr)) => {
-        if let Some(value) = evaluate_static(&default_expr.expr, &result.bindings) {
+        if let Some(value) = evaluate_static_with_info(&default_expr.expr, &result.bindings) {
           result.exports.insert("default".into(), value);
         }
       }
@@ -1450,13 +1601,11 @@ fn static_value_to_css(property: &str, value: &StaticValue) -> Option<String> {
 fn build_keyframe_declarations(map: &IndexMap<String, StaticValue>) -> Option<String> {
   let mut declarations = Vec::new();
   for (property, value) in map {
-    let css_value = static_value_to_css(property, value)?;
-    let normalized = normalize_css_value(&css_value);
-    declarations.push(format!(
-      "{}:{}",
-      kebab_case(property),
-      normalized.output_value
-    ));
+    let (mut output_value, _hash_source, important) = static_value_to_css_value(property, value)?;
+    if important {
+      output_value.push_str("!important");
+    }
+    declarations.push(format!("{}:{}", kebab_case(property), output_value));
   }
   Some(declarations.join(";"))
 }
@@ -1658,6 +1807,9 @@ fn static_value_to_css_value(
         important = true;
         trimmed = stripped.trim_end().to_string();
       }
+      if property != "content" {
+        trimmed = normalize_css_string_quotes(&trimmed);
+      }
       let mut base_value = if property == "content" {
         normalize_content_value(&trimmed)
       } else {
@@ -1667,6 +1819,31 @@ fn static_value_to_css_value(
         base_value = base_value.split_whitespace().collect::<Vec<_>>().join(" ");
       }
       let lower_property = property.to_ascii_lowercase();
+      if matches!(
+        lower_property.as_str(),
+        "width"
+          | "height"
+          | "minwidth"
+          | "min-width"
+          | "minheight"
+          | "min-height"
+          | "maxwidth"
+          | "max-width"
+          | "maxheight"
+          | "max-height"
+      ) && base_value.trim() == "0%"
+      {
+        base_value = "0".to_string();
+      }
+      if (lower_property.contains("border")
+        || lower_property.contains("outline")
+        || lower_property.contains("shadow"))
+        && base_value.to_ascii_lowercase().contains("transparent")
+      {
+        if let Some(adjusted) = replace_transparent_tokens(&base_value) {
+          base_value = adjusted;
+        }
+      }
       if lower_property == "box-sizing" && base_value.eq_ignore_ascii_case("content-box") {
         base_value = "initial".to_string();
       }
@@ -1685,11 +1862,29 @@ fn static_value_to_css_value(
         return Some((replacement.clone(), replacement, important));
       }
 
-      let base_for_hash = base_value.clone();
+      let mut base_for_hash = base_value.clone();
       let NormalizedCssValue {
         hash_value: _,
         output_value,
       } = normalize_css_value(&base_value);
+      let mut output_value = output_value;
+      if matches!(
+        lower_property.as_str(),
+        "width"
+          | "height"
+          | "minwidth"
+          | "min-width"
+          | "minheight"
+          | "min-height"
+          | "maxwidth"
+          | "max-width"
+          | "maxheight"
+          | "max-height"
+      ) && output_value == "0%"
+      {
+        output_value = "0".to_string();
+        base_for_hash = "0".to_string();
+      }
       let hash_source = base_for_hash;
       if output_value.is_empty() {
         return None;
@@ -3215,21 +3410,26 @@ enum CompiledImportKind {
   Styled,
   CssMap,
   ClassNames,
+  Jsx,
 }
 
 struct TransformVisitor<'a> {
   options: &'a PluginOptions,
-  bindings: HashMap<(Atom, SyntaxContext), StaticValue>,
+  bindings: HashMap<(Atom, SyntaxContext), StaticEvalResult>,
+  css_runtime_artifacts: HashMap<(Atom, SyntaxContext), CssArtifacts>,
   css_imports: HashSet<(Atom, SyntaxContext)>,
   keyframes_imports: HashSet<(Atom, SyntaxContext)>,
   styled_imports: HashSet<(Atom, SyntaxContext)>,
   css_map_imports: HashSet<(Atom, SyntaxContext)>,
+  compiled_import_sources: HashMap<(Atom, SyntaxContext), String>,
   css_map_rule_groups: HashMap<String, Vec<String>>,
   keyframes_rules: HashMap<String, String>,
   compiled_import_kinds: HashMap<(Atom, SyntaxContext), CompiledImportKind>,
   retain_imports: HashSet<(Atom, SyntaxContext)>,
   collected_rules: Vec<String>,
+  metadata_rules: Vec<String>,
   seen_rules: HashSet<String>,
+  seen_metadata_rules: HashSet<String>,
   needs_runtime_ax: bool,
   needs_runtime_cc: bool,
   needs_runtime_cs: bool,
@@ -3251,27 +3451,32 @@ struct TransformVisitor<'a> {
   react_namespace_ident: Option<Ident>,
   forward_ref_ident: Option<Ident>,
   has_react_namespace_binding: bool,
+  current_binding: Option<(Atom, SyntaxContext)>,
 }
 
 impl<'a> TransformVisitor<'a> {
   fn new(
     options: &'a PluginOptions,
-    bindings: HashMap<(Atom, SyntaxContext), StaticValue>,
+    bindings: HashMap<(Atom, SyntaxContext), StaticEvalResult>,
     name_tracker: NameTracker,
   ) -> Self {
     Self {
       options,
       bindings,
+      css_runtime_artifacts: HashMap::new(),
       css_imports: HashSet::new(),
       keyframes_imports: HashSet::new(),
       styled_imports: HashSet::new(),
       css_map_imports: HashSet::new(),
+      compiled_import_sources: HashMap::new(),
       css_map_rule_groups: HashMap::new(),
       keyframes_rules: HashMap::new(),
       compiled_import_kinds: HashMap::new(),
       retain_imports: HashSet::new(),
       collected_rules: Vec::new(),
+      metadata_rules: Vec::new(),
       seen_rules: HashSet::new(),
+      seen_metadata_rules: HashSet::new(),
       needs_runtime_ax: false,
       needs_runtime_cc: false,
       needs_runtime_cs: false,
@@ -3293,13 +3498,26 @@ impl<'a> TransformVisitor<'a> {
       react_namespace_ident: None,
       forward_ref_ident: None,
       has_react_namespace_binding: false,
+      current_binding: None,
+    }
+  }
+
+  fn register_rule_internal(&mut self, css: String, include_metadata: bool) {
+    if self.seen_rules.insert(css.clone()) {
+      self.collected_rules.push(css.clone());
+    }
+
+    if include_metadata && self.seen_metadata_rules.insert(css.clone()) {
+      self.metadata_rules.push(css);
     }
   }
 
   fn register_rule(&mut self, css: String) {
-    if self.seen_rules.insert(css.clone()) {
-      self.collected_rules.push(css);
-    }
+    self.register_rule_internal(css, true);
+  }
+
+  fn register_rule_without_metadata(&mut self, css: String) {
+    self.register_rule_internal(css, false);
   }
 
   fn hoist_sheet_ident(&mut self, css: &str) -> Ident {
@@ -3514,6 +3732,21 @@ impl<'a> TransformVisitor<'a> {
       if arg.spread.is_some() {
         return None;
       }
+      let eval = evaluate_static_with_info(&arg.expr, &self.bindings)?;
+      if eval.depends_on_import || eval.is_import_binding {
+        return None;
+      }
+      values.push(eval.value);
+    }
+    Some(values)
+  }
+
+  fn evaluate_call_arguments_allow_imports(&self, call: &CallExpr) -> Option<Vec<StaticValue>> {
+    let mut values = Vec::with_capacity(call.args.len());
+    for arg in &call.args {
+      if arg.spread.is_some() {
+        return None;
+      }
       let value = evaluate_static(&arg.expr, &self.bindings)?;
       values.push(value);
     }
@@ -3531,10 +3764,10 @@ impl<'a> TransformVisitor<'a> {
         return None;
       }
       match &*arg.expr {
-        Expr::Object(object) => {
-          let artifacts = self.process_dynamic_css_object(object, props_ident)?;
-          combined.merge(artifacts);
-        }
+        Expr::Object(object) => match self.process_dynamic_css_object(object, props_ident) {
+          Some(artifacts) => combined.merge(artifacts),
+          None => return None,
+        },
         Expr::Arrow(_) | Expr::Fn(_) => {
           let artifacts = self.process_dynamic_css_function(&arg.expr, props_ident)?;
           combined.merge(artifacts);
@@ -4110,8 +4343,11 @@ impl<'a> TransformVisitor<'a> {
   }
 
   fn evaluate_static_to_css_string(&self, expr: &Expr) -> Option<String> {
-    let value = evaluate_static(expr, &self.bindings)?;
-    match value {
+    let evaluation = evaluate_static_with_info(expr, &self.bindings)?;
+    if evaluation.depends_on_import {
+      return None;
+    }
+    match evaluation.value {
       StaticValue::Str(text) => Some(text),
       StaticValue::Num(number) => {
         if number.fract() == 0.0 {
@@ -4603,7 +4839,24 @@ impl<'a> TransformVisitor<'a> {
         let variable_input = format!("{} => {}", props_ident.sym, normalized_body);
         Some((body_expr, variable_input))
       }
-      Expr::Ident(_) | Expr::Member(_) | Expr::Call(_) | Expr::Tpl(_) | Expr::Lit(_) => {
+      Expr::Ident(_)
+      | Expr::Member(_)
+      | Expr::Call(_)
+      | Expr::Tpl(_)
+      | Expr::Lit(_)
+      | Expr::Bin(_)
+      | Expr::Unary(_)
+      | Expr::Cond(_)
+      | Expr::Paren(_)
+      | Expr::TsAs(_)
+      | Expr::TsTypeAssertion(_)
+      | Expr::TsConstAssertion(_)
+      | Expr::TsNonNull(_)
+      | Expr::OptChain(_)
+      | Expr::Await(_)
+      | Expr::New(_)
+      | Expr::Array(_)
+      | Expr::Object(_) => {
         let variable_input = emit_expression(expr);
         Some((expr.clone(), variable_input))
       }
@@ -4951,6 +5204,11 @@ impl<'a> TransformVisitor<'a> {
           }
           _ => return None,
         }
+      }
+      if let Some(binding) = &self.current_binding {
+        self
+          .css_runtime_artifacts
+          .insert(binding.clone(), combined.clone());
       }
       for rule in combined.rules {
         self.register_rule(rule.css);
@@ -5447,6 +5705,9 @@ impl<'a> TransformVisitor<'a> {
     let mut css_index = None;
     let mut class_index = None;
     let mut key_expr: Option<Expr> = None;
+    let mut style_index = None;
+    let mut existing_style_attr: Option<JSXAttr> = None;
+    let mut existing_style_expr: Option<Expr> = None;
 
     for (index, attr) in element.opening.attrs.iter().enumerate() {
       let JSXAttrOrSpread::JSXAttr(attr) = attr else {
@@ -5460,6 +5721,22 @@ impl<'a> TransformVisitor<'a> {
       match name.sym.as_ref() {
         "css" => css_index = Some(index),
         "className" => class_index = Some(index),
+        "style" => {
+          style_index = Some(index);
+          existing_style_attr = Some(attr.clone());
+          if let Some(value) = &attr.value {
+            existing_style_expr = match value {
+              JSXAttrValue::JSXExprContainer(container) => match &container.expr {
+                JSXExpr::Expr(expr) => Some((**expr).clone()),
+                _ => None,
+              },
+              JSXAttrValue::Lit(Lit::Str(str)) => {
+                Some(Expr::Lit(Lit::Str(str.clone())))
+              }
+              _ => None,
+            };
+          }
+        }
         "key" => {
           if let Some(value) = &attr.value {
             key_expr = match value {
@@ -5494,30 +5771,60 @@ impl<'a> TransformVisitor<'a> {
       _ => None,
     };
 
-    let css_value = match &css_attr.value {
+    let mut css_value_for_precomputed = match &css_attr.value {
       Some(JSXAttrValue::JSXExprContainer(container)) => match &container.expr {
         JSXExpr::Expr(expr) => evaluate_static(expr, &self.bindings),
         _ => None,
       },
       Some(JSXAttrValue::Lit(Lit::Str(str))) => Some(StaticValue::Str(str.value.to_string())),
       _ => None,
-    }?;
+    };
 
-    let mut precomputed_classes = Vec::new();
-    collect_precomputed_classes(&css_value, &mut precomputed_classes);
+    let using_runtime_artifacts = css_value_for_precomputed.is_none();
+    let mut artifacts = if let Some(ref value) = css_value_for_precomputed {
+      css_artifacts_from_static_value(value, &self.css_options())?
+    } else if let Some(expr) = &original_css_expr {
+      if let Expr::Ident(ident) = expr {
+        match self
+          .css_runtime_artifacts
+          .get(&to_id(ident))
+          .cloned()
+        {
+          Some(artifacts) => artifacts,
+          None => return None,
+        }
+      } else {
+        return None;
+      }
+    } else {
+      return None;
+    };
 
-    let mut precomputed_exprs = Vec::new();
-    let mut expr_class_names = Vec::new();
-    if let Some(expr) = &original_css_expr {
-      collect_precomputed_class_exprs(
-        expr,
-        &css_value,
-        &mut expr_class_names,
-        &mut precomputed_exprs,
+    if using_runtime_artifacts && std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+      let source = original_css_expr
+        .as_ref()
+        .map(emit_expression)
+        .unwrap_or_else(|| "<unknown>".to_string());
+      eprintln!(
+        "[compiled-debug] using runtime artifacts for {} -> vars: {}, rules: {}",
+        source,
+        artifacts.runtime_variables.len(),
+        artifacts.rules.len()
       );
     }
 
-    let artifacts = css_artifacts_from_static_value(&css_value, &self.css_options())?;
+    let mut precomputed_classes = Vec::new();
+    if let Some(value) = css_value_for_precomputed.as_ref() {
+      collect_precomputed_classes(value, &mut precomputed_classes);
+    }
+
+    let mut precomputed_exprs = Vec::new();
+    let mut expr_class_names = Vec::new();
+    if let (Some(expr), Some(value)) =
+      (original_css_expr.as_ref(), css_value_for_precomputed.as_ref())
+    {
+      collect_precomputed_class_exprs(expr, value, &mut expr_class_names, &mut precomputed_exprs);
+    }
 
     let mut runtime_sheets = Vec::new();
     for rule in &artifacts.rules {
@@ -5570,6 +5877,69 @@ impl<'a> TransformVisitor<'a> {
       if !expr_class_names.contains(class_name) && seen_classes.insert(class_name.clone()) {
         unique_class_names.push(class_name.clone());
       }
+    }
+
+    let mut style_attr_opt: Option<JSXAttrOrSpread> = None;
+    if !artifacts.runtime_variables.is_empty() {
+      let mut style_props: Vec<PropOrSpread> = Vec::new();
+      if let Some(style_expr) = existing_style_expr.take() {
+        style_props.push(PropOrSpread::Spread(SpreadElement {
+          dot3_token: DUMMY_SP,
+          expr: Box::new(style_expr),
+        }));
+      }
+      let mut seen = HashSet::new();
+      for variable in &artifacts.runtime_variables {
+        if !seen.insert(variable.name.clone()) {
+          continue;
+        }
+        let mut ix_args = Vec::new();
+        ix_args.push(ExprOrSpread {
+          spread: None,
+          expr: Box::new(variable.expression.clone()),
+        });
+        if let Some(suffix) = &variable.suffix {
+          if !suffix.is_empty() {
+            ix_args.push(ExprOrSpread {
+              spread: None,
+              expr: Box::new(Expr::Lit(Lit::Str(Str::from(suffix.clone())))),
+            });
+            if let Some(prefix) = &variable.prefix {
+              if !prefix.is_empty() {
+                ix_args.push(ExprOrSpread {
+                  spread: None,
+                  expr: Box::new(Expr::Lit(Lit::Str(Str::from(prefix.clone())))),
+                });
+              }
+            }
+          }
+        }
+        let ix_call = Expr::Call(CallExpr {
+          span: DUMMY_SP,
+          ctxt: SyntaxContext::empty(),
+          callee: Callee::Expr(Box::new(Expr::Ident(self.runtime_ix_ident()))),
+          args: ix_args,
+          type_args: None,
+        });
+        style_props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+          key: PropName::Str(Str::from(variable.name.clone())),
+          value: Box::new(ix_call),
+        }))));
+      }
+      let style_object = Expr::Object(ObjectLit {
+        span: DUMMY_SP,
+        props: style_props,
+      });
+      style_attr_opt = Some(JSXAttrOrSpread::JSXAttr(JSXAttr {
+        span: DUMMY_SP,
+        name: JSXAttrName::Ident(quote_ident!("style")),
+        value: Some(JSXAttrValue::JSXExprContainer(JSXExprContainer {
+          span: DUMMY_SP,
+          expr: JSXExpr::Expr(Box::new(style_object)),
+        })),
+      }));
+    } else if let Some(attr) = existing_style_attr {
+      style_attr_opt = Some(JSXAttrOrSpread::JSXAttr(attr));
     }
 
     let mut class_entries: Vec<ExprOrSpread> = Vec::new();
@@ -5647,9 +6017,15 @@ impl<'a> TransformVisitor<'a> {
       if Some(index) == class_index {
         continue;
       }
+       if Some(index) == style_index {
+         continue;
+       }
       new_attrs.push(attr.clone());
     }
     new_attrs.push(class_attr);
+    if let Some(style_attr) = style_attr_opt {
+      new_attrs.push(style_attr);
+    }
     element.opening.attrs = new_attrs;
 
     Some((runtime_sheets, key_expr))
@@ -5892,6 +6268,9 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                   })
                   .unwrap_or_else(|| named.local.sym.as_ref());
                 let id = to_id(&named.local);
+                self
+                  .compiled_import_sources
+                  .insert(id.clone(), source.clone());
                 match imported_name {
                   "css" => {
                     self.css_imports.insert(id.clone());
@@ -5922,6 +6301,11 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                       .compiled_import_kinds
                       .insert(id, CompiledImportKind::ClassNames);
                   }
+                  "jsx" => {
+                    self
+                      .compiled_import_kinds
+                      .insert(id, CompiledImportKind::Jsx);
+                  }
                   _ => {}
                 }
               }
@@ -5932,6 +6316,9 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                   self
                     .compiled_import_kinds
                     .insert(id, CompiledImportKind::Styled);
+                  self
+                    .compiled_import_sources
+                    .insert(to_id(&spec.local), source.clone());
                 }
               }
               ImportSpecifier::Namespace(_) => {}
@@ -6097,6 +6484,11 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                 let mut map_rule_css: Vec<String> = Vec::new();
                 let mut map_rule_seen: HashSet<String> = HashSet::new();
                 let mut map_class_names: Vec<String> = Vec::new();
+                let include_metadata = self
+                  .compiled_import_sources
+                  .get(&to_id(ident))
+                  .map(|src| src != "@atlaskit/css")
+                  .unwrap_or(true);
                 for (key, value) in &object {
                   let variant_object = match value.as_object() {
                     Some(inner) => inner,
@@ -6115,14 +6507,22 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                     };
                   let mut class_names = Vec::new();
                   for rule in &artifacts.rules {
-                    self.register_rule(rule.css.clone());
+                    if include_metadata {
+                      self.register_rule(rule.css.clone());
+                    } else {
+                      self.register_rule_without_metadata(rule.css.clone());
+                    }
                     if map_rule_seen.insert(rule.css.clone()) {
                       map_rule_css.push(rule.css.clone());
                     }
                     class_names.push(rule.class_name.clone());
                   }
                   for css in &artifacts.raw_rules {
-                    self.register_rule(css.clone());
+                    if include_metadata {
+                      self.register_rule(css.clone());
+                    } else {
+                      self.register_rule_without_metadata(css.clone());
+                    }
                     if map_rule_seen.insert(css.clone()) {
                       map_rule_css.push(css.clone());
                     }
@@ -6157,7 +6557,14 @@ impl<'a> VisitMut for TransformVisitor<'a> {
   }
 
   fn visit_mut_var_declarator(&mut self, declarator: &mut VarDeclarator) {
+    let prev_binding = self.current_binding.clone();
+    if let Pat::Ident(binding) = &declarator.name {
+      self.current_binding = Some(to_id(&binding.id));
+    } else {
+      self.current_binding = None;
+    }
     declarator.visit_mut_children_with(self);
+    self.current_binding = prev_binding;
     let init_expr = match &mut declarator.init {
       Some(init) => &mut **init,
       None => return,
@@ -6207,7 +6614,7 @@ impl<'a> VisitMut for TransformVisitor<'a> {
           }
         };
         let mut combined = CssArtifacts::default();
-        if let Some(values) = self.evaluate_call_arguments(call) {
+        if let Some(values) = self.evaluate_call_arguments_allow_imports(call) {
           for value in &values {
             match css_artifacts_from_static_value(value, &self.css_options()) {
               Some(artifacts) => combined.merge(artifacts),
@@ -6571,6 +6978,8 @@ fn transform_program_with_options(
 
     let mut collected_rules = visitor.collected_rules.clone();
     collected_rules = merge_at_rule_sheets(collected_rules);
+    let mut metadata_rules = visitor.metadata_rules.clone();
+    metadata_rules = merge_at_rule_sheets(metadata_rules);
     if options.compiled_require_exclude.unwrap_or(false) {
       // Skip any runtime require hooks when exclusion is requested.
     } else if let Some(path) = options.style_sheet_path.as_ref() {
@@ -6600,11 +7009,10 @@ fn transform_program_with_options(
       .collect();
 
     if let Ok(mut guard) = LATEST_ARTIFACTS.lock() {
-      let metadata_rules = collected_rules.clone();
       guard.insert(
         std::thread::current().id(),
         StyleArtifacts {
-          style_rules: collected_rules,
+          style_rules: metadata_rules.clone(),
           metadata: json!({
               "styleRules": metadata_rules,
               "includedFiles": included_files,
@@ -6696,8 +7104,9 @@ mod tests {
   use std::time::{SystemTime, UNIX_EPOCH};
 
   use super::{
-    ExtractStylesToDirectoryOptions, ModuleEvaluator, NameTracker, PluginOptions, StyleArtifacts,
-    TransformVisitor, collect_static_bindings, css_options_from_plugin_options, program_to_source,
+    ExtractStylesToDirectoryOptions, ModuleEvaluator, NameTracker, PluginOptions, StaticValue,
+    StyleArtifacts, TransformVisitor, build_keyframe_declarations, collect_static_bindings,
+    css_options_from_plugin_options, program_to_source, static_value_to_css_value,
     take_latest_artifacts, transform_program_with_options,
   };
   use once_cell::sync::OnceCell;
@@ -7598,5 +8007,24 @@ const className = css({
     assert!(stylesheet.contains("color:red"));
 
     let _ = fs::remove_dir_all(&temp_root);
+  }
+
+  #[test]
+  fn width_zero_percent_static_value_converts_to_zero() {
+    let value = StaticValue::Str("0%".to_string());
+    let (output, _, _) =
+      static_value_to_css_value("width", &value).expect("should convert zero percent");
+    assert_eq!(output, "0");
+  }
+
+  #[test]
+  fn keyframe_width_zero_percent_converts_to_zero() {
+    use indexmap::IndexMap;
+
+    let mut map: IndexMap<String, StaticValue> = IndexMap::new();
+    map.insert("width".to_string(), StaticValue::Str("0%".to_string()));
+    let declarations =
+      build_keyframe_declarations(&map).expect("should build keyframe declarations");
+    assert_eq!(declarations, "width:0");
   }
 }

@@ -38,7 +38,10 @@ fn fixture_outputs_match() {
     let input = fs::read_to_string(&input_path).expect("failed to read fixture input");
     let expected_source =
       fs::read_to_string(&expected_path).expect("failed to read fixture output");
-    let expected = emit_program(&parse_program(&expected_path, &expected_source));
+    let expected = canonicalize_output(&emit_program(&parse_program(
+      &expected_path,
+      &expected_source,
+    )));
     let (config_json, node_env, babel_env) = load_fixture_config(&fixture_path);
     let _guard = EnvGuard::new(node_env.as_deref(), babel_env.as_deref());
     let actual = canonicalize_output(&run_transform(&input_path, &input, &config_json));

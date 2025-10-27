@@ -1,5 +1,6 @@
 import React from 'react';
 import { xcss } from '@atlaskit/primitives';
+import { jsx } from "react/jsx-runtime";
 const shimmer = null;
 const styles = xcss({
     width: '100%',

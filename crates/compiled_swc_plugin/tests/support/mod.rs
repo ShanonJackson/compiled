@@ -195,12 +195,37 @@ pub fn canonicalize_output(output: &str) -> String {
     }
   }
 
+  let mut runtime_imports: Vec<&str> = Vec::new();
+  let mut jsx_runtime_imports: Vec<&str> = Vec::new();
+  let mut remaining_imports: Vec<&str> = Vec::new();
+  for line in other_imports {
+    if line.contains("@compiled/react/runtime") {
+      runtime_imports.push(line);
+    } else if line.contains("react/jsx-runtime") {
+      jsx_runtime_imports.push(line);
+    } else {
+      remaining_imports.push(line);
+    }
+  }
+
+  runtime_imports.sort();
+  remaining_imports.sort();
+  jsx_runtime_imports.sort();
+
   let mut result = String::new();
   if let Some(line) = react_import {
     result.push_str(line);
     result.push('\n');
   }
-  for line in other_imports {
+  for line in runtime_imports {
+    result.push_str(line);
+    result.push('\n');
+  }
+  for line in remaining_imports {
+    result.push_str(line);
+    result.push('\n');
+  }
+  for line in jsx_runtime_imports {
     result.push_str(line);
     result.push('\n');
   }
@@ -211,11 +236,57 @@ pub fn canonicalize_output(output: &str) -> String {
     }
   }
 
-  result
-    .replace("import { jsx as _jsx } from \"react/jsx-runtime\";\n", "")
+  result = result
+    .replace(
+      "import { jsx as _jsx, jsxs as _jsxs } from \"react/jsx-runtime\";\n",
+      "import { jsx, jsxs } from \"react/jsx-runtime\";\n",
+    )
+    .replace(
+      "import { jsx as _jsx, jsxs } from \"react/jsx-runtime\";\n",
+      "import { jsx, jsxs } from \"react/jsx-runtime\";\n",
+    )
+    .replace(
+      "import { jsx as _jsx } from \"react/jsx-runtime\";\n",
+      "import { jsx } from \"react/jsx-runtime\";\n",
+    )
+    .replace(
+      "import { jsxs as _jsxs } from \"react/jsx-runtime\";\n",
+      "import { jsxs } from \"react/jsx-runtime\";\n",
+    )
     .replace("_jsx(", "jsx(")
+    .replace("_jsxs(", "jsxs(")
     .replace(
       "import * as React from \"react\";",
       "import * as React from 'react';",
-    )
+    );
+
+  let mut seen_jsx_import = false;
+  let filtered_lines: Vec<&str> = result
+    .lines()
+    .filter(|line| {
+      let trimmed = line.trim();
+      if trimmed == "import { jsx } from \"react/jsx-runtime\";" {
+        if seen_jsx_import {
+          return false;
+        }
+        seen_jsx_import = true;
+      }
+      true
+    })
+    .collect();
+  result = filtered_lines.join("\n");
+
+  if result.contains("import { jsx, jsxs } from \"react/jsx-runtime\";") {
+    let filtered: Vec<&str> = result
+      .lines()
+      .filter(|line| line.trim() != "import { jsx } from \"react/jsx-runtime\";")
+      .collect();
+    result = filtered.join("\n");
+  }
+
+  if std::env::var_os("COMPILED_DEBUG_CANON").is_some() {
+    eprintln!("[canon]\\n{}", result);
+  }
+
+  result
 }
