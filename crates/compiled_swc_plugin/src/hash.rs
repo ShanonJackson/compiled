@@ -99,4 +99,20 @@ mod tests {
     assert_eq!(hash("keyframes", 0), "1hp1jho");
     assert_eq!(hash("compiled", 1), "yzbs45");
   }
+
+  #[test]
+  fn hash_matches_babel_for_direct_is_selector() {
+    let group_hash = hash("undefined& >:is(div,button)flex-shrink", 0);
+    let value_hash = hash("0", 0);
+    let class_name = format!("_{}{}", &group_hash[..4], &value_hash[..4]);
+    assert_eq!(class_name, "_1puhidpf");
+  }
+
+  #[test]
+  fn hash_matches_babel_for_child_star_selector() {
+    let group_hash = hash("undefined& >*margin-top", 0);
+    let value_hash = hash("0", 0);
+    let class_name = format!("_{}{}", &group_hash[..4], &value_hash[..4]);
+    assert_eq!(class_name, "_1mizidpf");
+  }
 }

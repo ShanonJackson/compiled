@@ -23,7 +23,11 @@ fn main() -> Result<()> {
   let fixture_dir = fixtures_root.join(&args.fixture);
   ensure_fixture_exists(&fixture_dir)?;
 
-  let input_path = fixture_dir.join("in.jsx");
+  let input_path = ["in.jsx", "in.tsx"]
+    .into_iter()
+    .map(|name| fixture_dir.join(name))
+    .find(|path| path.exists())
+    .ok_or_else(|| anyhow::anyhow!("fixture input (in.jsx or in.tsx) not found"))?;
   let input = fs::read_to_string(&input_path)
     .with_context(|| format!("failed to read fixture input {}", input_path.display()))?;
 

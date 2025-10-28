@@ -1,4 +1,4 @@
-use compiled_swc_plugin::{take_latest_artifacts, transform_program_for_testing, StyleArtifacts};
+use compiled_swc_plugin::{StyleArtifacts, take_latest_artifacts, transform_program_for_testing};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};

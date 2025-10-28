@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use std::thread::ThreadId;
 use swc_atoms::Atom;
 use swc_core::common::plugin::metadata::TransformPluginMetadataContextKind;
-use swc_core::common::{DUMMY_SP, FileName, Mark, SourceMap, SyntaxContext};
+use swc_core::common::{DUMMY_SP, FileName, Mark, SourceMap, Span, SyntaxContext};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::*;
 use swc_core::ecma::codegen::{Config as CodegenConfig, Emitter, Node, text_writer::JsWriter};
@@ -3197,6 +3197,7 @@ struct ClassNamesBodyVisitor<'a, 'b> {
   style_idents: HashSet<(Atom, SyntaxContext)>,
   failed: bool,
   sheets: Vec<String>,
+  runtime_variables: Vec<RuntimeCssVariable>,
 }
 
 fn css_options_from_plugin_options(options: &PluginOptions) -> CssOptions {
@@ -3222,14 +3223,246 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
       style_idents,
       failed: false,
       sheets: Vec::new(),
+      runtime_variables: Vec::new(),
     }
   }
+
   fn strip_parens_expr(expr: &mut Expr) -> &mut Expr {
     let mut current = expr;
     while let Expr::Paren(paren) = current {
       current = &mut *paren.expr;
     }
     current
+  }
+
+  fn apply_artifacts_to_expr(
+    &mut self,
+    expr: &mut Expr,
+    span: Span,
+    ctxt: SyntaxContext,
+    mut artifacts: CssArtifacts,
+    mut precomputed_classes: Vec<String>,
+    mut precomputed_exprs: Vec<Expr>,
+    expr_class_names: Vec<String>,
+  ) {
+    let runtime_variables = std::mem::take(&mut artifacts.runtime_variables);
+    if !runtime_variables.is_empty() {
+      self.runtime_variables.extend(runtime_variables);
+    }
+
+    let runtime_class_conditions = std::mem::take(&mut artifacts.runtime_class_conditions);
+    let mut conditional_class_names: HashSet<String> = HashSet::new();
+    for condition in &runtime_class_conditions {
+      conditional_class_names.extend(condition.when_true.iter().cloned());
+      conditional_class_names.extend(condition.when_false.iter().cloned());
+    }
+
+    let mut class_names = Vec::new();
+    let mut seen_classes = HashSet::new();
+
+    for rule in &artifacts.rules {
+      self.parent.register_rule(rule.css.clone());
+      let keyframes: Vec<(String, String)> = self
+        .parent
+        .keyframes_rules
+        .iter()
+        .map(|(name, rule)| (name.clone(), rule.clone()))
+        .collect();
+      for (name, keyframe_rule) in keyframes {
+        if rule.css.contains(&name)
+          && !self
+            .sheets
+            .iter()
+            .any(|existing| existing == &keyframe_rule)
+        {
+          self.parent.register_rule(keyframe_rule.clone());
+          if !self.parent.options.extract {
+            self.sheets.push(keyframe_rule);
+          }
+        }
+      }
+      if !self.parent.options.extract {
+        self.sheets.push(rule.css.clone());
+      }
+      if !conditional_class_names.contains(&rule.class_name)
+        && seen_classes.insert(rule.class_name.clone())
+      {
+        class_names.push(rule.class_name.clone());
+      }
+    }
+
+    for css in &artifacts.raw_rules {
+      self.parent.register_rule(css.clone());
+      if !self.parent.options.extract {
+        self.sheets.push(css.clone());
+      }
+    }
+
+    for class_name in &precomputed_classes {
+      if expr_class_names.contains(class_name) {
+        continue;
+      }
+      if !conditional_class_names.contains(class_name) && seen_classes.insert(class_name.clone()) {
+        class_names.push(class_name.clone());
+      }
+    }
+
+    for condition in runtime_class_conditions {
+      let cons_expr = TransformVisitor::class_names_to_expr(&condition.when_true);
+      let alt_expr = TransformVisitor::class_names_to_expr(&condition.when_false);
+      precomputed_exprs.push(Expr::Cond(CondExpr {
+        span: DUMMY_SP,
+        test: Box::new(condition.test),
+        cons: Box::new(cons_expr),
+        alt: Box::new(alt_expr),
+      }));
+    }
+
+    self.parent.needs_runtime_ax = true;
+
+    let mut elems = Vec::new();
+    if !class_names.is_empty() {
+      elems.push(Some(ExprOrSpread {
+        spread: None,
+        expr: Box::new(Expr::Lit(Lit::Str(Str::from(class_names.join(" "))))),
+      }));
+    }
+
+    for expr_item in precomputed_exprs {
+      elems.push(Some(ExprOrSpread {
+        spread: None,
+        expr: Box::new(expr_item),
+      }));
+    }
+
+    let array = Expr::Array(ArrayLit {
+      span: DUMMY_SP,
+      elems,
+    });
+    *expr = Expr::Call(CallExpr {
+      span,
+      ctxt,
+      callee: Callee::Expr(Box::new(Expr::Ident(self.parent.runtime_class_ident()))),
+      args: vec![ExprOrSpread {
+        spread: None,
+        expr: Box::new(array),
+      }],
+      type_args: None,
+    });
+  }
+
+  fn finalize(self, expr: &mut Expr) -> Vec<String> {
+    let ClassNamesBodyVisitor {
+      parent,
+      css_idents: _,
+      style_idents,
+      failed: _,
+      sheets,
+      runtime_variables,
+    } = self;
+
+    if style_idents.is_empty() {
+      return sheets;
+    }
+
+    let mut replacer = ClassNamesStyleReplacer {
+      parent,
+      style_idents,
+      runtime_variables,
+      cached_expr: None,
+    };
+    expr.visit_mut_with(&mut replacer);
+
+    sheets
+  }
+}
+
+struct ClassNamesStyleReplacer<'a, 'b> {
+  parent: &'a mut TransformVisitor<'b>,
+  style_idents: HashSet<(Atom, SyntaxContext)>,
+  runtime_variables: Vec<RuntimeCssVariable>,
+  cached_expr: Option<Expr>,
+}
+
+impl<'a, 'b> ClassNamesStyleReplacer<'a, 'b> {
+  fn build_style_expr(&mut self) -> Expr {
+    if let Some(expr) = &self.cached_expr {
+      return expr.clone();
+    }
+
+    if self.runtime_variables.is_empty() {
+      let expr = Expr::Ident(Ident::new(
+        "undefined".into(),
+        DUMMY_SP,
+        SyntaxContext::empty(),
+      ));
+      self.cached_expr = Some(expr.clone());
+      return expr;
+    }
+
+    let ix_ident = self.parent.runtime_ix_ident();
+    let mut props = Vec::new();
+    let mut seen = HashSet::new();
+    for variable in &self.runtime_variables {
+      if !seen.insert(variable.name.clone()) {
+        continue;
+      }
+      let mut ix_args = Vec::new();
+      ix_args.push(ExprOrSpread {
+        spread: None,
+        expr: Box::new(variable.expression.clone()),
+      });
+      if let Some(suffix) = &variable.suffix {
+        if !suffix.is_empty() {
+          ix_args.push(ExprOrSpread {
+            spread: None,
+            expr: Box::new(Expr::Lit(Lit::Str(Str::from(suffix.clone())))),
+          });
+          if let Some(prefix) = &variable.prefix {
+            if !prefix.is_empty() {
+              ix_args.push(ExprOrSpread {
+                spread: None,
+                expr: Box::new(Expr::Lit(Lit::Str(Str::from(prefix.clone())))),
+              });
+            }
+          }
+        }
+      }
+      let ix_call = Expr::Call(CallExpr {
+        span: DUMMY_SP,
+        ctxt: SyntaxContext::empty(),
+        callee: Callee::Expr(Box::new(Expr::Ident(ix_ident.clone()))),
+        args: ix_args,
+        type_args: None,
+      });
+      props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+        key: PropName::Str(Str::from(variable.name.clone())),
+        value: Box::new(ix_call),
+      }))));
+    }
+
+    let expr = Expr::Object(ObjectLit {
+      span: DUMMY_SP,
+      props,
+    });
+
+    self.cached_expr = Some(expr.clone());
+    expr
+  }
+}
+
+impl<'a, 'b> VisitMut for ClassNamesStyleReplacer<'a, 'b> {
+  fn visit_mut_expr(&mut self, expr: &mut Expr) {
+    match expr {
+      Expr::Ident(ident) => {
+        if self.style_idents.contains(&to_id(ident)) {
+          *expr = self.build_style_expr();
+          return;
+        }
+      }
+      _ => {}
+    }
+    expr.visit_mut_children_with(self);
   }
 }
 
@@ -3246,146 +3479,140 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
         if let Callee::Expr(callee_expr) = &mut call.callee {
           if let Expr::Ident(ident) = &**callee_expr {
             if self.css_idents.contains(&to_id(ident)) {
-              let values = match self.parent.evaluate_call_arguments(call) {
-                Some(values) => values,
-                None => {
-                  self.failed = true;
-                  return;
-                }
-              };
-              let mut combined = CssArtifacts::default();
-              let mut precomputed_classes = Vec::new();
-              let mut precomputed_exprs = Vec::new();
-              let mut expr_class_names = Vec::new();
-              for (arg, value) in call.args.iter().zip(&values) {
-                collect_precomputed_class_exprs(
-                  &arg.expr,
-                  value,
-                  &mut expr_class_names,
-                  &mut precomputed_exprs,
-                );
-                if let StaticValue::Str(text) = value {
-                  if text.starts_with('_') {
-                    if !text.is_empty() {
-                      if !precomputed_classes.contains(text) {
-                        precomputed_classes.push(text.clone());
-                      }
-                      if !self.parent.options.extract {
-                        if let Some(rules) = self.parent.css_map_rule_groups.get(text) {
-                          for rule in rules {
-                            if !self.sheets.iter().any(|existing| existing == rule) {
-                              self.sheets.push(rule.clone());
-                            }
+              let (
+                span,
+                ctxt,
+                combined,
+                precomputed_classes,
+                precomputed_exprs,
+                expr_class_names,
+              ) = {
+                let span = call.span;
+                let ctxt = call.ctxt;
+                let mut combined = CssArtifacts::default();
+                let mut precomputed_classes = Vec::new();
+                let mut precomputed_exprs = Vec::new();
+                let mut expr_class_names = Vec::new();
+
+                if let Some(values) = self.parent.evaluate_call_arguments(call) {
+                  for (arg, value) in call.args.iter().zip(&values) {
+                    collect_precomputed_class_exprs(
+                      &arg.expr,
+                      value,
+                      &mut expr_class_names,
+                      &mut precomputed_exprs,
+                    );
+                    if let StaticValue::Str(text) = value {
+                      if text.starts_with('_') {
+                        if !text.is_empty() {
+                          if !precomputed_classes.contains(text) {
+                            precomputed_classes.push(text.clone());
                           }
-                        } else {
-                          let needle = format!(".{}", text);
-                          if let Some(rule) = self
-                            .parent
-                            .collected_rules
-                            .iter()
-                            .find(|css| css.contains(&needle))
-                          {
-                            if !self.sheets.iter().any(|existing| existing == rule) {
-                              self.sheets.push(rule.clone());
+                          if !self.parent.options.extract {
+                            if let Some(rules) = self.parent.css_map_rule_groups.get(text) {
+                              for rule in rules {
+                                if !self.sheets.iter().any(|existing| existing == rule) {
+                                  self.sheets.push(rule.clone());
+                                }
+                              }
+                            } else {
+                              let needle = format!(".{}", text);
+                              if let Some(rule) = self
+                                .parent
+                                .collected_rules
+                                .iter()
+                                .find(|css| css.contains(&needle))
+                              {
+                                if !self.sheets.iter().any(|existing| existing == rule) {
+                                  self.sheets.push(rule.clone());
+                                }
+                              }
                             }
                           }
                         }
+                        continue;
                       }
-                    }
-                    continue;
-                  }
-                  if let Some(name) = text.split_whitespace().next() {
-                    if let Some(rule) = self.parent.keyframes_rules.get(name).cloned() {
-                      self.parent.register_rule(rule.clone());
-                      if !self.parent.options.extract
-                        && !self.sheets.iter().any(|existing| existing == &rule)
-                      {
-                        eprintln!("adding keyframes rule {}", rule);
-                        self.sheets.push(rule);
+                      if let Some(name) = text.split_whitespace().next() {
+                        if let Some(rule) = self.parent.keyframes_rules.get(name).cloned() {
+                          self.parent.register_rule(rule.clone());
+                          if !self.parent.options.extract
+                            && !self.sheets.iter().any(|existing| existing == &rule)
+                          {
+                            self.sheets.push(rule);
+                          }
+                        }
                       }
+                      continue;
                     }
+                    let artifacts =
+                      match css_artifacts_from_static_value(value, &self.parent.css_options()) {
+                        Some(artifacts) => artifacts,
+                        None => {
+                          self.failed = true;
+                          return;
+                        }
+                      };
+                    combined.merge(artifacts);
                   }
-                  continue;
-                }
-                let artifacts =
-                  match css_artifacts_from_static_value(value, &self.parent.css_options()) {
-                    Some(artifacts) => artifacts,
-                    None => {
+                } else {
+                  let props_ident = Ident::new("__cmplp".into(), DUMMY_SP, SyntaxContext::empty());
+                  for arg in &call.args {
+                    if arg.spread.is_some() {
                       self.failed = true;
                       return;
                     }
-                  };
-                combined.merge(artifacts);
-              }
-              let mut class_names = Vec::new();
-              for rule in &combined.rules {
-                self.parent.register_rule(rule.css.clone());
-                class_names.push(rule.class_name.clone());
-                let keyframes: Vec<(String, String)> = self
-                  .parent
-                  .keyframes_rules
-                  .iter()
-                  .map(|(name, rule)| (name.clone(), rule.clone()))
-                  .collect();
-                for (name, keyframe_rule) in keyframes {
-                  if rule.css.contains(&name)
-                    && !self
-                      .sheets
-                      .iter()
-                      .any(|existing| existing == &keyframe_rule)
-                  {
-                    self.parent.register_rule(keyframe_rule.clone());
-                    if !self.parent.options.extract {
-                      self.sheets.push(keyframe_rule);
+                    match &*arg.expr {
+                      Expr::Object(object) => {
+                        let artifacts =
+                          match self.parent.process_dynamic_css_object(object, &props_ident) {
+                            Some(artifacts) => artifacts,
+                            None => {
+                              eprintln!("ClassNames dynamic object processing failed");
+                              self.failed = true;
+                              return;
+                            }
+                          };
+                        combined.merge(artifacts);
+                      }
+                      Expr::Arrow(_) | Expr::Fn(_) => {
+                        let artifacts =
+                          match self.parent.process_dynamic_css_function(&arg.expr, &props_ident) {
+                            Some(artifacts) => artifacts,
+                            None => {
+                              eprintln!("ClassNames dynamic function processing failed");
+                              self.failed = true;
+                              return;
+                            }
+                          };
+                        combined.merge(artifacts);
+                      }
+                      _ => {
+                        self.failed = true;
+                        return;
+                      }
                     }
                   }
                 }
-              }
-              for class_name in &precomputed_classes {
-                if !expr_class_names.contains(class_name) {
-                  class_names.push(class_name.clone());
-                }
-              }
-              for css in &combined.raw_rules {
-                self.parent.register_rule(css.clone());
-              }
-              if !self.parent.options.extract {
-                for rule in &combined.rules {
-                  self.sheets.push(rule.css.clone());
-                }
-                for css in &combined.raw_rules {
-                  self.sheets.push(css.clone());
-                }
-              }
-              self.parent.needs_runtime_ax = true;
-              let joined = class_names.join(" ");
-              let mut elems = Vec::new();
-              if !joined.is_empty() {
-                elems.push(Some(ExprOrSpread {
-                  spread: None,
-                  expr: Box::new(Expr::Lit(Lit::Str(Str::from(joined)))),
-                }));
-              }
-              for expr in precomputed_exprs {
-                elems.push(Some(ExprOrSpread {
-                  spread: None,
-                  expr: Box::new(expr),
-                }));
-              }
-              let array = Expr::Array(ArrayLit {
-                span: DUMMY_SP,
-                elems,
-              });
-              *expr = Expr::Call(CallExpr {
-                span: call.span,
-                ctxt: call.ctxt,
-                callee: Callee::Expr(Box::new(Expr::Ident(self.parent.runtime_class_ident()))),
-                args: vec![ExprOrSpread {
-                  spread: None,
-                  expr: Box::new(array),
-                }],
-                type_args: None,
-              });
+
+                (
+                  span,
+                  ctxt,
+                  combined,
+                  precomputed_classes,
+                  precomputed_exprs,
+                  expr_class_names,
+                )
+              };
+
+              self.apply_artifacts_to_expr(
+                expr,
+                span,
+                ctxt,
+                combined,
+                precomputed_classes,
+                precomputed_exprs,
+                expr_class_names,
+              );
               return;
             }
           }
@@ -3395,67 +3622,40 @@ impl<'a, 'b> VisitMut for ClassNamesBodyVisitor<'a, 'b> {
       Expr::TaggedTpl(tagged) => {
         if let Expr::Ident(ident) = &*tagged.tag {
           if self.css_idents.contains(&to_id(ident)) {
-            let css = match self.parent.evaluate_template(tagged) {
-              Some(css) => css,
-              None => {
-                self.failed = true;
-                return;
-              }
-            };
-            let artifacts = atomicize_literal(&css, &self.parent.css_options());
-            let mut class_names = Vec::new();
-            for rule in &artifacts.rules {
-              self.parent.register_rule(rule.css.clone());
-              class_names.push(rule.class_name.clone());
-            }
-            for css in &artifacts.raw_rules {
-              self.parent.register_rule(css.clone());
-            }
-            if !self.parent.options.extract {
-              for rule in &artifacts.rules {
-                self.sheets.push(rule.css.clone());
-              }
-              for css in &artifacts.raw_rules {
-                self.sheets.push(css.clone());
-              }
-            }
-            self.parent.needs_runtime_ax = true;
-            let joined = class_names.join(" ");
-            let array = Expr::Array(ArrayLit {
-              span: DUMMY_SP,
-              elems: if joined.is_empty() {
-                Vec::new()
+            let (span, ctxt, artifacts) = {
+              let span = tagged.span;
+              let ctxt = tagged.ctxt;
+              let artifacts = if let Some(css) = self.parent.evaluate_template(tagged) {
+                atomicize_literal(&css, &self.parent.css_options())
               } else {
-                vec![Some(ExprOrSpread {
-                  spread: None,
-                  expr: Box::new(Expr::Lit(Lit::Str(Str::from(joined)))),
-                })]
-              },
-            });
-            *expr = Expr::Call(CallExpr {
-              span: tagged.span,
-              ctxt: tagged.ctxt,
-              callee: Callee::Expr(Box::new(Expr::Ident(self.parent.runtime_class_ident()))),
-              args: vec![ExprOrSpread {
-                spread: None,
-                expr: Box::new(array),
-              }],
-              type_args: None,
-            });
+                let props_ident = Ident::new("__cmplp".into(), DUMMY_SP, SyntaxContext::empty());
+                match self
+                  .parent
+                  .process_dynamic_styled_template(tagged, &props_ident)
+                {
+                  Some(artifacts) => artifacts,
+                  None => {
+                    eprintln!("ClassNames dynamic template processing failed");
+                    self.failed = true;
+                    return;
+                  }
+                }
+              };
+              (span, ctxt, artifacts)
+            };
+            self.apply_artifacts_to_expr(
+              expr,
+              span,
+              ctxt,
+              artifacts,
+              Vec::new(),
+              Vec::new(),
+              Vec::new(),
+            );
             return;
           }
         }
         tagged.visit_mut_children_with(self);
-      }
-      Expr::Ident(ident) => {
-        if self.style_idents.contains(&to_id(ident)) {
-          *expr = Expr::Ident(Ident::new(
-            "undefined".into(),
-            DUMMY_SP,
-            SyntaxContext::empty(),
-          ));
-          return;
-        }
       }
       _ => expr.visit_mut_children_with(self),
     }
@@ -3952,6 +4152,12 @@ impl<'a> TransformVisitor<'a> {
             continue;
           }
 
+          if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+            eprintln!(
+              "[compiled-debug] extend_selectors selectors={:?} raw_property='{}'",
+              selectors, property
+            );
+          }
           let next_selectors = extend_selectors(selectors, &property);
           if next_selectors.is_empty() {
             continue;
@@ -4614,49 +4820,45 @@ impl<'a> TransformVisitor<'a> {
       }
 
       if let Expr::Cond(cond_expr) = expr_ref {
-        let true_value = match self.evaluate_static_to_css_string(cond_expr.cons.as_ref()) {
-          Some(value) => value,
-          None => return None,
-        };
-        let false_value = match self.evaluate_static_to_css_string(cond_expr.alt.as_ref()) {
-          Some(value) => value,
-          None => return None,
-        };
+        if let (Some(true_value), Some(false_value)) = (
+          self.evaluate_static_to_css_string(cond_expr.cons.as_ref()),
+          self.evaluate_static_to_css_string(cond_expr.alt.as_ref()),
+        ) {
+          let true_literal = format!(
+            "{}:{};",
+            property,
+            format!("{}{}{}", prefix_text, true_value, suffix_text).trim()
+          );
+          let false_literal = format!(
+            "{}:{};",
+            property,
+            format!("{}{}{}", prefix_text, false_value, suffix_text).trim()
+          );
 
-        let true_literal = format!(
-          "{}:{};",
-          property,
-          format!("{}{}{}", prefix_text, true_value, suffix_text).trim()
-        );
-        let false_literal = format!(
-          "{}:{};",
-          property,
-          format!("{}{}{}", prefix_text, false_value, suffix_text).trim()
-        );
+          let true_artifacts = css_artifacts_from_literal(&true_literal, &self.css_options())?;
+          let false_artifacts = css_artifacts_from_literal(&false_literal, &self.css_options())?;
 
-        let true_artifacts = css_artifacts_from_literal(&true_literal, &self.css_options())?;
-        let false_artifacts = css_artifacts_from_literal(&false_literal, &self.css_options())?;
+          let true_classes = true_artifacts
+            .rules
+            .iter()
+            .map(|rule| rule.class_name.clone())
+            .collect();
+          let false_classes = false_artifacts
+            .rules
+            .iter()
+            .map(|rule| rule.class_name.clone())
+            .collect();
 
-        let true_classes = true_artifacts
-          .rules
-          .iter()
-          .map(|rule| rule.class_name.clone())
-          .collect();
-        let false_classes = false_artifacts
-          .rules
-          .iter()
-          .map(|rule| rule.class_name.clone())
-          .collect();
+          runtime_class_conditions.push(RuntimeClassCondition::new(
+            (*cond_expr.test).clone(),
+            true_classes,
+            false_classes,
+          ));
 
-        runtime_class_conditions.push(RuntimeClassCondition::new(
-          (*cond_expr.test).clone(),
-          true_classes,
-          false_classes,
-        ));
-
-        artifacts.merge(true_artifacts);
-        artifacts.merge(false_artifacts);
-        continue;
+          artifacts.merge(true_artifacts);
+          artifacts.merge(false_artifacts);
+          continue;
+        }
       }
 
       if let Some(static_value) = self.evaluate_static_to_css_string(expr_ref) {
@@ -5225,8 +5427,7 @@ impl<'a> TransformVisitor<'a> {
       self.retain_imports.insert(id);
       return None;
     }
-    let sheets = std::mem::take(&mut visitor.sheets);
-    drop(visitor);
+    let sheets = visitor.finalize(&mut rewritten);
     if !self.options.extract && !sheets.is_empty() {
       let key_expr = element
                 .opening
@@ -7922,6 +8123,44 @@ const className = css({
         .style_rules
         .iter()
         .any(|rule| rule.contains("background-color:red"))
+    );
+  }
+
+  #[test]
+  fn styled_nested_is_selector_preserved() {
+    let mut options = PluginOptions::default();
+    options.extract = true;
+    options.optimize_css = Some(true);
+    let (_, artifacts) = transform_source_with_options(
+      "import { styled } from '@compiled/react';\nconst Container = styled.div({ '> :is(div, button)': { flexShrink: 0 } });\n",
+      options,
+    );
+    assert!(
+      artifacts
+        .style_rules
+        .iter()
+        .any(|rule| rule == "._1puhidpf >:is(div,button){flex-shrink:0}"),
+      "style rules: {:?}",
+      artifacts.style_rules
+    );
+  }
+
+  #[test]
+  fn styled_container_nested_is_selector_preserved() {
+    let mut options = PluginOptions::default();
+    options.extract = true;
+    options.optimize_css = Some(true);
+    let (_, artifacts) = transform_source_with_options(
+      "import { styled } from '@compiled/react';\nimport { token } from '@atlaskit/tokens';\nconst Container = styled.div({\n  display: 'flex',\n  alignItems: 'center',\n  gap: token('space.050'),\n  flexShrink: 0,\n  '> :is(div, button)': {\n    flexShrink: 0,\n  },\n});\n",
+      options,
+    );
+    assert!(
+      artifacts
+        .style_rules
+        .iter()
+        .any(|rule| rule == "._1puhidpf >:is(div,button){flex-shrink:0}"),
+      "style rules: {:?}",
+      artifacts.style_rules
     );
   }
 

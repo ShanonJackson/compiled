@@ -248,6 +248,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
         let mut segments = normalized.split('&');
         let raw_segments: Vec<&str> = raw.split('&').collect();
         let mut raw_segments_iter = raw_segments.iter();
+        let raw_contains_ampersand = raw.contains('&');
         if let Some(first) = segments.next() {
           rebuilt.push_str(first);
           let _ = raw_segments_iter.next();
@@ -255,6 +256,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
         for segment in segments {
           rebuilt.push('&');
           let raw_segment = raw_segments_iter.next().copied().unwrap_or(segment);
+          let had_leading_space = raw_segment.starts_with(char::is_whitespace);
           let trimmed = segment.trim_start();
           if trimmed.is_empty() {
             continue;
@@ -272,11 +274,15 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
               } else {
                 Cow::Borrowed(rest_trimmed)
               };
+              let rest_str = rest.as_ref();
+              if had_leading_space && !rebuilt.ends_with(' ') && !raw_contains_ampersand {
+                rebuilt.push(' ');
+              }
               rebuilt.push(combinator);
-              rebuilt.push_str(&rest);
+              rebuilt.push_str(rest_str);
             }
             Some(':') | Some('[') => {
-              if raw_segment.starts_with(char::is_whitespace) && !rebuilt.ends_with(' ') {
+              if had_leading_space && !rebuilt.ends_with(' ') {
                 rebuilt.push(' ');
               }
               rebuilt.push_str(trimmed);
@@ -287,7 +293,6 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
             }
           }
         }
-        let rebuilt = rebuilt.replace("& >", "&>");
         return rebuilt;
       } else if normalized.is_empty() {
         "&".to_string()
@@ -307,7 +312,13 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
             } else {
               Cow::Borrowed(rest_trimmed)
             };
-            format!("&{}{}", combinator, rest)
+            let rest_str = rest.as_ref();
+            let needs_space = matches!(rest_str.chars().next(), Some(':' | '[' | '*'));
+            if needs_space {
+              format!("& {}{}", combinator, rest_str)
+            } else {
+              format!("&{}{}", combinator, rest_str)
+            }
           }
           _ => format!("& {}", normalized),
         }
@@ -680,6 +691,89 @@ fn minify_whitespace(value: &str) -> String {
   output
 }
 
+fn starts_with_ignore_ascii(bytes: &[u8], needle: &[u8]) -> bool {
+  if bytes.len() < needle.len() {
+    return false;
+  }
+  bytes[..needle.len()]
+    .iter()
+    .zip(needle.iter())
+    .all(|(byte, expected)| byte.to_ascii_lowercase() == expected.to_ascii_lowercase())
+}
+
+fn ensure_var_fallback_space(value: &str) -> String {
+  let mut output = String::with_capacity(value.len());
+  let mut index = 0usize;
+  let mut changed = false;
+
+  while let Some(rel_start) = value[index..].find("var(") {
+    let start = index + rel_start;
+    output.push_str(&value[index..start]);
+    let substring = &value[start..];
+    let mut iter = substring.char_indices();
+    let mut depth = 0i32;
+    let mut comma_rel: Option<usize> = None;
+    let mut end_rel: Option<usize> = None;
+
+    while let Some((offset, ch)) = iter.next() {
+      match ch {
+        '(' => {
+          depth += 1;
+        }
+        ')' => {
+          depth -= 1;
+          if depth == 0 {
+            end_rel = Some(offset + ch.len_utf8());
+            break;
+          }
+        }
+        ',' => {
+          if depth == 1 && comma_rel.is_none() {
+            comma_rel = Some(offset);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    let Some(end_rel) = end_rel else {
+      output.push_str(substring);
+      return output;
+    };
+
+    if let Some(comma_rel) = comma_rel {
+      let after_comma_rel = {
+        let mut pos = comma_rel + 1;
+        while pos < end_rel {
+          let ch = substring[pos..].chars().next().unwrap();
+          if ch.is_whitespace() {
+            pos += ch.len_utf8();
+          } else {
+            break;
+          }
+        }
+        pos
+      };
+
+      if after_comma_rel < end_rel - 1 {
+        output.push_str(&substring[..comma_rel + 1]);
+        output.push(' ');
+        output.push_str(&substring[after_comma_rel..end_rel]);
+        changed = true;
+      } else {
+        output.push_str(&substring[..end_rel]);
+      }
+    } else {
+      output.push_str(&substring[..end_rel]);
+    }
+
+    index = start + end_rel;
+  }
+
+  output.push_str(&value[index..]);
+  if changed { output } else { value.to_string() }
+}
+
 pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -721,9 +815,7 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = normalize_calc_subtraction(&semantic);
   semantic = convert_rotate_deg_to_turn(&semantic);
   semantic = restore_calc_zero_fallbacks(&semantic);
-  // Babel computes hashes before applying whitespace minimization; keep the
-  // pre-minified value for hashing so our class names align.
-  let hash_value = semantic.clone();
+  let hash_value = ensure_var_fallback_space(&semantic);
   let output = minify_whitespace(&semantic);
 
   NormalizedCssValue {
@@ -1171,7 +1263,11 @@ fn convert_rotate_deg_to_turn(value: &str) -> String {
         }
       }
     }
-    index += 1;
+    if let Some(ch_len) = value[index..].chars().next().map(|ch| ch.len_utf8()) {
+      index += ch_len;
+    } else {
+      break;
+    }
   }
 
   if let Some(mut output) = result {
@@ -1965,12 +2061,19 @@ fn convert_color_functions_to_hex(value: &str) -> String {
     let rest = &value[index..];
     let mut consumed = 0usize;
 
-    if rest.len() >= 5 && rest[..4].eq_ignore_ascii_case("rgba") {
+    let rest_bytes = rest.as_bytes();
+    if rest_bytes.len() >= 5
+      && rest_bytes[4] == b'('
+      && starts_with_ignore_ascii(rest_bytes, b"rgba")
+    {
       if let Some(result) = convert_rgb_like_to_hex(rest, true) {
         output.push_str(&result.0);
         consumed = result.1;
       }
-    } else if rest.len() >= 4 && rest[..3].eq_ignore_ascii_case("rgb") {
+    } else if rest_bytes.len() >= 4
+      && rest_bytes[3] == b'('
+      && starts_with_ignore_ascii(rest_bytes, b"rgb")
+    {
       if let Some(result) = convert_rgb_like_to_hex(rest, false) {
         output.push_str(&result.0);
         consumed = result.1;
@@ -2729,8 +2832,8 @@ fn is_unitless_property(name: &str) -> bool {
 }
 
 fn replace_nesting(selector: &str, class_name: &str) -> String {
-  let replaced = selector.replace('&', &format!(".{}", class_name));
-  replaced
+  selector
+    .replace('&', &format!(".{}", class_name))
     .replace(" >[", ">[")
     .replace(" +[", "+[")
     .replace(" ~[", "~[")
@@ -2916,13 +3019,40 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
 
   for index in indices {
     let rule = &rules[index];
+    if std::env::var_os("COMPILED_DEBUG_CSS").is_some()
+      && rule.property == "flex-shrink"
+      && rule
+        .selectors
+        .iter()
+        .any(|selector| selector.contains(":is"))
+    {
+      eprintln!("[compiled-debug] raw selectors: {:?}", rule.selectors);
+    }
     let normalized_selectors = if rule.selectors.is_empty() {
       vec![normalize_selector(None)]
     } else {
       rule
         .selectors
         .iter()
-        .map(|selector| normalize_selector(Some(selector)))
+        .map(|selector| {
+          let mut normalized = normalize_selector(Some(selector));
+          if selector.contains(" >*") && normalized.contains(">*") {
+            normalized = normalized.replace(">*", " >*");
+          }
+          if selector.contains(" >:") && normalized.contains(">:") {
+            normalized = normalized.replace(">:", " >:");
+          }
+          if selector.contains(" >.") && normalized.contains(">.") {
+            normalized = normalized.replace(">.", " >.");
+          }
+          if selector.contains(" >+") && normalized.contains(">+") {
+            normalized = normalized.replace(">+", " >+");
+          }
+          if selector.contains(" >~") && normalized.contains(">~") {
+            normalized = normalized.replace(">~", " >~");
+          }
+          normalized
+        })
         .collect::<Vec<_>>()
     };
 
@@ -3010,7 +3140,6 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         (declarations, hash_component)
       };
       let declaration = declaration_values.join(";");
-
       let value_hash = hash(&value_for_hash, 0);
       let value_segment = &value_hash[..value_hash.len().min(4)];
 
@@ -3183,6 +3312,7 @@ mod tests {
     CssOptions, CssRuleInput, atomicize_literal, atomicize_rules, minify_at_rule_params,
     minify_selector, normalize_css_value, normalize_selector, vendor_prefixed_values,
   };
+  use crate::{extend_selectors, split_selector_list};
 
   #[test]
   fn generates_atomic_rules() {
@@ -3224,6 +3354,13 @@ mod tests {
   }
 
   #[test]
+  fn converts_milliseconds_to_seconds() {
+    let normalized = normalize_css_value("300ms");
+    assert_eq!(normalized.output_value, ".3s");
+    assert_eq!(normalized.hash_value, ".3s");
+  }
+
+  #[test]
   fn normalize_selector_preserves_combinator_space() {
     assert_eq!(normalize_selector(Some("> button")), "&>button".to_string());
     assert_eq!(normalize_selector(Some(">button")), "&>button".to_string());
@@ -3234,10 +3371,37 @@ mod tests {
       "&>button".to_string()
     );
     assert_eq!(
-      normalize_selector(Some("> :is(div,button)")),
-      "&>:is(div,button)".to_string()
+      normalize_selector(Some("& > [data-ds--text-field--input]")),
+      "&>[data-ds--text-field--input]".to_string()
     );
-    assert_eq!(normalize_selector(Some("> *")), "&>*".to_string());
+    assert_eq!(
+      normalize_selector(Some("> :is(div,button)")),
+      "& >:is(div,button)".to_string()
+    );
+    assert_eq!(normalize_selector(Some("> *")), "& >*".to_string());
+  }
+
+  #[test]
+  fn normalize_selector_normalizes_attribute_quotes() {
+    assert_eq!(
+      normalize_selector(Some("& [data-testid='example.value']")),
+      "& [data-testid=\"example.value\"]".to_string()
+    );
+  }
+
+  #[test]
+  fn split_selector_preserves_is_arguments() {
+    let segments = split_selector_list(">:is(div, button)");
+    assert_eq!(segments, vec![">:is(div, button)"]);
+    let segments_with_space = split_selector_list(" >:is(div, button)");
+    assert_eq!(segments_with_space, vec![" >:is(div, button)"]);
+  }
+
+  #[test]
+  fn extend_selectors_preserves_is_arguments() {
+    let parents = vec!["&".to_string()];
+    let extended = extend_selectors(&parents, ">:is(div, button)");
+    assert_eq!(extended, vec!["& >:is(div,button)".to_string()]);
   }
 
   #[test]

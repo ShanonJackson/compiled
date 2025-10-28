@@ -2,11 +2,11 @@ use std::fs;
 
 mod support;
 
+use serde_json::Value;
 use support::{
   EnvGuard, canonicalize_output, emit_program, fixtures_dir, load_fixture_config, parse_program,
   run_transform,
 };
-use serde_json::Value;
 
 #[test]
 fn fixture_outputs_match() {
@@ -28,13 +28,19 @@ fn fixture_outputs_match() {
         continue;
       }
     }
-    let input_path = fixture_path.join("in.jsx");
+    let input_path = ["in.jsx", "in.tsx"]
+      .into_iter()
+      .map(|name| fixture_path.join(name))
+      .find(|path| path.exists())
+      .unwrap_or_else(|| {
+        panic!(
+          "fixture {:?} is missing required input file (expected in.jsx or in.tsx)",
+          fixture_path
+        )
+      });
     let expected_path = fixture_path.join("out.js");
-    if !input_path.exists() || !expected_path.exists() {
-      panic!(
-        "fixture {:?} is missing required files (in.jsx/out.js)",
-        fixture_path
-      );
+    if !expected_path.exists() {
+      panic!("fixture {:?} is missing required file out.js", fixture_path);
     }
     let input = fs::read_to_string(&input_path).expect("failed to read fixture input");
     let expected_source =
@@ -73,7 +79,8 @@ fn fixture_outputs_match() {
       actual_rules.sort();
       expected_rules.sort();
       assert_eq!(
-        expected_rules, actual_rules,
+        expected_rules,
+        actual_rules,
         "fixture {:?} style rules did not match",
         fixture_path.file_name().unwrap()
       );
@@ -87,8 +94,7 @@ fn normalize(output: &str) -> String {
 
 fn load_expected_style_rules(path: &std::path::Path) -> Vec<String> {
   let raw = fs::read_to_string(path).expect("failed to read style-rules.json");
-  let value: Value =
-    serde_json::from_str(&raw).expect("failed to parse style-rules.json as JSON");
+  let value: Value = serde_json::from_str(&raw).expect("failed to parse style-rules.json as JSON");
   match value {
     Value::Array(items) => items
       .into_iter()

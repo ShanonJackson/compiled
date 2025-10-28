@@ -111,6 +111,7 @@ fn main() -> Result<()> {
   tokens_options.should_force_auto_fallback = true;
 
   let mut stats = Stats::default();
+  let mut error_paths: Vec<PathBuf> = Vec::new();
   let mut files: Vec<PathBuf> = WalkDir::new(&jira_root)
     .follow_links(false)
     .into_iter()
@@ -192,6 +193,7 @@ fn main() -> Result<()> {
       Err(err) => {
         stats.errors += 1;
         eprintln!("Failed to transform {}: {err:#}", file_path.display());
+        error_paths.push(file_path.clone());
       }
     }
   }
@@ -203,6 +205,31 @@ fn main() -> Result<()> {
   println!("Skipped (too large): {}", stats.skipped_large);
   println!("Errors: {}", stats.errors);
   println!("Output directory: {}", output_dir.display());
+
+  if !error_paths.is_empty() {
+    let log_path = output_dir.join("errors.log");
+    let log_contents = error_paths
+      .iter()
+      .map(|path| path.to_string_lossy())
+      .collect::<Vec<_>>()
+      .join("\n");
+
+    match fs::write(&log_path, format!("{log_contents}\n")) {
+      Ok(_) => {
+        eprintln!(
+          "{} files failed to transform. See {} for details.",
+          error_paths.len(),
+          log_path.display()
+        );
+      }
+      Err(write_err) => {
+        eprintln!(
+          "Failed to write error log at {}: {write_err}",
+          log_path.display()
+        );
+      }
+    }
+  }
 
   Ok(())
 }
