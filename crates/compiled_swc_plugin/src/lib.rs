@@ -3807,7 +3807,7 @@ impl<'a> TransformVisitor<'a> {
   }
 
   fn register_rule_without_metadata(&mut self, css: String) {
-    let include_metadata = false;
+    let include_metadata = true;
     self.register_rule_internal(css.clone(), include_metadata);
     self.register_referenced_keyframes(&css, include_metadata);
   }
@@ -5935,6 +5935,8 @@ impl<'a> TransformVisitor<'a> {
         continue;
       };
 
+      self.mark_cx_usage(expr);
+
       if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
         eprintln!("[compiled-debug] xcss evaluated value: {:?}", value);
       }
@@ -5973,6 +5975,56 @@ impl<'a> TransformVisitor<'a> {
       pending_class_names,
       transformed,
     })
+  }
+
+  fn mark_cx_usage(&mut self, expr: &Expr) {
+    match expr {
+      Expr::Ident(ident) => {
+        let id = to_id(ident);
+        if let Some(source) = self.compiled_import_sources.get(&id) {
+          if source == "@atlaskit/css" && ident.sym.as_ref() == "cx" {
+            self.retain_imports.insert(id);
+          }
+        }
+      }
+      Expr::Member(member) => {
+        self.mark_cx_usage(&member.obj);
+      }
+      Expr::Call(call) => {
+        if let Callee::Expr(callee) = &call.callee {
+          self.mark_cx_usage(callee);
+        }
+        for arg in &call.args {
+          self.mark_cx_usage(&arg.expr);
+        }
+      }
+      Expr::Cond(cond) => {
+        self.mark_cx_usage(&cond.test);
+        self.mark_cx_usage(&cond.cons);
+        self.mark_cx_usage(&cond.alt);
+      }
+      Expr::Array(array) => {
+        for elem in &array.elems {
+          if let Some(elem) = elem {
+            self.mark_cx_usage(&elem.expr);
+          }
+        }
+      }
+      Expr::Tpl(tpl) => {
+        for expr in &tpl.exprs {
+          self.mark_cx_usage(expr);
+        }
+      }
+      Expr::Seq(seq) => {
+        for expr in &seq.exprs {
+          self.mark_cx_usage(expr);
+        }
+      }
+      Expr::Paren(paren) => {
+        self.mark_cx_usage(&paren.expr);
+      }
+      _ => {}
+    }
   }
 
   fn resolve_pending_xcss(&mut self, class_names: &[String]) -> Vec<String> {
