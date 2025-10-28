@@ -53,7 +53,13 @@ fn resolve_token_call(call: &CallExpr) -> Option<String> {
   };
   let css_token = TOKEN_NAME_MAP.get(token_name.as_str())?;
 
-  let fallback = if let Some(second) = call.args.get(1) {
+  let default_fallback = TOKEN_FALLBACK_MAP
+    .get(token_name.as_str())
+    .map(|value| value.to_string());
+
+  let fallback = if let Some(value) = default_fallback {
+    Some(value)
+  } else if let Some(second) = call.args.get(1) {
     match &*second.expr {
       Expr::Lit(Lit::Str(lit)) => {
         let value = lit.value.to_string();
@@ -62,9 +68,7 @@ fn resolve_token_call(call: &CallExpr) -> Option<String> {
       _ => None,
     }
   } else {
-    TOKEN_FALLBACK_MAP
-      .get(token_name.as_str())
-      .map(|value| value.to_string())
+    None
   };
 
   let css = match fallback {
