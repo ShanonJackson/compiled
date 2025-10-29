@@ -13,6 +13,23 @@ pub struct NormalizedCssValue {
   pub output_value: String,
 }
 
+#[derive(Clone, Copy)]
+pub struct NormalizeCssValueOptions {
+  pub convert_lengths: bool,
+  pub convert_times: bool,
+  pub convert_rotations: bool,
+}
+
+impl Default for NormalizeCssValueOptions {
+  fn default() -> Self {
+    Self {
+      convert_lengths: true,
+      convert_times: true,
+      convert_rotations: true,
+    }
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CssOptions {
   #[serde(default)]
@@ -248,7 +265,6 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
         let mut segments = normalized.split('&');
         let raw_segments: Vec<&str> = raw.split('&').collect();
         let mut raw_segments_iter = raw_segments.iter();
-        let raw_contains_ampersand = raw.contains('&');
         if let Some(first) = segments.next() {
           rebuilt.push_str(first);
           let _ = raw_segments_iter.next();
@@ -275,7 +291,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
                 Cow::Borrowed(rest_trimmed)
               };
               let rest_str = rest.as_ref();
-              if had_leading_space && !rebuilt.ends_with(' ') && !raw_contains_ampersand {
+              if !rebuilt.ends_with(' ') {
                 rebuilt.push(' ');
               }
               rebuilt.push(combinator);
@@ -288,16 +304,25 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
               rebuilt.push_str(trimmed);
             }
             _ => {
-              rebuilt.push(' ');
-              rebuilt.push_str(trimmed);
+              let first_char = trimmed.chars().next();
+              if !had_leading_space && matches!(first_char, Some('.') | Some('#')) {
+                rebuilt.push_str(trimmed);
+              } else {
+                if !rebuilt.ends_with(' ') {
+                  rebuilt.push(' ');
+                }
+                rebuilt.push_str(trimmed);
+              }
             }
           }
         }
         return rebuilt;
       } else if normalized.is_empty() {
         "&".to_string()
-      } else if normalized.starts_with(':') || normalized.starts_with('[') {
+      } else if normalized.starts_with(':') {
         format!("&{}", normalized)
+      } else if normalized.starts_with('[') {
+        format!("& {}", normalized)
       } else {
         match normalized.chars().next() {
           Some('>' | '+' | '~') => {
@@ -313,12 +338,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
               Cow::Borrowed(rest_trimmed)
             };
             let rest_str = rest.as_ref();
-            let needs_space = matches!(rest_str.chars().next(), Some(':' | '[' | '*'));
-            if needs_space {
-              format!("& {}{}", combinator, rest_str)
-            } else {
-              format!("&{}{}", combinator, rest_str)
-            }
+            format!("& {}{}", combinator, rest_str)
           }
           _ => format!("& {}", normalized),
         }
@@ -649,6 +669,9 @@ fn minify_whitespace(value: &str) -> String {
 
   while let Some(ch) = chars.next() {
     if ch.is_ascii_whitespace() {
+      if output.ends_with('(') || output.is_empty() {
+        continue;
+      }
       if !last_was_space {
         output.push(' ');
         last_was_space = true;
@@ -681,6 +704,9 @@ fn minify_whitespace(value: &str) -> String {
     }
 
     last_was_space = false;
+    if ch == ')' && output.ends_with(' ') {
+      output.pop();
+    }
     output.push(ch);
   }
 
@@ -775,7 +801,20 @@ fn ensure_var_fallback_space(value: &str) -> String {
 }
 
 pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
+  normalize_css_value_with_options(value, NormalizeCssValueOptions::default())
+}
+
+pub fn normalize_css_value_with_options(
+  value: &str,
+  options: NormalizeCssValueOptions,
+) -> NormalizedCssValue {
   let trimmed = value.trim();
+  if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && trimmed.contains('→') {
+    eprintln!(
+      "[compiled-debug] normalize_css_value start value={:?}",
+      trimmed
+    );
+  }
   if trimmed.is_empty() {
     return NormalizedCssValue {
       hash_value: String::new(),
@@ -805,18 +844,30 @@ pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
   semantic = shorten_hex_literals(&semantic);
   semantic = strip_decimal_leading_zeros(&semantic);
   semantic = strip_trailing_decimal_zeros(&semantic);
-  semantic = convert_length_units(&semantic);
-  semantic = convert_time_units(&semantic);
+  if options.convert_lengths {
+    semantic = convert_length_units(&semantic);
+  }
+  if options.convert_times {
+    semantic = convert_time_units(&semantic);
+  }
   semantic = convert_color_functions_to_hex(&semantic);
   semantic = lowercase_hex_literals(&semantic);
   semantic = shorten_hex_literals(&semantic);
   semantic = strip_zero_units(&semantic);
   semantic = normalize_calc_multiplication(&semantic);
   semantic = normalize_calc_subtraction(&semantic);
-  semantic = convert_rotate_deg_to_turn(&semantic);
   semantic = restore_calc_zero_fallbacks(&semantic);
+  if options.convert_rotations {
+    semantic = convert_rotate_deg_to_turn(&semantic);
+  }
   let hash_value = ensure_var_fallback_space(&semantic);
   let output = minify_whitespace(&semantic);
+  if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && output.contains('→') {
+    eprintln!(
+      "[compiled-debug] normalize_css_value end hash={:?} output={:?}",
+      hash_value, output
+    );
+  }
 
   NormalizedCssValue {
     hash_value,
@@ -1233,22 +1284,14 @@ fn convert_rotate_deg_to_turn(value: &str) -> String {
           let number_part = trimmed[..trimmed.len() - 3].trim();
           if let Ok(angle_deg) = number_part.parse::<f64>() {
             let turns = angle_deg / 360.0;
-            if turns.abs() >= 1e-9 {
-              let mut formatted = if (turns - turns.round()).abs() <= 1e-9 {
-                format!("{:.0}", turns.round())
+            let rounded_turns = turns.round();
+            if turns.abs() >= 1e-9 && (turns - rounded_turns).abs() <= 1e-9 && rounded_turns != 0.0
+            {
+              let formatted = if rounded_turns.fract().abs() <= 1e-9 {
+                format!("{:.0}", rounded_turns)
               } else {
-                let mut value = format!("{:.6}", turns);
-                while value.contains('.') && value.ends_with('0') {
-                  value.pop();
-                }
-                if value.ends_with('.') {
-                  value.pop();
-                }
-                value
+                rounded_turns.to_string()
               };
-              if formatted == "-0" {
-                formatted = "0".to_string();
-              }
 
               let buffer = result.get_or_insert_with(|| String::with_capacity(value.len()));
               buffer.push_str(&value[last_copied..index]);
@@ -1485,8 +1528,12 @@ fn strip_trailing_decimal_zeros(value: &str) -> String {
       continue;
     }
     if inside_single_quote || inside_double_quote {
-      output.push(current as char);
-      index += 1;
+      let ch = value[index..]
+        .chars()
+        .next()
+        .expect("index should be at char boundary");
+      output.push(ch);
+      index += ch.len_utf8();
       continue;
     }
 
@@ -1558,8 +1605,12 @@ fn strip_trailing_decimal_zeros(value: &str) -> String {
       continue;
     }
 
-    output.push(current as char);
-    index += 1;
+    let ch = value[index..]
+      .chars()
+      .next()
+      .expect("index should be at char boundary");
+    output.push(ch);
+    index += ch.len_utf8();
   }
 
   output
@@ -1716,14 +1767,14 @@ fn convert_length_units(value: &str) -> String {
       let mut best: Option<String> = None;
 
       if px_value != 0 {
-        if px_value % 96 == 0 {
-          let converted_abs = px_value.abs() / 96;
+        if px_value % 16 == 0 {
+          let converted_abs = px_value.abs() / 16;
           let mut candidate = String::new();
           if px_value < 0 {
             candidate.push('-');
           }
           candidate.push_str(&converted_abs.to_string());
-          candidate.push_str("in");
+          candidate.push_str("pc");
           best = match best {
             Some(existing) => {
               if candidate.len() < existing.len() {
@@ -1736,14 +1787,14 @@ fn convert_length_units(value: &str) -> String {
           };
         }
 
-        if px_value % 16 == 0 {
-          let converted_abs = px_value.abs() / 16;
+        if px_value % 96 == 0 {
+          let converted_abs = px_value.abs() / 96;
           let mut candidate = String::new();
           if px_value < 0 {
             candidate.push('-');
           }
           candidate.push_str(&converted_abs.to_string());
-          candidate.push_str("pc");
+          candidate.push_str("in");
           best = match best {
             Some(existing) => {
               if candidate.len() < existing.len() {
@@ -1963,8 +2014,12 @@ fn strip_zero_units(value: &str) -> String {
       }
     }
 
-    output.push(current as char);
-    index += 1;
+    let ch = value[index..]
+      .chars()
+      .next()
+      .expect("index should be at char boundary");
+    output.push(ch);
+    index += ch.len_utf8();
   }
 
   output
@@ -2566,6 +2621,22 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
         },
       ];
     }
+    if trimmed.eq_ignore_ascii_case("auto") {
+      return vec![
+        PropertyExpansion {
+          name: "flex-grow".into(),
+          raw_value: "1".into(),
+        },
+        PropertyExpansion {
+          name: "flex-shrink".into(),
+          raw_value: "1".into(),
+        },
+        PropertyExpansion {
+          name: "flex-basis".into(),
+          raw_value: "auto".into(),
+        },
+      ];
+    }
     if trimmed.eq_ignore_ascii_case("none") {
       return vec![
         PropertyExpansion {
@@ -2583,6 +2654,25 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
       ];
     }
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() == 1 {
+      let grow_value = parts[0];
+      if grow_value.parse::<f64>().is_ok() {
+        return vec![
+          PropertyExpansion {
+            name: "flex-grow".into(),
+            raw_value: grow_value.to_string(),
+          },
+          PropertyExpansion {
+            name: "flex-shrink".into(),
+            raw_value: "1".into(),
+          },
+          PropertyExpansion {
+            name: "flex-basis".into(),
+            raw_value: "0%".into(),
+          },
+        ];
+      }
+    }
     if parts.len() == 3 {
       return vec![
         PropertyExpansion {
@@ -2648,13 +2738,14 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
     }
 
     let mut expansions = Vec::new();
-    if let Some(direction) = direction {
+    if let Some(direction) = direction.clone() {
       expansions.push(PropertyExpansion {
         name: "flex-direction".into(),
         raw_value: direction,
       });
     }
-    if let Some(wrap) = wrap {
+    let wrap_value = wrap.clone().or_else(|| direction.map(|_| "nowrap".to_string()));
+    if let Some(wrap) = wrap_value {
       expansions.push(PropertyExpansion {
         name: "flex-wrap".into(),
         raw_value: wrap,
@@ -2832,11 +2923,51 @@ fn is_unitless_property(name: &str) -> bool {
 }
 
 fn replace_nesting(selector: &str, class_name: &str) -> String {
-  selector
+  let replaced = selector
     .replace('&', &format!(".{}", class_name))
     .replace(" >[", ">[")
     .replace(" +[", "+[")
-    .replace(" ~[", "~[")
+    .replace(" ~[", "~[");
+  ensure_space_before_combinators(&replaced)
+}
+
+fn ensure_space_before_combinators(selector: &str) -> String {
+  if !selector.contains(['>', '+', '~']) {
+    return selector.to_string();
+  }
+
+  let mut result = String::with_capacity(selector.len() + 1);
+  let mut chars = selector.chars().peekable();
+  let mut attr_depth = 0usize;
+
+  while let Some(ch) = chars.next() {
+    match ch {
+      '[' => {
+        attr_depth += 1;
+        result.push(ch);
+      }
+      ']' => {
+        if attr_depth > 0 {
+          attr_depth -= 1;
+        }
+        result.push(ch);
+      }
+      '>' | '+' | '~' if attr_depth == 0 => {
+        let mut had_space = false;
+        while result.ends_with(' ') {
+          result.pop();
+          had_space = true;
+        }
+        if had_space {
+          result.push(' ');
+        }
+        result.push(ch);
+      }
+      _ => result.push(ch),
+    }
+  }
+
+  result
 }
 
 fn minify_selector(selector: &str) -> String {
@@ -2896,6 +3027,76 @@ fn minify_selector(selector: &str) -> String {
   }
 
   result
+}
+
+fn compress_leading_combinator(selector: &str, include_attribute: bool) -> Cow<'_, str> {
+  if !selector.contains("& >") {
+    return Cow::Borrowed(selector);
+  }
+
+  let bytes = selector.as_bytes();
+  let len = bytes.len();
+  let mut result = String::with_capacity(len);
+  let mut index = 0usize;
+  let mut changed = false;
+
+  while index < len {
+    let ch = bytes[index];
+    if ch == b'&' {
+      result.push('&');
+      index += 1;
+      let mut ws_index = index;
+      while ws_index < len && bytes[ws_index].is_ascii_whitespace() {
+        ws_index += 1;
+      }
+      if ws_index < len && bytes[ws_index] == b'>' {
+        let mut after = ws_index + 1;
+        while after < len && bytes[after].is_ascii_whitespace() {
+          after += 1;
+        }
+        let should_compress = after < len
+          && (bytes[after].is_ascii_alphabetic()
+            || (include_attribute && bytes[after] == b'['));
+        if should_compress {
+          result.push('>');
+          index = after;
+          changed = true;
+          continue;
+        } else {
+          while index < ws_index {
+            result.push(' ');
+            index += 1;
+          }
+          result.push('>');
+          index = ws_index + 1;
+          continue;
+        }
+      } else {
+        while index < ws_index {
+          result.push(' ');
+          index += 1;
+        }
+        continue;
+      }
+    } else {
+      result.push(ch as char);
+      index += 1;
+    }
+  }
+
+  if changed {
+    Cow::Owned(result)
+  } else {
+    Cow::Borrowed(selector)
+  }
+}
+
+fn compress_selector_for_hash(selector: &str) -> Cow<'_, str> {
+  compress_leading_combinator(selector, false)
+}
+
+fn compress_selector_for_output(selector: &str) -> Cow<'_, str> {
+  compress_leading_combinator(selector, true)
 }
 
 fn join_selectors(selectors: &[String], class_name: &str) -> String {
@@ -3051,7 +3252,7 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           if selector.contains(" >~") && normalized.contains(">~") {
             normalized = normalized.replace(">~", " >~");
           }
-          normalized
+          ensure_space_before_combinators(&normalized)
         })
         .collect::<Vec<_>>()
     };
@@ -3074,15 +3275,23 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
       if expansion.name == "-webkit-user-select" {
         continue;
       }
-      let mut normalized = normalize_css_value(&expansion.raw_value);
-      if expansion.name.starts_with("--") {
-        if normalized.output_value == "0" && normalized.hash_value == "0" {
+      let mut normalized = if expansion.name.starts_with("--") {
+        let mut options = NormalizeCssValueOptions::default();
+        options.convert_lengths = false;
+        options.convert_times = false;
+        options.convert_rotations = false;
+        let mut value =
+          normalize_css_value_with_options(&expansion.raw_value, options);
+        if value.output_value == "0" && value.hash_value == "0" {
           if let Some(zero_unit_value) = zero_with_alpha_unit(&expansion.raw_value) {
-            normalized.hash_value = zero_unit_value.clone();
-            normalized.output_value = zero_unit_value;
+            value.hash_value = zero_unit_value.clone();
+            value.output_value = zero_unit_value;
           }
         }
-      }
+        value
+      } else {
+        normalize_css_value(&expansion.raw_value)
+      };
       if expansion.name == "flex-basis" {
         if let Some(px_value) = convert_pc_to_px(&normalized.output_value) {
           normalized.hash_value = px_value.clone();
@@ -3145,7 +3354,9 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
 
       let mut per_selector_outputs = Vec::new();
       for (selector_index, selector) in normalized_selectors.iter().enumerate() {
-        let selectors_hash = selector.to_string();
+        let hash_selector = compress_selector_for_hash(selector);
+        let output_selector = compress_selector_for_output(selector);
+        let selectors_hash = hash_selector.as_ref();
         let group_hash = hash(
           &format!(
             "{}{}{}{}",
@@ -3175,7 +3386,8 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
             ),
             None => (full_class.clone(), full_class.clone()),
           };
-        let mut selector_output = join_selectors(&[selector.clone()], &selector_target);
+        let mut selector_output =
+          join_selectors(&[output_selector.into_owned()], &selector_target);
         selector_output = selector_output
           .replace(" >[", ">[")
           .replace(" +[", "+[")
@@ -3309,8 +3521,12 @@ pub fn atomicize_literal(css: &str, options: &CssOptions) -> CssArtifacts {
 #[cfg(test)]
 mod tests {
   use super::{
-    CssOptions, CssRuleInput, atomicize_literal, atomicize_rules, minify_at_rule_params,
-    minify_selector, normalize_css_value, normalize_selector, vendor_prefixed_values,
+    CssOptions, CssRuleInput, atomicize_literal, atomicize_rules, convert_color_functions_to_hex,
+    convert_length_units, convert_rotate_deg_to_turn, convert_time_units, lowercase_hex_literals,
+    minify_at_rule_params, minify_selector, normalize_calc_multiplication,
+    normalize_calc_subtraction, normalize_css_value, normalize_selector,
+    restore_calc_zero_fallbacks, shorten_hex_literals, strip_decimal_leading_zeros,
+    strip_trailing_decimal_zeros, strip_zero_units, vendor_prefixed_values,
   };
   use crate::{extend_selectors, split_selector_list};
 
@@ -3362,17 +3578,23 @@ mod tests {
 
   #[test]
   fn normalize_selector_preserves_combinator_space() {
-    assert_eq!(normalize_selector(Some("> button")), "&>button".to_string());
-    assert_eq!(normalize_selector(Some(">button")), "&>button".to_string());
-    assert_eq!(normalize_selector(Some(" >button")), "&>button".to_string());
+    assert_eq!(
+      normalize_selector(Some("> button")),
+      "& >button".to_string()
+    );
+    assert_eq!(normalize_selector(Some(">button")), "& >button".to_string());
+    assert_eq!(
+      normalize_selector(Some(" >button")),
+      "& >button".to_string()
+    );
     assert_eq!(minify_selector("& >button"), "&>button".to_string());
     assert_eq!(
       normalize_selector(Some("& >button")),
-      "&>button".to_string()
+      "& >button".to_string()
     );
     assert_eq!(
       normalize_selector(Some("& > [data-ds--text-field--input]")),
-      "&>[data-ds--text-field--input]".to_string()
+      "& >[data-ds--text-field--input]".to_string()
     );
     assert_eq!(
       normalize_selector(Some("> :is(div,button)")),
@@ -3408,7 +3630,7 @@ mod tests {
   fn normalize_selector_removes_unnecessary_attribute_quotes() {
     assert_eq!(
       normalize_selector(Some("[data-control=\"set-default\"] button")),
-      "&[data-control=set-default] button".to_string()
+      "& [data-control=set-default] button".to_string()
     );
   }
 
@@ -3453,6 +3675,74 @@ mod tests {
   fn preserves_decimal_in_identifiers() {
     let normalized = normalize_css_value("var(--ds-token-1.0)");
     assert_eq!(normalized.output_value, "var(--ds-token-1.0)");
+  }
+
+  #[test]
+  fn preserves_utf8_characters_in_strings() {
+    let mut semantic = "\"→\"".to_string();
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = lowercase_hex_literals(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = shorten_hex_literals(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = strip_decimal_leading_zeros(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = strip_trailing_decimal_zeros(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = convert_length_units(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = convert_time_units(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = convert_color_functions_to_hex(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = lowercase_hex_literals(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = shorten_hex_literals(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = strip_zero_units(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = normalize_calc_multiplication(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = normalize_calc_subtraction(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    semantic = restore_calc_zero_fallbacks(&semantic);
+    assert_eq!(semantic, "\"→\"");
+
+    let normalized = normalize_css_value("\"→\"");
+    assert_eq!(normalized.output_value, "\"→\"");
+    assert!(
+      normalized.hash_value.contains('→'),
+      "hash_value did not preserve character: {}",
+      normalized.hash_value
+    );
+  }
+
+  #[test]
+  fn normalize_value_preserves_utf8_content() {
+    let normalized = normalize_css_value("'🙌'");
+    assert!(
+      normalized.output_value.contains('🙌'),
+      "output_value did not contain emoji: {}",
+      normalized.output_value
+    );
+    assert!(
+      normalized.hash_value.contains('🙌'),
+      "hash_value did not contain emoji: {}",
+      normalized.hash_value
+    );
   }
 
   #[test]
@@ -3546,6 +3836,39 @@ mod tests {
   }
 
   #[test]
+  fn atomicize_rules_expands_flex_shorthand_auto() {
+    let rule = CssRuleInput {
+      selectors: vec!["&".to_string()],
+      at_rules: vec![],
+      property: "flex".into(),
+      value: "auto".into(),
+      raw_value: "auto".into(),
+      important: false,
+    };
+    let artifacts = atomicize_rules(&[rule], &CssOptions::default());
+    let css_strings: Vec<&str> = artifacts
+      .rules
+      .iter()
+      .map(|rule| rule.css.as_str())
+      .collect();
+    assert!(
+      css_strings.iter().any(|css| css.contains("flex-grow:1")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings.iter().any(|css| css.contains("flex-shrink:1")),
+      "css strings were {:?}",
+      css_strings
+    );
+    assert!(
+      css_strings.iter().any(|css| css.contains("flex-basis:auto")),
+      "css strings were {:?}",
+      css_strings
+    );
+  }
+
+  #[test]
   fn minifies_media_query_parameters() {
     assert_eq!(
       minify_at_rule_params("(min-width: 90rem)"),
@@ -3564,7 +3887,7 @@ mod tests {
     assert_eq!(normalize_selector(Some("&::before")), "&:before");
     assert_eq!(
       normalize_selector(Some("[data-attr=\"a::b\"]")),
-      "&[data-attr=\"a::b\"]"
+      "& [data-attr=\"a::b\"]"
     );
   }
 }
