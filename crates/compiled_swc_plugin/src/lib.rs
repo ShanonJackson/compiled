@@ -24,6 +24,7 @@ use std::sync::Mutex;
 use std::thread::ThreadId;
 use swc_atoms::Atom;
 use swc_core::common::plugin::metadata::TransformPluginMetadataContextKind;
+use swc_core::common::comments::{Comments, SingleThreadedComments};
 use swc_core::common::{DUMMY_SP, FileName, Mark, SourceMap, Span, SyntaxContext};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::*;
@@ -39,6 +40,30 @@ static LATEST_ARTIFACTS: Lazy<Mutex<HashMap<ThreadId, StyleArtifacts>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
 static WORKSPACE_PACKAGE_MAP: Lazy<Mutex<HashMap<PathBuf, HashMap<String, PathBuf>>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
+
+thread_local! {
+  static EMIT_COMMENTS: RefCell<Option<SingleThreadedComments>> = RefCell::new(None);
+}
+
+#[doc(hidden)]
+pub struct EmitCommentsGuard;
+
+impl EmitCommentsGuard {
+  pub fn new(comments: &SingleThreadedComments) -> Self {
+    EMIT_COMMENTS.with(|slot| {
+      *slot.borrow_mut() = Some(comments.clone());
+    });
+    Self
+  }
+}
+
+impl Drop for EmitCommentsGuard {
+  fn drop(&mut self) {
+    EMIT_COMMENTS.with(|slot| {
+      slot.borrow_mut().take();
+    });
+  }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StyleArtifacts {
@@ -293,6 +318,10 @@ fn syntax_for_filename(name: &str) -> Syntax {
 fn emit_expression(expr: &Expr) -> String {
   use std::sync::Arc;
 
+  let comments_handle = EMIT_COMMENTS.with(|slot| slot.borrow().clone());
+  let comments_ref: Option<&dyn Comments> = comments_handle
+    .as_ref()
+    .map(|store| store as &dyn Comments);
   let cm: Arc<SourceMap> = Default::default();
   let mut buf = Vec::new();
   {
@@ -302,7 +331,7 @@ fn emit_expression(expr: &Expr) -> String {
     cfg.target = EsVersion::Es2022;
     let mut emitter = Emitter {
       cfg,
-      comments: None,
+      comments: comments_ref,
       cm,
       wr: writer,
     };
@@ -5662,27 +5691,6 @@ impl<'a> TransformVisitor<'a> {
     output
   }
 
-  fn lowercase_hex_literals(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut iter = value.chars().peekable();
-    while let Some(ch) = iter.next() {
-      if ch == '#' {
-        output.push('#');
-        while let Some(&next) = iter.peek() {
-          if next.is_ascii_hexdigit() {
-            output.push(next.to_ascii_lowercase());
-            iter.next();
-          } else {
-            break;
-          }
-        }
-      } else {
-        output.push(ch);
-      }
-    }
-    output
-  }
-
   fn normalize_variable_expression(
     &self,
     expr: &Expr,
@@ -5724,7 +5732,9 @@ impl<'a> TransformVisitor<'a> {
           body_code
         };
         let trimmed_body = normalized_body.trim();
-        if trimmed_body.starts_with("(()=>") && trimmed_body.ends_with(")()") {
+        if (trimmed_body.starts_with("(()=>") || trimmed_body.starts_with("(() =>"))
+          && trimmed_body.ends_with(")()")
+        {
           if let Some(start) = trimmed_body.find('{') {
             if let Some(end) = trimmed_body.rfind('}') {
               normalized_body = trimmed_body[start..=end].to_string();
@@ -5732,12 +5742,16 @@ impl<'a> TransformVisitor<'a> {
           }
         }
         if normalized_body.contains('#') {
-          normalized_body = Self::lowercase_hex_literals(&normalized_body);
+          normalized_body = Self::uppercase_hex_literals(&normalized_body);
         }
-        normalized_body = normalized_body
-          .split_whitespace()
-          .collect::<Vec<_>>()
-          .join(" ");
+        let contains_comment = normalized_body.contains("//") || normalized_body.contains("/*");
+        let contains_newline = normalized_body.contains('\n');
+        if !contains_comment && !contains_newline {
+          normalized_body = normalized_body
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        }
         let variable_input = format!("{} => {}", props_ident.sym, normalized_body);
         if std::env::var_os("COMPILED_DEBUG_HASH").is_some()
           && (variable_input.contains("isHighlighted")

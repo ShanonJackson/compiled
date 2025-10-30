@@ -1,4 +1,6 @@
-use compiled_swc_plugin::{StyleArtifacts, take_latest_artifacts, transform_program_for_testing};
+use compiled_swc_plugin::{
+  EmitCommentsGuard, StyleArtifacts, take_latest_artifacts, transform_program_for_testing,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,20 +32,21 @@ fn syntax_for_filename(path: &Path) -> Syntax {
   }
 }
 
-pub fn parse_program(path: &Path, source: &str) -> Program {
+pub fn parse_program(path: &Path, source: &str) -> (Program, SingleThreadedComments) {
   use std::sync::Arc;
 
   let cm: Arc<SourceMap> = Default::default();
   let filename = FileName::Real(path.to_path_buf());
   let fm = cm.new_source_file(filename.into(), source.into());
+  let comments = SingleThreadedComments::default();
   let lexer = Lexer::new(
     syntax_for_filename(path),
     EsVersion::Es2022,
     StringInput::from(&*fm),
-    None,
+    Some(&comments),
   );
   let mut parser = Parser::new_from(lexer);
-  Program::Module(parser.parse_module().expect("failed to parse module"))
+  (Program::Module(parser.parse_module().expect("failed to parse module")), comments)
 }
 
 pub fn emit_program(program: &Program) -> String {
@@ -74,7 +77,8 @@ pub fn run_transform(
   config_json: &str,
 ) -> (String, StyleArtifacts) {
   GLOBALS.set(&Globals::new(), || {
-    let program = parse_program(input_path, source);
+    let (program, comments) = parse_program(input_path, source);
+    let _emitter_guard = EmitCommentsGuard::new(&comments);
     let mut transformed = transform_program_for_testing(
       program,
       input_path.to_string_lossy().to_string(),

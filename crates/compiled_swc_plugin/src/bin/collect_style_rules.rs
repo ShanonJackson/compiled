@@ -22,7 +22,7 @@ use swc_core::ecma::transforms::base::resolver;
 use swc_core::ecma::visit::VisitMutWith;
 use walkdir::WalkDir;
 
-use compiled_swc_plugin::{StyleArtifacts, take_latest_artifacts};
+use compiled_swc_plugin::{EmitCommentsGuard, StyleArtifacts, take_latest_artifacts};
 use swc_design_system_tokens::design_system_tokens_visitor;
 
 const IMPORT_MARKERS: [&str; 2] = ["@compiled/react", "@atlaskit/css"];
@@ -294,6 +294,7 @@ fn run_pipeline(
   GLOBALS.set(&Globals::new(), || {
     let fm = cm.new_source_file(FileName::Real(filename.clone()).into(), source.to_string());
     let comments = SingleThreadedComments::default();
+    let _emitter_guard = EmitCommentsGuard::new(&comments);
     let syntax = compiled_syntax(path);
     let is_typescript = matches!(syntax, Syntax::Typescript(_));
 
@@ -317,7 +318,7 @@ fn run_pipeline(
     program.visit_mut_with(&mut resolver_pass);
 
     let mut tokens_pass = design_system_tokens_visitor(
-      comments,
+      comments.clone(),
       tokens_options.should_use_auto_fallback,
       tokens_options.should_force_auto_fallback,
       tokens_options.force_auto_fallback_exemptions.clone(),

@@ -1028,8 +1028,13 @@ fn normalize_transition_value(value: &str) -> NormalizedTransitionValue {
 
     let mut ordered = Vec::new();
     ordered.extend(property_tokens);
-    ordered.extend(time_tokens);
-    ordered.extend(timing_tokens);
+    if let Some((first_time, remaining_times)) = time_tokens.split_first() {
+      ordered.push(first_time);
+      ordered.extend(timing_tokens.iter().copied());
+      ordered.extend(remaining_times.iter().copied());
+    } else {
+      ordered.extend(timing_tokens);
+    }
     ordered.extend(other_tokens);
 
     let output_segment = ordered.join(" ");
