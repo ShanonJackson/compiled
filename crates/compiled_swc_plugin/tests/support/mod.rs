@@ -46,7 +46,10 @@ pub fn parse_program(path: &Path, source: &str) -> (Program, SingleThreadedComme
     Some(&comments),
   );
   let mut parser = Parser::new_from(lexer);
-  (Program::Module(parser.parse_module().expect("failed to parse module")), comments)
+  (
+    Program::Module(parser.parse_module().expect("failed to parse module")),
+    comments,
+  )
 }
 
 pub fn emit_program(program: &Program) -> String {

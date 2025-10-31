@@ -63,6 +63,7 @@ impl Default for CssOptions {
 pub struct AtomicRule {
   pub class_name: String,
   pub css: String,
+  pub include_in_metadata: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2749,7 +2750,9 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
         raw_value: direction,
       });
     }
-    let wrap_value = wrap.clone().or_else(|| direction.map(|_| "nowrap".to_string()));
+    let wrap_value = wrap
+      .clone()
+      .or_else(|| direction.map(|_| "nowrap".to_string()));
     if let Some(wrap) = wrap_value {
       expansions.push(PropertyExpansion {
         name: "flex-wrap".into(),
@@ -2967,6 +2970,13 @@ fn ensure_space_before_combinators(selector: &str) -> String {
           result.push(' ');
         }
         result.push(ch);
+        while let Some(next) = chars.peek() {
+          if next.is_whitespace() {
+            chars.next();
+          } else {
+            break;
+          }
+        }
       }
       _ => result.push(ch),
     }
@@ -3060,8 +3070,7 @@ fn compress_leading_combinator(selector: &str, include_attribute: bool) -> Cow<'
           after += 1;
         }
         let should_compress = after < len
-          && (bytes[after].is_ascii_alphabetic()
-            || (include_attribute && bytes[after] == b'['));
+          && (bytes[after].is_ascii_alphabetic() || (include_attribute && bytes[after] == b'['));
         if should_compress {
           result.push('>');
           index = after;
@@ -3097,7 +3106,61 @@ fn compress_leading_combinator(selector: &str, include_attribute: bool) -> Cow<'
 }
 
 fn compress_selector_for_hash(selector: &str) -> Cow<'_, str> {
-  compress_leading_combinator(selector, false)
+  let compressed = compress_leading_combinator(selector, true);
+
+  let (should_expand_direct_combinators, has_ampersand) = {
+    let mut depth = 0usize;
+    let mut escape = false;
+    let mut direct_count = 0usize;
+    for ch in selector.chars() {
+      if escape {
+        escape = false;
+        continue;
+      }
+      match ch {
+        '\\' => {
+          escape = true;
+        }
+        '[' => {
+          depth += 1;
+        }
+        ']' => {
+          if depth > 0 {
+            depth -= 1;
+          }
+        }
+        '>' if depth == 0 => {
+          direct_count += 1;
+        }
+        _ => {}
+      }
+    }
+    (direct_count > 1, selector.contains("&"))
+  };
+
+  if !has_ampersand {
+    return compressed;
+  }
+
+  if !should_expand_direct_combinators {
+    if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
+      eprintln!(
+        "[compiled-hash] selector='{}' expand-direct=false",
+        selector
+      );
+    }
+    return compressed;
+  }
+
+  if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
+    eprintln!("[compiled-hash] selector='{}' expand-direct=true", selector);
+  }
+
+  let mut owned = compressed.into_owned();
+  owned = owned.replace("&>", "& >");
+  owned = owned.replace("&+", "& +");
+  owned = owned.replace("&~", "& ~");
+  Cow::Owned(owned)
 }
 
 fn compress_selector_for_output(selector: &str) -> Cow<'_, str> {
@@ -3285,8 +3348,7 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         options.convert_lengths = false;
         options.convert_times = false;
         options.convert_rotations = false;
-        let mut value =
-          normalize_css_value_with_options(&expansion.raw_value, options);
+        let mut value = normalize_css_value_with_options(&expansion.raw_value, options);
         if value.output_value == "0" && value.hash_value == "0" {
           if let Some(zero_unit_value) = zero_with_alpha_unit(&expansion.raw_value) {
             value.hash_value = zero_unit_value.clone();
@@ -3313,6 +3375,9 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         if let Some(adjusted_output) = normalize_background_position(&normalized.output_value) {
           normalized.output_value = adjusted_output;
         }
+      } else if expansion.name == "content" && normalized.output_value == "''" {
+        normalized.hash_value = "\"\"".to_string();
+        normalized.output_value = "\"\"".to_string();
       }
 
       let hash_value = normalized.hash_value.clone();
@@ -3383,6 +3448,12 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           );
         }
         let full_class = format!("_{}{}", group, value_segment);
+        if debug_hash {
+          eprintln!(
+            "[compiled-hash] full-class='{}' selector='{}' property='{}'",
+            full_class, selector, expansion.name
+          );
+        }
         let (class_name, selector_target) =
           match options.class_name_compression_map.get(&full_class[1..]) {
             Some(compressed) => (
@@ -3391,8 +3462,7 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
             ),
             None => (full_class.clone(), full_class.clone()),
           };
-        let mut selector_output =
-          join_selectors(&[output_selector.into_owned()], &selector_target);
+        let mut selector_output = join_selectors(&[output_selector.into_owned()], &selector_target);
         selector_output = selector_output
           .replace(" >[", ">[")
           .replace(" +[", "+[")
@@ -3414,6 +3484,9 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         }
         if options.increase_specificity {
           selector_output = apply_increase_specificity(&selector_output);
+        }
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && selector_output.contains("aria") {
+          eprintln!("[compiled-debug] selector_output={} declaration={}", selector_output, declaration);
         }
         let css = wrap_at_rules(
           format!("{}{{{}}}", selector_output.clone(), declaration.clone()),
@@ -3440,20 +3513,44 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           format!("{}{{{}}}", combined_selector, declaration.clone()),
           &rule.at_rules,
         );
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && combined_selector.contains("aria") {
+          eprintln!("[compiled-debug] combined_css={}", combined_css);
+        }
+        artifacts.push_raw(combined_css.clone());
+        artifacts.push_raw(combined_css.clone());
         for (class_name, _, _) in per_selector_outputs {
           artifacts.push(AtomicRule {
             class_name,
             css: combined_css.clone(),
+            include_in_metadata: true,
           });
+        }
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && combined_css.contains("aria") {
+          eprintln!("[compiled-debug] artifacts.rules len after combined: {}", artifacts.rules.len());
         }
       } else {
         for (class_name, _, css) in per_selector_outputs {
-          artifacts.push(AtomicRule { class_name, css });
+          artifacts.push_raw(css.clone());
+          artifacts.push(AtomicRule {
+            class_name,
+            css,
+            include_in_metadata: true,
+          });
         }
       }
     }
   }
 
+  if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+    let rule_list: Vec<_> = artifacts
+      .rules
+      .iter()
+      .map(|rule| rule.css.clone())
+      .collect();
+    let raw_list = artifacts.raw_rules.clone();
+    eprintln!("[compiled-debug] atomicize_rules rules: {:?}", rule_list);
+    eprintln!("[compiled-debug] atomicize_rules raw_rules: {:?}", raw_list);
+  }
   artifacts
 }
 
@@ -3517,6 +3614,7 @@ pub fn atomicize_literal(css: &str, options: &CssOptions) -> CssArtifacts {
       artifacts.push(AtomicRule {
         class_name,
         css: css_rule,
+        include_in_metadata: true,
       });
     }
   }
@@ -3867,7 +3965,9 @@ mod tests {
       css_strings
     );
     assert!(
-      css_strings.iter().any(|css| css.contains("flex-basis:auto")),
+      css_strings
+        .iter()
+        .any(|css| css.contains("flex-basis:auto")),
       "css strings were {:?}",
       css_strings
     );

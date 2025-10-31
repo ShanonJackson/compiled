@@ -4,10 +4,10 @@ pub mod hash;
 mod token_utils;
 
 use crate::css::{
-  AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizedCssValue, RuntimeClassCondition,
-  RuntimeCssVariable, add_unit_if_needed, atomicize_literal, atomicize_rules,
-  minify_at_rule_params, normalize_css_value, normalize_css_value_with_options,
-  normalize_selector, wrap_at_rules, NormalizeCssValueOptions,
+  AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizeCssValueOptions,
+  NormalizedCssValue, RuntimeClassCondition, RuntimeCssVariable, add_unit_if_needed,
+  atomicize_literal, atomicize_rules, minify_at_rule_params, normalize_css_value,
+  normalize_css_value_with_options, normalize_selector, wrap_at_rules,
 };
 use crate::hash::hash;
 use crate::token_utils::resolve_token_expression;
@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::ThreadId;
 use swc_atoms::Atom;
-use swc_core::common::plugin::metadata::TransformPluginMetadataContextKind;
 use swc_core::common::comments::{Comments, SingleThreadedComments};
+use swc_core::common::plugin::metadata::TransformPluginMetadataContextKind;
 use swc_core::common::{DUMMY_SP, FileName, Mark, SourceMap, Span, SyntaxContext};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::*;
@@ -319,9 +319,8 @@ fn emit_expression(expr: &Expr) -> String {
   use std::sync::Arc;
 
   let comments_handle = EMIT_COMMENTS.with(|slot| slot.borrow().clone());
-  let comments_ref: Option<&dyn Comments> = comments_handle
-    .as_ref()
-    .map(|store| store as &dyn Comments);
+  let comments_ref: Option<&dyn Comments> =
+    comments_handle.as_ref().map(|store| store as &dyn Comments);
   let cm: Arc<SourceMap> = Default::default();
   let mut buf = Vec::new();
   {
@@ -2458,7 +2457,7 @@ fn extend_selectors(current: &[String], raw: &str) -> Vec<String> {
     return parents;
   }
 
-    for parent in &parents {
+  for parent in &parents {
     for segment in &segments {
       let normalized = normalize_selector(Some(segment));
       if std::env::var_os("COMPILED_DEBUG_CSS").is_some()
@@ -3317,7 +3316,10 @@ fn css_artifacts_from_static_object(
     options.flatten_multiple_selectors,
   ) {
     if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
-      eprintln!("[compiled-debug] flatten_css_object failed for selectors {:?}", base_selectors);
+      eprintln!(
+        "[compiled-debug] flatten_css_object failed for selectors {:?}",
+        base_selectors
+      );
     }
     return None;
   }
@@ -3656,9 +3658,14 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
 
     let mut class_names = Vec::new();
     let mut seen_classes = HashSet::new();
+    let mut seen_sheet_rules: HashSet<String> = HashSet::new();
 
     for rule in &artifacts.rules {
-      self.parent.register_rule(rule.css.clone());
+      if rule.include_in_metadata {
+        self.parent.register_rule(rule.css.clone());
+      } else {
+        self.parent.register_rule_without_metadata(rule.css.clone());
+      }
       let keyframes: Vec<(String, String)> = self
         .parent
         .keyframes_rules
@@ -3666,20 +3673,20 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
         .map(|(name, rule)| (name.clone(), rule.clone()))
         .collect();
       for (name, keyframe_rule) in keyframes {
-        if rule.css.contains(&name)
-          && !self
-            .sheets
-            .iter()
-            .any(|existing| existing == &keyframe_rule)
-        {
+        if rule.css.contains(&name) {
           self.parent.register_rule(keyframe_rule.clone());
           if !self.parent.options.extract {
-            self.sheets.push(keyframe_rule);
+            if seen_sheet_rules.insert(keyframe_rule.clone()) {
+              self.sheets.push(keyframe_rule);
+            }
           }
         }
       }
       if !self.parent.options.extract {
-        self.sheets.push(rule.css.clone());
+        let css_rule = rule.css.clone();
+        if seen_sheet_rules.insert(css_rule.clone()) {
+          self.sheets.push(css_rule);
+        }
       }
       if !conditional_class_names.contains(&rule.class_name)
         && seen_classes.insert(rule.class_name.clone())
@@ -3689,9 +3696,12 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
     }
 
     for css in &artifacts.raw_rules {
-      self.parent.register_rule(css.clone());
+      let sheet = css.clone();
+      self.parent.register_rule(sheet.clone());
       if !self.parent.options.extract {
-        self.sheets.push(css.clone());
+        if seen_sheet_rules.insert(sheet.clone()) {
+          self.sheets.push(sheet);
+        }
       }
     }
 
@@ -4174,7 +4184,10 @@ impl<'a> TransformVisitor<'a> {
       self.collected_rules.push(css.clone());
     }
 
-    if include_metadata && self.seen_metadata_rules.insert(css.clone()) {
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && css.contains("aria-current") {
+      eprintln!("[compiled-debug] register_rule include_metadata={} css={}", include_metadata, css);
+    }
+if include_metadata && self.seen_metadata_rules.insert(css.clone()) {
       self.metadata_rules.push(css);
     }
   }
@@ -4198,14 +4211,30 @@ impl<'a> TransformVisitor<'a> {
 
   fn register_rule(&mut self, css: String) {
     let include_metadata = true;
+    if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && css.contains("aria") {
+      eprintln!("[compiled-debug] register_rule css={} include_metadata={}", css, include_metadata);
+    }
     self.register_rule_internal(css.clone(), include_metadata);
     self.register_referenced_keyframes(&css, include_metadata);
   }
 
   fn register_rule_without_metadata(&mut self, css: String) {
-    let include_metadata = true;
+    let include_metadata = false;
     self.register_rule_internal(css.clone(), include_metadata);
     self.register_referenced_keyframes(&css, include_metadata);
+  }
+
+  fn register_artifacts_for_metadata(&mut self, artifacts: &CssArtifacts) {
+    for rule in &artifacts.rules {
+      if rule.include_in_metadata {
+        self.register_rule(rule.css.clone());
+      } else {
+        self.register_rule_without_metadata(rule.css.clone());
+      }
+    }
+    for css in &artifacts.raw_rules {
+      self.register_rule(css.clone());
+    }
   }
 
   fn hoist_sheet_ident(&mut self, css: &str) -> Ident {
@@ -4513,6 +4542,7 @@ impl<'a> TransformVisitor<'a> {
           at_rules,
           options,
         )?;
+        self.register_artifacts_for_metadata(&nested);
         artifacts.merge(nested);
         continue;
       }
@@ -4548,6 +4578,7 @@ impl<'a> TransformVisitor<'a> {
               &next_at_rules,
               options,
             )?;
+            self.register_artifacts_for_metadata(&nested);
             artifacts.merge(nested);
             continue;
           }
@@ -4569,6 +4600,7 @@ impl<'a> TransformVisitor<'a> {
             at_rules,
             options,
           )?;
+          self.register_artifacts_for_metadata(&nested);
           artifacts.merge(nested);
           continue;
         }
@@ -4593,6 +4625,7 @@ impl<'a> TransformVisitor<'a> {
               &next_at_rules,
               options,
             )?;
+            self.register_artifacts_for_metadata(&nested);
             artifacts.merge(nested);
           }
           continue;
@@ -4819,6 +4852,7 @@ impl<'a> TransformVisitor<'a> {
                 .iter()
                 .map(|rule| rule.class_name.clone())
                 .collect::<Vec<_>>();
+              self.register_artifacts_for_metadata(&branch_artifacts);
               artifacts.merge(branch_artifacts);
               classes
             }
@@ -4857,6 +4891,7 @@ impl<'a> TransformVisitor<'a> {
                 .iter()
                 .map(|rule| rule.class_name.clone())
                 .collect::<Vec<_>>();
+              self.register_artifacts_for_metadata(&branch_artifacts);
               artifacts.merge(branch_artifacts);
               classes
             }
@@ -4911,6 +4946,24 @@ impl<'a> TransformVisitor<'a> {
     for condition in runtime_class_conditions {
       artifacts.push_class_condition(condition);
     }
+    if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+      let has_aria_rule = artifacts.rules.iter().any(|rule| rule.css.contains("aria"));
+      let has_aria_raw = artifacts.raw_rules.iter().any(|css| css.contains("aria"));
+      eprintln!(
+        "[compiled-debug] process_dynamic returning rules={} raw_rules={} has_aria_rule={} has_aria_raw={}",
+        artifacts.rules.len(),
+        artifacts.raw_rules.len(),
+        has_aria_rule,
+        has_aria_raw
+      );
+      for rule in &artifacts.rules {
+        eprintln!("[compiled-debug] process_dynamic rule {}", rule.css);
+      }
+      for css in &artifacts.raw_rules {
+        eprintln!("[compiled-debug] process_dynamic raw_rule {}", css);
+      }
+    }
+    self.register_artifacts_for_metadata(&artifacts);
     Some(artifacts)
   }
 
@@ -5034,21 +5087,23 @@ impl<'a> TransformVisitor<'a> {
         let mut when_true = Vec::new();
         let mut when_false = Vec::new();
 
-        if let Some(css_text) = self.evaluate_static_to_css_string(cond_expr.cons.as_ref()) {
-          if !css_text.trim().is_empty() {
-            let artifacts = self.css_artifacts_from_css_text(&css_text, options)?;
-            when_true.extend(artifacts.rules.iter().map(|rule| rule.class_name.clone()));
-            combined.merge(artifacts);
-          }
+      if let Some(css_text) = self.evaluate_static_to_css_string(cond_expr.cons.as_ref()) {
+        if !css_text.trim().is_empty() {
+          let artifacts = self.css_artifacts_from_css_text(&css_text, options)?;
+          when_true.extend(artifacts.rules.iter().map(|rule| rule.class_name.clone()));
+          self.register_artifacts_for_metadata(&artifacts);
+          combined.merge(artifacts);
         }
+      }
 
-        if let Some(css_text) = self.evaluate_static_to_css_string(cond_expr.alt.as_ref()) {
-          if !css_text.trim().is_empty() {
-            let artifacts = self.css_artifacts_from_css_text(&css_text, options)?;
-            when_false.extend(artifacts.rules.iter().map(|rule| rule.class_name.clone()));
-            combined.merge(artifacts);
-          }
+      if let Some(css_text) = self.evaluate_static_to_css_string(cond_expr.alt.as_ref()) {
+        if !css_text.trim().is_empty() {
+          let artifacts = self.css_artifacts_from_css_text(&css_text, options)?;
+          when_false.extend(artifacts.rules.iter().map(|rule| rule.class_name.clone()));
+          self.register_artifacts_for_metadata(&artifacts);
+          combined.merge(artifacts);
         }
+      }
 
         if when_true.is_empty() && when_false.is_empty() {
           return Some(combined);
@@ -6114,12 +6169,37 @@ impl<'a> TransformVisitor<'a> {
       let mut combined = CssArtifacts::default();
       for value in &values {
         let artifacts = css_artifacts_from_static_value(value, &self.css_options())?;
+        self.register_artifacts_for_metadata(&artifacts);
         combined.merge(artifacts);
       }
+      if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+        eprintln!(
+          "[compiled-debug] handle_css_call rules len {}",
+          combined.rules.len()
+        );
+        eprintln!(
+          "[compiled-debug] handle_css_call contains aria? {}",
+          combined.rules.iter().any(|rule| rule.css.contains("aria"))
+        );
+        for rule in &combined.rules {
+          eprintln!("[compiled-debug] handle_css_call rule list {}", rule.css);
+        }
+      }
       for rule in combined.rules {
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+          eprintln!("[compiled-debug] handle_css_call rule {}", rule.css);
+        }
         self.register_rule(rule.css);
       }
+      if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+        for entry in combined.raw_rules.iter().filter(|css| css.contains("aria")) {
+          eprintln!("[compiled-debug] handle_css_call raw_rule candidate {}", entry);
+        }
+      }
       for css in combined.raw_rules {
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+          eprintln!("[compiled-debug] handle_css_call raw_rule {}", css);
+        }
         self.register_rule(css);
       }
       Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP })))
@@ -6143,10 +6223,28 @@ impl<'a> TransformVisitor<'a> {
           .css_runtime_artifacts
           .insert(binding.clone(), combined.clone());
       }
+      if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+        eprintln!("[compiled-debug] handle_css_call rules len {}", combined.rules.len());
+        eprintln!("[compiled-debug] handle_css_call contains aria? {}", combined.rules.iter().any(|rule| rule.css.contains("aria")));
+        for rule in combined.rules.iter().take(10) {
+          eprintln!("[compiled-debug] handle_css_call rule preview {}", rule.css);
+        }
+      }
       for rule in combined.rules {
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+          eprintln!("[compiled-debug] handle_css_call rule {}", rule.css);
+        }
         self.register_rule(rule.css);
       }
+      if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+        for entry in combined.raw_rules.iter().filter(|css| css.contains("aria")) {
+          eprintln!("[compiled-debug] handle_css_call raw_rule candidate {}", entry);
+        }
+      }
       for css in combined.raw_rules {
+        if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+          eprintln!("[compiled-debug] handle_css_call raw_rule {}", css);
+        }
         self.register_rule(css);
       }
       Some(Expr::Lit(Lit::Null(Null { span: DUMMY_SP })))
@@ -6547,9 +6645,9 @@ impl<'a> TransformVisitor<'a> {
 
         let mut class_names = Vec::new();
         for rule in &artifacts.rules {
-          if !self.options.extract {
-            self.register_rule(rule.css.clone());
-          }
+        if !self.options.extract {
+          self.register_rule(rule.css.clone());
+        }
           class_names.push(rule.class_name.clone());
           if !runtime_sheets.iter().any(|existing| existing == &rule.css) {
             runtime_sheets.push(rule.css.clone());
@@ -7018,11 +7116,20 @@ impl<'a> TransformVisitor<'a> {
         }
       }
     }
+    if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+      eprintln!(
+        "[compiled-debug] classes_for_rules={:?} precomputed_classes={:?}",
+        classes_for_rules, precomputed_classes
+      );
+    }
 
     let mut precomputed_exprs = Vec::new();
     let mut expr_class_names = Vec::new();
     for class_name in &classes_for_rules {
       self.non_xcss_class_names.insert(class_name.clone());
+    }
+    if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+      eprintln!("[compiled-debug] classes_for_rules={:?}", classes_for_rules);
     }
     if let (Some(expr), Some(value)) = (
       original_css_expr.as_ref(),
@@ -7034,11 +7141,16 @@ impl<'a> TransformVisitor<'a> {
     let mut runtime_sheets = Vec::new();
     for rule in &artifacts.rules {
       self.register_rule(rule.css.clone());
-      runtime_sheets.push(rule.css.clone());
+      if !runtime_sheets.contains(&rule.css) {
+        runtime_sheets.push(rule.css.clone());
+      }
     }
     for css in &artifacts.raw_rules {
-      self.register_rule(css.clone());
-      runtime_sheets.push(css.clone());
+      let sheet = css.clone();
+      self.register_rule(sheet.clone());
+      if !runtime_sheets.contains(&sheet) {
+        runtime_sheets.push(sheet);
+      }
     }
 
     for class_name in &classes_for_rules {
@@ -7701,11 +7813,6 @@ impl<'a> VisitMut for TransformVisitor<'a> {
             if let Some(value) = self.evaluate_call_argument(&call) {
               if let StaticValue::Object(object) = value {
                 let mut props = Vec::new();
-                let include_metadata = self
-                  .compiled_import_sources
-                  .get(&to_id(ident))
-                  .map(|src| src != "@atlaskit/css")
-                  .unwrap_or(true);
                 for (key, value) in &object {
                   let variant_object = match value.as_object() {
                     Some(inner) => inner,
@@ -7724,19 +7831,11 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                     };
                   let mut class_names = Vec::new();
                   for rule in &artifacts.rules {
-                    if include_metadata {
-                      self.register_rule(rule.css.clone());
-                    } else {
-                      self.register_rule_without_metadata(rule.css.clone());
-                    }
+                    self.register_rule(rule.css.clone());
                     class_names.push(rule.class_name.clone());
                   }
                   for css in &artifacts.raw_rules {
-                    if include_metadata {
-                      self.register_rule(css.clone());
-                    } else {
-                      self.register_rule_without_metadata(css.clone());
-                    }
+                    self.register_rule(css.clone());
                   }
                   self.cache_css_map_artifacts(Some(to_id(ident)), &artifacts);
                   drop(artifacts);
@@ -7864,11 +7963,16 @@ impl<'a> VisitMut for TransformVisitor<'a> {
     let mut runtime_sheets = Vec::new();
     for rule in &artifacts.rules {
       self.register_rule(rule.css.clone());
-      runtime_sheets.push(rule.css.clone());
+      if !runtime_sheets.contains(&rule.css) {
+        runtime_sheets.push(rule.css.clone());
+      }
     }
     for css in &artifacts.raw_rules {
-      self.register_rule(css.clone());
-      runtime_sheets.push(css.clone());
+      let sheet = css.clone();
+      self.register_rule(sheet.clone());
+      if !runtime_sheets.contains(&sheet) {
+        runtime_sheets.push(sheet);
+      }
     }
     let runtime_sheets = self.finalize_runtime_sheets(runtime_sheets);
     self.needs_react_namespace = true;
@@ -8201,6 +8305,13 @@ fn transform_program_with_options(
     let mut metadata_rules = visitor.metadata_rules.clone();
     metadata_rules = merge_at_rule_sheets(metadata_rules);
     if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+      let aria_count = metadata_rules.iter().filter(|rule| rule.contains("aria")).count();
+      eprintln!("[compiled-debug] metadata_rules pre-filter aria count = {}", aria_count);
+      for rule in metadata_rules.iter().take(10) {
+        eprintln!("[compiled-debug] metadata_rule {}", rule);
+      }
+    }
+    if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
       eprintln!(
         "[compiled-debug] collected_rules({}) count={}",
         file_path.display(),
@@ -8213,6 +8324,11 @@ fn transform_program_with_options(
       );
     }
     if options.extract && !visitor.xcss_class_names.is_empty() {
+      if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
+        eprintln!("[compiled-debug] xcss_class_names set {:?}", visitor.xcss_class_names);
+        eprintln!("[compiled-debug] non_xcss_class_names set {:?}", visitor.non_xcss_class_names);
+      }
+
       use std::collections::HashSet;
       if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
         eprintln!(
@@ -9186,6 +9302,62 @@ const className = css({
       .find(|rule| rule.contains("div") && rule.contains("span"))
       .expect("expected combined selector rule");
     assert!(combined.contains(","));
+  }
+
+
+  #[test]
+  fn styled_uses_combined_selector_rules_from_css_binding() {
+    let (_, artifacts) = transform_source(
+      r#"
+import { styled, css } from '@compiled/react';
+const themedUnderline = { '&::after': { content: "''", position: 'absolute' } };
+const tabStyles = css({
+  display: 'flex',
+  '&[aria-expanded="true"], &[aria-current="page"]': {
+    display: 'flex',
+    ...themedUnderline,
+  },
+});
+export const Component = styled.div(tabStyles);
+"#,
+    );
+    assert!(
+      artifacts
+        .style_rules
+        .iter()
+        .any(|rule| rule.contains("aria-current")),
+      "expected styled binding to expose combined selector rule, got {:?}",
+      artifacts.style_rules
+    );
+  }
+  #[test]
+  fn css_spread_nested_selectors_emit_combined_rule() {
+    let (_, artifacts) = transform_source(
+      r#"
+import { css } from '@compiled/react';
+const themedUnderline = { '&::after': { content: "''", position: 'absolute' } };
+const styles = css({
+  display: 'flex',
+  '&[aria-expanded="true"], &[aria-current="page"]': {
+    display: 'flex',
+    alignItems: 'center',
+    color: 'red',
+    ...themedUnderline,
+  },
+  ':hover': ({ isDraggable }) => ({
+    '--display-icon-before': isDraggable ? 'none' : 'flex',
+  }),
+});
+"#,
+    );
+    assert!(
+      artifacts
+        .style_rules
+        .iter()
+        .any(|rule| rule.contains("aria-current") && rule.contains(",")),
+      "expected combined selector style rule, got {:?}",
+      artifacts.style_rules
+    );
   }
 
   #[test]
