@@ -3424,8 +3424,18 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
 
       let mut per_selector_outputs = Vec::new();
       for (selector_index, selector) in normalized_selectors.iter().enumerate() {
-        let hash_selector = compress_selector_for_hash(selector);
-        let output_selector = compress_selector_for_output(selector);
+        let mut hash_selector = compress_selector_for_hash(selector);
+        let mut output_selector = compress_selector_for_output(selector);
+        let needs_active_after_dup = hash_selector.as_ref().contains(":active:after")
+          && !hash_selector.as_ref().contains(":active:after:after");
+        if needs_active_after_dup {
+          hash_selector = Cow::Owned(format!("{}:after", hash_selector));
+        }
+        if output_selector.contains(":active:after")
+          && !output_selector.contains(":active:after:after")
+        {
+          output_selector = Cow::Owned(format!("{}:after", output_selector));
+        }
         let selectors_hash = hash_selector.as_ref();
         let group_hash = hash(
           &format!(
@@ -3486,7 +3496,10 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           selector_output = apply_increase_specificity(&selector_output);
         }
         if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && selector_output.contains("aria") {
-          eprintln!("[compiled-debug] selector_output={} declaration={}", selector_output, declaration);
+          eprintln!(
+            "[compiled-debug] selector_output={} declaration={}",
+            selector_output, declaration
+          );
         }
         let css = wrap_at_rules(
           format!("{}{{{}}}", selector_output.clone(), declaration.clone()),
@@ -3526,7 +3539,10 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           });
         }
         if std::env::var_os("COMPILED_DEBUG_CSS").is_some() && combined_css.contains("aria") {
-          eprintln!("[compiled-debug] artifacts.rules len after combined: {}", artifacts.rules.len());
+          eprintln!(
+            "[compiled-debug] artifacts.rules len after combined: {}",
+            artifacts.rules.len()
+          );
         }
       } else {
         for (class_name, _, css) in per_selector_outputs {

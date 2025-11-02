@@ -269,7 +269,10 @@ fn process_file(
   }
 
   let mut style_rules = artifacts.style_rules;
-  let aria_count = style_rules.iter().filter(|rule| rule.contains("aria")).count();
+  let aria_count = style_rules
+    .iter()
+    .filter(|rule| rule.contains("aria"))
+    .count();
   if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
     eprintln!("[compiled-debug] style_rules aria count = {}", aria_count);
     for rule in style_rules.iter().take(10) {
