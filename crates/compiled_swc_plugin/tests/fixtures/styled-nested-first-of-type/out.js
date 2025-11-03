@@ -13,7 +13,7 @@ export const CellContentWrapper = forwardRef(({ as: C = "div", style: __cmpls, .
         ref: __cmplr,
         className: ax([
             "c_CellContentWrapper",
-            "_1p3lidpf _13ce4ls2",
+            "_1p3lidpf _13ce1ytt",
             __cmplp.className
         ])
     });

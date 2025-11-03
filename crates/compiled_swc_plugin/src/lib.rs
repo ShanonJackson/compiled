@@ -747,7 +747,7 @@ fn evaluate_static_with_info(
                     append_static_value(existing, StaticValue::Spread(Box::new(value))),
                   );
                 } else {
-                  map.insert(key, value);
+                  map.insert(key, StaticValue::Spread(Box::new(value)));
                 }
               }
             } else {
@@ -1098,7 +1098,10 @@ fn record_var_decl(
                         css_map_static_objects
                           .entry(to_id(id))
                           .or_insert_with(|| map.clone());
-                        if let Some(artifacts) = css_artifacts_from_static_object(map, css_options)
+                        let mut map_options = css_options.clone();
+                        map_options.preserve_leading_combinator_space = true;
+                        if let Some(artifacts) =
+                          css_artifacts_from_static_object(map, &map_options)
                         {
                           let mut map_rule_css: Vec<String> = Vec::new();
                           let mut seen = HashSet::new();
@@ -1180,8 +1183,10 @@ fn evaluate_compiled_css_expr(
         let value = values.into_iter().next()?.into_unwrapped();
         if let StaticValue::Object(map) = value {
           let mut result = IndexMap::new();
+          let mut map_options = css_options.clone();
+          map_options.preserve_leading_combinator_space = true;
           for (key, variant_value) in map {
-            let artifacts = css_artifacts_from_static_value(&variant_value, css_options)?;
+            let artifacts = css_artifacts_from_static_value(&variant_value, &map_options)?;
             let mut class_names = Vec::new();
             for rule in artifacts.rules {
               class_names.push(rule.class_name);
@@ -2618,6 +2623,7 @@ fn push_css_value(
   out: &mut Vec<CssRuleInput>,
   flatten_selectors: bool,
   from_spread: bool,
+  force_active_after_duplicate: bool,
 ) -> bool {
   let property = if key.starts_with("--") {
     key.to_string()
@@ -2646,6 +2652,7 @@ fn push_css_value(
       value,
       raw_value,
       important,
+      duplicate_active_after: false,
     });
     return true;
   }
@@ -2665,7 +2672,22 @@ fn push_css_value(
 
   let adjusted_selectors: Vec<String> = selectors
     .iter()
-    .map(|selector| adjust_selector(selector, from_spread))
+    .map(|selector| {
+      let mut should_duplicate = from_spread || force_active_after_duplicate;
+      if should_duplicate && selector.contains(":active:after") && !force_active_after_duplicate {
+        let base_exists = out.iter().any(|existing| {
+          existing.property == property
+            && existing
+              .selectors
+              .iter()
+              .any(|sel| sel.contains(":after") && !sel.contains(":active"))
+        });
+        if !base_exists {
+          should_duplicate = false;
+        }
+      }
+      adjust_selector(selector, should_duplicate)
+    })
     .collect();
 
   if std::env::var_os("COMPILED_DEBUG_CSS").is_some() {
@@ -2706,6 +2728,15 @@ fn push_css_value(
     );
   }
 
+  let duplicate_active_after_flag =
+    selectors
+      .iter()
+      .zip(adjusted_selectors.iter())
+      .any(|(orig, adjusted)| {
+        (orig.ends_with(":after") && adjusted.ends_with(":after:after"))
+          || (orig.ends_with(":before") && adjusted.ends_with(":before:before"))
+      });
+
   if !flatten_selectors && adjusted_selectors.len() > 1 {
     out.push(CssRuleInput {
       selectors: adjusted_selectors.clone(),
@@ -2714,6 +2745,7 @@ fn push_css_value(
       value,
       raw_value,
       important,
+      duplicate_active_after: duplicate_active_after_flag,
     });
     return true;
   }
@@ -2726,6 +2758,7 @@ fn push_css_value(
       value: value.clone(),
       raw_value: raw_value.clone(),
       important,
+      duplicate_active_after: duplicate_active_after_flag,
     });
   }
 
@@ -3177,6 +3210,7 @@ fn parse_css_literal_block(
             out,
             flatten_selectors,
             false,
+            false,
           ) {
             return false;
           }
@@ -3392,16 +3426,20 @@ fn flatten_css_object(
 
     if let Some(array) = value.as_array() {
       let has_spread = array.iter().any(|item| item.is_from_spread());
+      let has_non_spread = array
+        .iter()
+        .any(|item| !matches!(item.unwrap_spread(), StaticValue::Spread(_)));
       for (index, item) in array.iter().enumerate() {
         let duplicate_for_entry = if has_spread {
           if index == 0 {
-            true
+            has_non_spread
           } else {
             value_is_from_spread
           }
         } else {
           item.is_from_spread() || value_is_from_spread
         };
+        let force_duplicate = has_non_spread && index == 0;
         if !push_css_value(
           key,
           item,
@@ -3410,6 +3448,7 @@ fn flatten_css_object(
           out,
           flatten_selectors,
           duplicate_for_entry,
+          force_duplicate,
         ) {
           return false;
         }
@@ -3432,6 +3471,7 @@ fn flatten_css_object(
       out,
       flatten_selectors,
       value_is_from_spread,
+      false,
     ) {
       return false;
     }
@@ -3758,6 +3798,7 @@ fn css_options_from_plugin_options(options: &PluginOptions) -> CssOptions {
     sort_at_rules: options.sort_at_rules.unwrap_or(true),
     sort_shorthand: options.sort_shorthand.unwrap_or(true),
     flatten_multiple_selectors: options.flatten_multiple_selectors.unwrap_or(false),
+    preserve_leading_combinator_space: false,
   }
 }
 
@@ -5276,6 +5317,7 @@ impl<'a> TransformVisitor<'a> {
       },
       raw_value,
       important,
+      duplicate_active_after: false,
     });
   }
 
@@ -7252,8 +7294,10 @@ impl<'a> TransformVisitor<'a> {
     self.collect_css_map_idents(expr, &mut idents);
     for ident in &idents {
       if let Some(map) = self.css_map_static_objects.remove(ident) {
+        let mut map_options = self.css_options();
+        map_options.preserve_leading_combinator_space = true;
         for value in map.values() {
-          if let Some(artifacts) = css_artifacts_from_static_value(value, &self.css_options()) {
+          if let Some(artifacts) = css_artifacts_from_static_value(value, &map_options) {
             self.cache_css_map_artifacts(Some(ident.clone()), &artifacts);
           }
         }
@@ -8232,13 +8276,17 @@ impl<'a> VisitMut for TransformVisitor<'a> {
                       return;
                     }
                   };
-                  let artifacts =
-                    match css_artifacts_from_static_object(variant_object, &self.css_options()) {
-                      Some(artifacts) => artifacts,
-                      None => {
-                        self.retain_imports.insert(to_id(ident));
-                        return;
-                      }
+                  let mut map_options = self.css_options();
+                  map_options.preserve_leading_combinator_space = true;
+                  let artifacts = match css_artifacts_from_static_object(
+                    variant_object,
+                    &map_options,
+                  ) {
+                    Some(artifacts) => artifacts,
+                    None => {
+                      self.retain_imports.insert(to_id(ident));
+                      return;
+                    }
                     };
                   let mut class_names = Vec::new();
                   for rule in &artifacts.rules {

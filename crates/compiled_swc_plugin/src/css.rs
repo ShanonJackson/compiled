@@ -44,6 +44,8 @@ pub struct CssOptions {
   pub sort_shorthand: bool,
   #[serde(default)]
   pub flatten_multiple_selectors: bool,
+  #[serde(default)]
+  pub preserve_leading_combinator_space: bool,
 }
 
 impl Default for CssOptions {
@@ -55,6 +57,7 @@ impl Default for CssOptions {
       sort_at_rules: true,
       sort_shorthand: true,
       flatten_multiple_selectors: false,
+      preserve_leading_combinator_space: false,
     }
   }
 }
@@ -173,6 +176,8 @@ pub struct CssRuleInput {
   pub value: String,
   pub raw_value: String,
   pub important: bool,
+  #[serde(default)]
+  pub duplicate_active_after: bool,
 }
 
 fn normalize_pseudo_element_colons(selector: &str) -> Cow<'_, str> {
@@ -305,8 +310,7 @@ pub fn normalize_selector(selector: Option<&str>) -> String {
               rebuilt.push_str(trimmed);
             }
             _ => {
-              let first_char = trimmed.chars().next();
-              if !had_leading_space && matches!(first_char, Some('.') | Some('#')) {
+              if !had_leading_space {
                 rebuilt.push_str(trimmed);
               } else {
                 if !rebuilt.ends_with(' ') {
@@ -769,7 +773,7 @@ fn ensure_var_fallback_space(value: &str) -> String {
     };
 
     if let Some(comma_rel) = comma_rel {
-      let after_comma_rel = {
+      let had_whitespace = {
         let mut pos = comma_rel + 1;
         while pos < end_rel {
           let ch = substring[pos..].chars().next().unwrap();
@@ -779,17 +783,21 @@ fn ensure_var_fallback_space(value: &str) -> String {
             break;
           }
         }
-        pos
+        let had_ws = pos > comma_rel + 1;
+        (had_ws, pos)
       };
 
-      if after_comma_rel < end_rel - 1 {
-        output.push_str(&substring[..comma_rel + 1]);
+      let (had_ws, after_comma_rel) = had_whitespace;
+      output.push_str(&substring[..comma_rel + 1]);
+      if had_ws {
         output.push(' ');
-        output.push_str(&substring[after_comma_rel..end_rel]);
+        if after_comma_rel > comma_rel + 2 {
+          changed = true;
+        }
+      } else if after_comma_rel > comma_rel + 1 {
         changed = true;
-      } else {
-        output.push_str(&substring[..end_rel]);
       }
+      output.push_str(&substring[after_comma_rel..end_rel]);
     } else {
       output.push_str(&substring[..end_rel]);
     }
@@ -799,6 +807,127 @@ fn ensure_var_fallback_space(value: &str) -> String {
 
   output.push_str(&value[index..]);
   if changed { output } else { value.to_string() }
+}
+
+fn extract_var_fallbacks(input: &str) -> Vec<Option<(bool, String)>> {
+  let mut fallbacks = Vec::new();
+  let mut index = 0usize;
+  while let Some(rel_start) = input[index..].find("var(") {
+    let start = index + rel_start;
+    let substring = &input[start..];
+    let mut iter = substring.char_indices();
+    let mut depth = 0i32;
+    let mut comma_rel: Option<usize> = None;
+    let mut end_rel: Option<usize> = None;
+
+    while let Some((offset, ch)) = iter.next() {
+      match ch {
+        '(' => depth += 1,
+        ')' => {
+          depth -= 1;
+          if depth == 0 {
+            end_rel = Some(offset + ch.len_utf8());
+            break;
+          }
+        }
+        ',' => {
+          if depth == 1 && comma_rel.is_none() {
+            comma_rel = Some(offset);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    if let Some(end_rel) = end_rel {
+      if let Some(comma_rel) = comma_rel {
+        let fallback_start = start + comma_rel + 1;
+        let fallback_end = start + end_rel - 1;
+        let mut pos = fallback_start;
+        while pos < fallback_end {
+          let ch = input[pos..].chars().next().unwrap();
+          if ch.is_whitespace() {
+            pos += ch.len_utf8();
+          } else {
+            break;
+          }
+        }
+        let had_ws = pos > fallback_start;
+        fallbacks.push(Some((had_ws, input[pos..fallback_end].to_string())));
+      } else {
+        fallbacks.push(None);
+      }
+      index = start + end_rel;
+    } else {
+      break;
+    }
+  }
+  fallbacks
+}
+
+fn restore_var_fallbacks(original: &str, converted: &str) -> String {
+  let originals = extract_var_fallbacks(original);
+  if originals.is_empty() {
+    return converted.to_string();
+  }
+  let mut original_iter = originals.into_iter();
+  let mut output = String::with_capacity(converted.len());
+  let mut index = 0usize;
+
+  while let Some(rel_start) = converted[index..].find("var(") {
+    let start = index + rel_start;
+    output.push_str(&converted[index..start]);
+    let substring = &converted[start..];
+    let mut iter = substring.char_indices();
+    let mut depth = 0i32;
+    let mut comma_rel: Option<usize> = None;
+    let mut end_rel: Option<usize> = None;
+
+    while let Some((offset, ch)) = iter.next() {
+      match ch {
+        '(' => depth += 1,
+        ')' => {
+          depth -= 1;
+          if depth == 0 {
+            end_rel = Some(offset + ch.len_utf8());
+            break;
+          }
+        }
+        ',' => {
+          if depth == 1 && comma_rel.is_none() {
+            comma_rel = Some(offset);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    let Some(end_rel) = end_rel else {
+      output.push_str(substring);
+      return output;
+    };
+
+    if let Some(comma_rel) = comma_rel {
+      let converted_trimmed = substring[comma_rel + 1..end_rel - 1].trim_start();
+      let fallback_info = original_iter.next().unwrap_or(None);
+      output.push_str(&substring[..comma_rel + 1]);
+      if let Some((had_ws, _)) = fallback_info {
+        if had_ws {
+          output.push(' ');
+        }
+      }
+      output.push_str(converted_trimmed);
+      output.push_str(&substring[end_rel - 1..end_rel]);
+    } else {
+      output.push_str(&substring[..end_rel]);
+      let _ = original_iter.next();
+    }
+
+    index = start + end_rel;
+  }
+
+  output.push_str(&converted[index..]);
+  output
 }
 
 pub fn normalize_css_value(value: &str) -> NormalizedCssValue {
@@ -824,6 +953,7 @@ pub fn normalize_css_value_with_options(
   }
 
   let mut semantic = trimmed.to_string();
+  let original_semantic = semantic.clone();
   let lower_trimmed = trimmed.to_ascii_lowercase();
   if let Some(hex) = named_color_hex(&lower_trimmed) {
     let shortened = shorten_hex_literals(hex);
@@ -860,6 +990,9 @@ pub fn normalize_css_value_with_options(
   semantic = restore_calc_zero_fallbacks(&semantic);
   if options.convert_rotations {
     semantic = convert_rotate_deg_to_turn(&semantic);
+  }
+  if original_semantic.contains("var(") {
+    semantic = restore_var_fallbacks(&original_semantic, &semantic);
   }
   let hash_value = ensure_var_fallback_space(&semantic);
   let output = minify_whitespace(&semantic);
@@ -3105,7 +3238,10 @@ fn compress_leading_combinator(selector: &str, include_attribute: bool) -> Cow<'
   }
 }
 
-fn compress_selector_for_hash(selector: &str) -> Cow<'_, str> {
+fn compress_selector_for_hash(
+  selector: &str,
+  preserve_leading_combinator_space: bool,
+) -> Cow<'_, str> {
   let compressed = compress_leading_combinator(selector, true);
 
   let (should_expand_direct_combinators, has_ampersand) = {
@@ -3142,7 +3278,9 @@ fn compress_selector_for_hash(selector: &str) -> Cow<'_, str> {
     return compressed;
   }
 
-  if !should_expand_direct_combinators {
+  let needs_preserve = should_expand_direct_combinators || preserve_leading_combinator_space;
+
+  if !needs_preserve {
     if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
       eprintln!(
         "[compiled-hash] selector='{}' expand-direct=false",
@@ -3153,7 +3291,10 @@ fn compress_selector_for_hash(selector: &str) -> Cow<'_, str> {
   }
 
   if std::env::var_os("COMPILED_DEBUG_HASH").is_some() {
-    eprintln!("[compiled-hash] selector='{}' expand-direct=true", selector);
+    eprintln!(
+      "[compiled-hash] selector='{}' expand-direct={} preserve-leading={}",
+      selector, should_expand_direct_combinators, preserve_leading_combinator_space
+    );
   }
 
   let mut owned = compressed.into_owned();
@@ -3163,8 +3304,21 @@ fn compress_selector_for_hash(selector: &str) -> Cow<'_, str> {
   Cow::Owned(owned)
 }
 
-fn compress_selector_for_output(selector: &str) -> Cow<'_, str> {
-  compress_leading_combinator(selector, true)
+fn compress_selector_for_output(
+  selector: &str,
+  preserve_leading_combinator_space: bool,
+) -> Cow<'_, str> {
+  let compressed = compress_leading_combinator(selector, true);
+
+  if !compressed.contains('&') || !preserve_leading_combinator_space {
+    return compressed;
+  }
+
+  let mut owned = compressed.into_owned();
+  owned = owned.replace("&>", "& >");
+  owned = owned.replace("&+", "& +");
+  owned = owned.replace("&~", "& ~");
+  Cow::Owned(owned)
 }
 
 fn join_selectors(selectors: &[String], class_name: &str) -> String {
@@ -3424,14 +3578,23 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
 
       let mut per_selector_outputs = Vec::new();
       for (selector_index, selector) in normalized_selectors.iter().enumerate() {
-        let mut hash_selector = compress_selector_for_hash(selector);
-        let mut output_selector = compress_selector_for_output(selector);
-        let needs_active_after_dup = hash_selector.as_ref().contains(":active:after")
-          && !hash_selector.as_ref().contains(":active:after:after");
-        if needs_active_after_dup {
+        let mut hash_selector = compress_selector_for_hash(
+          selector,
+          options.preserve_leading_combinator_space,
+        );
+        let mut output_selector = compress_selector_for_output(
+          selector,
+          options.preserve_leading_combinator_space,
+        );
+        let duplicate_active_after = rule.duplicate_active_after;
+        if duplicate_active_after
+          && hash_selector.as_ref().contains(":active:after")
+          && !hash_selector.as_ref().contains(":active:after:after")
+        {
           hash_selector = Cow::Owned(format!("{}:after", hash_selector));
         }
-        if output_selector.contains(":active:after")
+        if duplicate_active_after
+          && output_selector.contains(":active:after")
           && !output_selector.contains(":active:after:after")
         {
           output_selector = Cow::Owned(format!("{}:after", output_selector));
@@ -3516,7 +3679,22 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
             (canonical, selector.as_str())
           })
           .collect::<Vec<_>>();
-        selector_parts.sort_by(|a, b| a.0.cmp(&b.0));
+        let priority = |selector: &str| -> u8 {
+          if selector.contains(":focus") {
+            0
+          } else if selector.contains(":hover") {
+            1
+          } else if selector.contains("active") {
+            2
+          } else {
+            3
+          }
+        };
+        selector_parts.sort_by(|a, b| {
+          let pa = priority(a.1);
+          let pb = priority(b.1);
+          pa.cmp(&pb).then_with(|| a.0.cmp(&b.0))
+        });
         let combined_selector = selector_parts
           .iter()
           .map(|(_, original)| *original)
@@ -3774,6 +3952,7 @@ mod tests {
       value: "0px".into(),
       raw_value: "0px".into(),
       important: false,
+      duplicate_active_after: false,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_rule = &artifacts.rules[0].css;
@@ -3880,6 +4059,7 @@ mod tests {
       value: "fit-content".into(),
       raw_value: "fit-content".into(),
       important: false,
+      duplicate_active_after: false,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_rule = &artifacts.rules[0].css;
@@ -3898,6 +4078,7 @@ mod tests {
       value: "hidden".into(),
       raw_value: "hidden".into(),
       important: false,
+      duplicate_active_after: false,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_strings: Vec<&str> = artifacts
@@ -3930,6 +4111,7 @@ mod tests {
       value: "1".into(),
       raw_value: "1".into(),
       important: false,
+      duplicate_active_after: false,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_strings: Vec<&str> = artifacts
@@ -3963,6 +4145,7 @@ mod tests {
       value: "auto".into(),
       raw_value: "auto".into(),
       important: false,
+      duplicate_active_after: false,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_strings: Vec<&str> = artifacts

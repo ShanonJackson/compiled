@@ -4,7 +4,7 @@ import React from 'react';
 import { forwardRef } from "react";
 import { token } from '@atlaskit/tokens';
 import { jsx, jsxs } from "react/jsx-runtime";
-const _ = "._1yt4mtij{padding:var(--ds-space-050,4px) var(--ds-space-150,9pt) var(--ds-space-150,9pt) var(--_udlqo0)}";
+const _ = "._1yt46rhf{padding:var(--ds-space-050,4px) var(--ds-space-150,9pt) var(--ds-space-150,9pt) var(--_udlqo0)}";
 const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)=>{
     if (__cmplp.innerRef) {
         throw new Error("Please use 'ref' instead of 'innerRef'.");
@@ -24,7 +24,7 @@ const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmp
                 },
                 ref: __cmplr,
                 className: ax([
-                    "_1yt4mtij",
+                    "_1yt46rhf",
                     __cmplp.className
                 ])
             })
