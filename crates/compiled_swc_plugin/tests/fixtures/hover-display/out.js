@@ -29,7 +29,7 @@ export const Component = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp
                 ref: __cmplr,
                 className: ax([
                     "_15y3r8wq _oyoh2fjc",
-                    __cmplp.isDragging ? "_tzy41kuy" : "",
+                    __cmplp.isDragging && "_tzy41kuy",
                     __cmplp.className
                 ])
             })

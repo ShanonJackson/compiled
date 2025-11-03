@@ -2349,7 +2349,7 @@ struct PropertyExpansion {
 
 fn should_skip_shorthand_expansion(raw_value: &str) -> bool {
   let lower = raw_value.to_ascii_lowercase();
-  lower.contains("var(") || lower.contains("token(")
+  lower.contains("var(") || lower.contains("token(") || raw_value.contains("__COMPILED_EXPR_")
 }
 
 fn split_css_value_components(raw_value: &str) -> Vec<String> {
@@ -2912,6 +2912,13 @@ fn expand_property(property: &str, raw_value: &str) -> Vec<PropertyExpansion> {
 
   if property == "padding" || property == "margin" {
     return expand_box_shorthand(property, raw_value);
+  }
+
+  if property == "background" && raw_value.trim().eq_ignore_ascii_case("initial") {
+    return vec![PropertyExpansion {
+      name: "background-color".into(),
+      raw_value: "initial".into(),
+    }];
   }
 
   if property == "outline" {
@@ -3686,14 +3693,24 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
           })
           .collect::<Vec<_>>();
         let priority = |selector: &str| -> u8 {
-          if selector.contains(":focus") {
+          let lower = selector.to_ascii_lowercase();
+          let has_after = lower.contains(":after");
+          if lower.contains(":active") {
             0
-          } else if selector.contains(":hover") {
+          } else if has_after && lower.contains(":focus-visible") {
             1
-          } else if selector.contains("active") {
+          } else if has_after && lower.contains(":focus") {
             2
-          } else {
+          } else if lower.contains(":focus:not(") {
+            1
+          } else if lower.contains(":focus-visible") {
+            2
+          } else if lower.contains(":focus") {
+            1
+          } else if lower.contains(":hover") {
             3
+          } else {
+            4
           }
         };
         selector_parts.sort_by(|a, b| {

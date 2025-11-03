@@ -2,7 +2,6 @@ import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import * as _React from "react";
 import React from 'react';
 import { forwardRef } from "react";
-import { token } from '@atlaskit/tokens';
 import { jsx, jsxs } from "react/jsx-runtime";
 const _ = "._19itglyw{border:none}";
 const _1 = "._19itzgxb{border:1px solid var(--ds-border,#091e4224)}";

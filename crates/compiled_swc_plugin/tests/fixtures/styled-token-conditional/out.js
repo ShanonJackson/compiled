@@ -2,7 +2,6 @@ import { ax, ix, CC, CS } from "@compiled/react/runtime";
 import * as _React from "react";
 import React from 'react';
 import { forwardRef } from "react";
-import { token } from '@atlaskit/tokens';
 import { jsx, jsxs } from "react/jsx-runtime";
 const _ = "._syaz1lh4{color:var(--ds-text-disabled,#091e424f)}";
 const _1 = "._syaz1fxt{color:var(--ds-text,#172b4d)}";

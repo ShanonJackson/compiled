@@ -18,7 +18,7 @@ export const Tab = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __
         style: __cmpls,
         ref: __cmplr,
         className: ax([
-            "_1q5t1r31 _1ohyglyw _1r9x1o36 _1e0c1txw _91x1idpf _gc90b3bt",
+            "_1q5t1r31 _1ohyglyw _1r9x1o36 _1e0c1txw _12k4idpf _t1p4b3bt",
             __cmplp.className
         ])
     });

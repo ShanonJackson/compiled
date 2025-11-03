@@ -245,8 +245,11 @@ pub fn canonicalize_output(output: &str) -> String {
   }
 
   runtime_imports.sort();
+  runtime_imports.dedup();
   remaining_imports.sort();
+  remaining_imports.dedup();
   jsx_runtime_imports.sort();
+  jsx_runtime_imports.dedup();
 
   let mut result = String::new();
   if let Some(line) = react_import {
@@ -296,28 +299,34 @@ pub fn canonicalize_output(output: &str) -> String {
       "import * as React from 'react';",
     );
 
-  let mut seen_jsx_import = false;
-  let filtered_lines: Vec<&str> = result
-    .lines()
-    .filter(|line| {
-      let trimmed = line.trim();
-      if trimmed == "import { jsx } from \"react/jsx-runtime\";" {
-        if seen_jsx_import {
-          return false;
-        }
-        seen_jsx_import = true;
+  use std::collections::HashSet;
+  let mut seen_imports: HashSet<&str> = HashSet::new();
+  let mut deduped_lines = Vec::new();
+  for line in result.lines() {
+    let trimmed = line.trim();
+    if trimmed.starts_with("import ") {
+      if seen_imports.insert(trimmed) {
+        deduped_lines.push(line);
       }
-      true
-    })
-    .collect();
-  result = filtered_lines.join("\n");
+    } else {
+      deduped_lines.push(line);
+    }
+  }
+  result = deduped_lines.join("\n");
 
-  if result.contains("import { jsx, jsxs } from \"react/jsx-runtime\";") {
-    let filtered: Vec<&str> = result
+  const JSX_IMPORT: &str = "import { jsx } from \"react/jsx-runtime\";";
+  const JSXS_IMPORT: &str = "import { jsxs } from \"react/jsx-runtime\";";
+  const JSX_JSXS_IMPORT: &str = "import { jsx, jsxs } from \"react/jsx-runtime\";";
+
+  if result.contains(JSX_JSXS_IMPORT) {
+    result = result
       .lines()
-      .filter(|line| line.trim() != "import { jsx } from \"react/jsx-runtime\";")
-      .collect();
-    result = filtered.join("\n");
+      .filter(|line| {
+        let trimmed = line.trim();
+        trimmed != JSX_IMPORT && trimmed != JSXS_IMPORT
+      })
+      .collect::<Vec<_>>()
+      .join("\n");
   }
 
   if std::env::var_os("COMPILED_DEBUG_CANON").is_some() {
