@@ -2653,6 +2653,7 @@ fn push_css_value(
       raw_value,
       important,
       duplicate_active_after: false,
+      value_hash_override: None,
     });
     return true;
   }
@@ -2746,6 +2747,7 @@ fn push_css_value(
       raw_value,
       important,
       duplicate_active_after: duplicate_active_after_flag,
+      value_hash_override: None,
     });
     return true;
   }
@@ -2759,6 +2761,7 @@ fn push_css_value(
       raw_value: raw_value.clone(),
       important,
       duplicate_active_after: duplicate_active_after_flag,
+      value_hash_override: None,
     });
   }
 
@@ -3907,14 +3910,38 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
     }
 
     for condition in runtime_class_conditions {
-      let cons_expr = TransformVisitor::class_names_to_expr(&condition.when_true);
-      let alt_expr = TransformVisitor::class_names_to_expr(&condition.when_false);
-      precomputed_exprs.push(Expr::Cond(CondExpr {
-        span: DUMMY_SP,
-        test: Box::new(condition.test),
-        cons: Box::new(cons_expr),
-        alt: Box::new(alt_expr),
-      }));
+      let has_true = !condition.when_true.is_empty();
+      let has_false = !condition.when_false.is_empty();
+      if has_true && has_false {
+        let cons_expr = TransformVisitor::class_names_to_expr(&condition.when_true);
+        let alt_expr = TransformVisitor::class_names_to_expr(&condition.when_false);
+        precomputed_exprs.push(Expr::Cond(CondExpr {
+          span: DUMMY_SP,
+          test: Box::new(condition.test),
+          cons: Box::new(cons_expr),
+          alt: Box::new(alt_expr),
+        }));
+      } else if has_true {
+        let cons_expr = TransformVisitor::class_names_to_expr(&condition.when_true);
+        precomputed_exprs.push(Expr::Bin(BinExpr {
+          span: DUMMY_SP,
+          op: BinaryOp::LogicalAnd,
+          left: Box::new(condition.test),
+          right: Box::new(cons_expr),
+        }));
+      } else if has_false {
+        let alt_expr = TransformVisitor::class_names_to_expr(&condition.when_false);
+        precomputed_exprs.push(Expr::Bin(BinExpr {
+          span: DUMMY_SP,
+          op: BinaryOp::LogicalAnd,
+          left: Box::new(Expr::Unary(UnaryExpr {
+            span: DUMMY_SP,
+            op: UnaryOp::Bang,
+            arg: Box::new(condition.test),
+          })),
+          right: Box::new(alt_expr),
+        }));
+      }
     }
 
     self.parent.needs_runtime_ax = true;
@@ -4880,7 +4907,7 @@ impl<'a> TransformVisitor<'a> {
       }
 
       if let Expr::Tpl(template) = &*kv.value {
-        let (value, mut variables) =
+        let (value, mut variables, value_hash_override) =
           self.process_dynamic_template_literal(template, props_ident)?;
         let (value, important) = Self::split_value_and_important(&value);
         Self::push_rule_input(
@@ -4891,6 +4918,7 @@ impl<'a> TransformVisitor<'a> {
           value.clone(),
           value,
           important,
+          value_hash_override,
         );
         runtime_variables.append(&mut variables);
         continue;
@@ -4915,6 +4943,7 @@ impl<'a> TransformVisitor<'a> {
             output,
             raw_value,
             important,
+            None,
           );
           continue;
         }
@@ -5016,6 +5045,7 @@ impl<'a> TransformVisitor<'a> {
               output,
               raw_value,
               important,
+              None,
             );
             continue;
           }
@@ -5071,6 +5101,8 @@ impl<'a> TransformVisitor<'a> {
               );
             }
 
+            let true_branch_hash_override = Self::token_hash_override(cond_expr.cons.as_ref());
+            let false_branch_hash_override = Self::token_hash_override(cond_expr.alt.as_ref());
             if let (Some(true_value), Some(false_value)) =
               (true_static.as_ref(), false_static.as_ref())
             {
@@ -5128,6 +5160,7 @@ impl<'a> TransformVisitor<'a> {
                     rule_value.clone(),
                     rule_value,
                     important,
+                    None,
                   );
                   let suffix = if important {
                     Some(" !important".to_string())
@@ -5153,10 +5186,12 @@ impl<'a> TransformVisitor<'a> {
                   &property_kebab,
                   &static_value,
                   options,
+                  true_branch_hash_override.clone(),
                 )?;
                 artifacts.merge(branch_artifacts);
                 classes
               }
+              None if Self::is_css_none_expr(&cond_expr.cons) => Vec::new(),
               None => {
                 let branch_object = ObjectLit {
                   span: DUMMY_SP,
@@ -5191,6 +5226,7 @@ impl<'a> TransformVisitor<'a> {
                   &property_kebab,
                   &static_value,
                   options,
+                  false_branch_hash_override.clone(),
                 )?;
                 artifacts.merge(branch_artifacts);
                 classes
@@ -5248,6 +5284,7 @@ impl<'a> TransformVisitor<'a> {
           rule_value.clone(),
           rule_value,
           false,
+          None,
         );
         runtime_variables.push(RuntimeCssVariable::new(
           variable_name,
@@ -5301,6 +5338,7 @@ impl<'a> TransformVisitor<'a> {
     value: String,
     raw_value: String,
     important: bool,
+    value_hash_override: Option<String>,
   ) {
     let mut selector_list = if selectors.is_empty() {
       vec![normalize_selector(None)]
@@ -5326,6 +5364,7 @@ impl<'a> TransformVisitor<'a> {
       raw_value,
       important,
       duplicate_active_after: false,
+      value_hash_override,
     });
   }
 
@@ -5345,6 +5384,7 @@ impl<'a> TransformVisitor<'a> {
     property: &str,
     value: &StaticValue,
     options: &CssOptions,
+    value_hash_override: Option<String>,
   ) -> Option<(CssArtifacts, Vec<String>)> {
     let mut wrapper = IndexMap::new();
     wrapper.insert(property.to_string(), value.clone());
@@ -5360,6 +5400,11 @@ impl<'a> TransformVisitor<'a> {
     ) {
       return None;
     }
+    if let Some(ref override_hash) = value_hash_override {
+      for input in &mut inputs {
+        input.value_hash_override = Some(override_hash.clone());
+      }
+    }
     let mut artifacts = atomicize_rules(&inputs, options);
     artifacts.raw_rules.extend(raw_rules);
     let class_names = artifacts
@@ -5368,6 +5413,16 @@ impl<'a> TransformVisitor<'a> {
       .map(|rule| rule.class_name.clone())
       .collect();
     Some((artifacts, class_names))
+  }
+
+  fn token_hash_override(expr: &Expr) -> Option<String> {
+    if resolve_token_expression(expr).is_none() {
+      return None;
+    }
+    let expr_code = emit_expression(expr);
+    let runtime_hash = hash(&expr_code, 0);
+    let runtime_value = format!("var(--_{})", runtime_hash);
+    Some(hash(&runtime_value, 0))
   }
 
   fn css_artifacts_from_dynamic_css_expression(
@@ -5510,9 +5565,9 @@ impl<'a> TransformVisitor<'a> {
     &mut self,
     template: &Tpl,
     props_ident: &Ident,
-  ) -> Option<(String, Vec<RuntimeCssVariable>)> {
+  ) -> Option<(String, Vec<RuntimeCssVariable>, Option<String>)> {
     if template.quasis.is_empty() {
-      return Some((String::new(), Vec::new()));
+      return Some((String::new(), Vec::new(), None));
     }
 
     let mut segments: Vec<String> = template
@@ -5616,7 +5671,13 @@ impl<'a> TransformVisitor<'a> {
       }
     }
     let normalized = normalize_css_value(&substituted);
-    Some((normalized.output_value, retained_variables))
+    let hash_override = if retained_variables.is_empty() && substituted != compact {
+      let original_normalized = normalize_css_value(&compact);
+      Some(hash(&original_normalized.hash_value, 0))
+    } else {
+      None
+    };
+    Some((normalized.output_value, retained_variables, hash_override))
   }
 
   fn evaluate_static_to_css_string(&self, expr: &Expr) -> Option<String> {

@@ -178,6 +178,8 @@ pub struct CssRuleInput {
   pub important: bool,
   #[serde(default)]
   pub duplicate_active_after: bool,
+  #[serde(default)]
+  pub value_hash_override: Option<String>,
 }
 
 fn normalize_pseudo_element_colons(selector: &str) -> Cow<'_, str> {
@@ -3574,7 +3576,10 @@ pub fn atomicize_rules(rules: &[CssRuleInput], options: &CssOptions) -> CssArtif
         (declarations, hash_component)
       };
       let declaration = declaration_values.join(";");
-      let value_hash = hash(&value_for_hash, 0);
+      let mut value_hash = hash(&value_for_hash, 0);
+      if let Some(override_hash) = &rule.value_hash_override {
+        value_hash = override_hash.clone();
+      }
       let value_segment = &value_hash[..value_hash.len().min(4)];
 
       let mut per_selector_outputs = Vec::new();
@@ -3954,6 +3959,7 @@ mod tests {
       raw_value: "0px".into(),
       important: false,
       duplicate_active_after: false,
+      value_hash_override: None,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_rule = &artifacts.rules[0].css;
@@ -4061,6 +4067,7 @@ mod tests {
       raw_value: "fit-content".into(),
       important: false,
       duplicate_active_after: false,
+      value_hash_override: None,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_rule = &artifacts.rules[0].css;
@@ -4080,6 +4087,7 @@ mod tests {
       raw_value: "hidden".into(),
       important: false,
       duplicate_active_after: false,
+      value_hash_override: None,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_strings: Vec<&str> = artifacts
@@ -4113,6 +4121,7 @@ mod tests {
       raw_value: "1".into(),
       important: false,
       duplicate_active_after: false,
+      value_hash_override: None,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_strings: Vec<&str> = artifacts
@@ -4147,6 +4156,7 @@ mod tests {
       raw_value: "auto".into(),
       important: false,
       duplicate_active_after: false,
+      value_hash_override: None,
     };
     let artifacts = atomicize_rules(&[rule], &CssOptions::default());
     let css_strings: Vec<&str> = artifacts

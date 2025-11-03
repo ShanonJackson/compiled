@@ -101,6 +101,7 @@ fn resolve_tokens_member(member: &MemberExpr) -> Option<String> {
   };
 
   let token_path = prop_name.to_ascii_lowercase().replace('_', ".");
-  let css_token = TOKEN_NAME_MAP.get(token_path.as_str())?;
-  Some(format!("var({})", css_token))
+  TOKEN_NAME_MAP.get(token_path.as_str())?;
+  let project_token = format!("--project-{}", token_path.replace('.', "-"));
+  Some(format!("var({})", project_token))
 }
