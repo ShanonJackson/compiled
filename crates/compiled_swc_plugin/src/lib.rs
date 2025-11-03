@@ -4994,7 +4994,10 @@ impl<'a> TransformVisitor<'a> {
             emit_expression(&expression)
           );
         }
-        if let Some(inline_static) = evaluate_static(expr_ref, &self.bindings) {
+        let inline_static = evaluate_static(expr_ref, &self.bindings).or_else(|| {
+          resolve_token_expression(expr_ref).map(StaticValue::Str)
+        });
+        if let Some(inline_static) = inline_static {
           if let Some((output, raw_value, important)) =
             static_value_to_css_value(&property_kebab, &inline_static)
           {
@@ -5048,8 +5051,13 @@ impl<'a> TransformVisitor<'a> {
             // instead of conditional class names. Defer to the generic hashing path
             // below so we emit `var(--hash)` rules matching the Babel plugin output.
           } else {
-            let true_static = evaluate_static(cond_expr.cons.as_ref(), &self.bindings);
-            let false_static = evaluate_static(cond_expr.alt.as_ref(), &self.bindings);
+          let true_static = evaluate_static(cond_expr.cons.as_ref(), &self.bindings).or_else(|| {
+            resolve_token_expression(cond_expr.cons.as_ref()).map(StaticValue::Str)
+          });
+          let false_static =
+            evaluate_static(cond_expr.alt.as_ref(), &self.bindings).or_else(|| {
+              resolve_token_expression(cond_expr.alt.as_ref()).map(StaticValue::Str)
+            });
             if std::env::var_os("COMPILED_DEBUG_CSS").is_some()
               && (true_static.is_none() || false_static.is_none())
             {
@@ -5396,25 +5404,48 @@ impl<'a> TransformVisitor<'a> {
       }
       Expr::Bin(bin) if matches!(bin.op, BinaryOp::LogicalAnd) => {
         let condition = bin.left.as_ref().clone();
-        let value_text = self.evaluate_static_to_css_string(bin.right.as_ref())?;
-        if value_text.trim().is_empty() {
-          return Some(CssArtifacts::default());
+        if let Some(value_text) = self.evaluate_static_to_css_string(bin.right.as_ref()) {
+          if value_text.trim().is_empty() {
+            return Some(CssArtifacts::default());
+          }
+          let mut artifacts = self.css_artifacts_from_css_text(&value_text, options)?;
+          let class_names: Vec<String> = artifacts
+            .rules
+            .iter()
+            .map(|rule| rule.class_name.clone())
+            .collect();
+          if class_names.is_empty() {
+            return Some(artifacts);
+          }
+          artifacts.push_class_condition(RuntimeClassCondition::new(
+            condition,
+            class_names,
+            Vec::new(),
+          ));
+          Some(artifacts)
+        } else {
+          let mut artifacts = self.css_artifacts_from_dynamic_css_expression_with_context(
+            bin.right.as_ref(),
+            props_ident,
+            selectors,
+            at_rules,
+            options,
+          )?;
+          let class_names: Vec<String> = artifacts
+            .rules
+            .iter()
+            .map(|rule| rule.class_name.clone())
+            .collect();
+          if class_names.is_empty() {
+            return Some(artifacts);
+          }
+          artifacts.push_class_condition(RuntimeClassCondition::new(
+            condition,
+            class_names,
+            Vec::new(),
+          ));
+          Some(artifacts)
         }
-        let mut artifacts = self.css_artifacts_from_css_text(&value_text, options)?;
-        let class_names: Vec<String> = artifacts
-          .rules
-          .iter()
-          .map(|rule| rule.class_name.clone())
-          .collect();
-        if class_names.is_empty() {
-          return Some(artifacts);
-        }
-        artifacts.push_class_condition(RuntimeClassCondition::new(
-          condition,
-          class_names,
-          Vec::new(),
-        ));
-        Some(artifacts)
       }
       Expr::Cond(cond_expr) => {
         let condition = cond_expr.test.as_ref().clone();
@@ -5589,12 +5620,26 @@ impl<'a> TransformVisitor<'a> {
   }
 
   fn evaluate_static_to_css_string(&self, expr: &Expr) -> Option<String> {
+    if let Expr::Ident(ident) = expr {
+      if ident.sym.as_ref() == "undefined" {
+        return Some(String::new());
+      }
+    }
+    if let Some(token_value) = resolve_token_expression(expr) {
+      return Some(token_value);
+    }
     let evaluation = evaluate_static_with_info(expr, &self.bindings)?;
     if evaluation.depends_on_import {
       return None;
     }
     match evaluation.value {
-      StaticValue::Str(text) => Some(text),
+      StaticValue::Str(text) => {
+        if text == "undefined" || text == "null" {
+          Some(String::new())
+        } else {
+          Some(text)
+        }
+      }
       StaticValue::Num(number) => {
         if number.fract() == 0.0 {
           Some(format!("{}", number.trunc() as i64))

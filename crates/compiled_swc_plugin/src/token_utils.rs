@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use swc_core::ecma::ast::{CallExpr, Callee, Expr, Lit};
+use swc_core::ecma::ast::{CallExpr, Callee, Expr, Lit, MemberExpr, MemberProp};
 use swc_design_system_tokens::generated::{
   LIGHT_VALUES, SHAPE_VALUES, SPACING_VALUES, TOKEN_NAMES, TYPOGRAPHY_VALUES,
 };
@@ -26,10 +26,10 @@ static TOKEN_FALLBACK_MAP: Lazy<HashMap<&'static str, &'static str>> = Lazy::new
 });
 
 pub fn resolve_token_expression(expr: &Expr) -> Option<String> {
-  if let Expr::Call(call) = expr {
-    resolve_token_call(call)
-  } else {
-    None
+  match expr {
+    Expr::Call(call) => resolve_token_call(call),
+    Expr::Member(member) => resolve_tokens_member(member),
+    _ => None,
   }
 }
 
@@ -79,4 +79,28 @@ fn resolve_token_call(call: &CallExpr) -> Option<String> {
     eprintln!("[compiled-token] expr='{}' -> '{}'", token_name, css);
   }
   Some(css)
+}
+
+fn resolve_tokens_member(member: &MemberExpr) -> Option<String> {
+  let obj_ident = match &*member.obj {
+    Expr::Ident(ident) => ident,
+    _ => return None,
+  };
+
+  if obj_ident.sym.as_ref() != "Tokens" {
+    return None;
+  }
+
+  let prop_name = match &member.prop {
+    MemberProp::Ident(ident) => ident.sym.as_ref().to_string(),
+    MemberProp::Computed(comp) => match &*comp.expr {
+      Expr::Lit(Lit::Str(str_lit)) => str_lit.value.as_ref().to_string(),
+      _ => return None,
+    },
+    _ => return None,
+  };
+
+  let token_path = prop_name.to_ascii_lowercase().replace('_', ".");
+  let css_token = TOKEN_NAME_MAP.get(token_path.as_str())?;
+  Some(format!("var({})", css_token))
 }

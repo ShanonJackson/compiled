@@ -2346,7 +2346,8 @@ struct PropertyExpansion {
 }
 
 fn should_skip_shorthand_expansion(raw_value: &str) -> bool {
-  raw_value.to_ascii_lowercase().contains("var(")
+  let lower = raw_value.to_ascii_lowercase();
+  lower.contains("var(") || lower.contains("token(")
 }
 
 fn split_css_value_components(raw_value: &str) -> Vec<String> {
