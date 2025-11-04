@@ -10,6 +10,6 @@ const themedUnderline = {
 const styles = null;
 export const Component = ()=>jsx("div", {
         className: ax([
-            "_1q6e1txw _ty5w1txw _ia7kb3bt _1ccmb3bt _swr6stnw _15opstnw"
+            "_ty5w1txw _1q6e1txw _1ccmb3bt _ia7kb3bt _15opstnw _swr6stnw"
         ])
     });

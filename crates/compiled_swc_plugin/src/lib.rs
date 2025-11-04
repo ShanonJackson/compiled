@@ -7,7 +7,8 @@ use crate::css::{
   AtRuleInput, CssArtifacts, CssOptions, CssRuleInput, NormalizeCssValueOptions,
   NormalizedCssValue, RuntimeClassCondition, RuntimeCssVariable, add_unit_if_needed,
   atomicize_literal, atomicize_rules, minify_at_rule_params, normalize_css_value,
-  normalize_css_value_with_options, normalize_selector, wrap_at_rules,
+  normalize_css_value_with_options, normalize_selector, selector_priority, selector_sort_key,
+  wrap_at_rules,
 };
 use crate::hash::hash;
 use crate::token_utils::resolve_token_expression;
@@ -2572,6 +2573,14 @@ fn extend_selectors(current: &[String], raw: &str) -> Vec<String> {
     }
   }
 
+  if result.len() > 1 {
+    result.sort_by(|a, b| {
+      let key_a = selector_sort_key(a);
+      let key_b = selector_sort_key(b);
+      key_a.cmp(&key_b)
+    });
+  }
+
   result
 }
 
@@ -3792,6 +3801,7 @@ fn css_options_from_plugin_options(options: &PluginOptions) -> CssOptions {
     sort_shorthand: options.sort_shorthand.unwrap_or(true),
     flatten_multiple_selectors: options.flatten_multiple_selectors.unwrap_or(false),
     preserve_leading_combinator_space: false,
+    extract: options.extract,
   }
 }
 
@@ -3834,7 +3844,7 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
       self.runtime_variables.extend(runtime_variables);
     }
 
-    let runtime_class_conditions = std::mem::take(&mut artifacts.runtime_class_conditions);
+    let mut runtime_class_conditions = std::mem::take(&mut artifacts.runtime_class_conditions);
     let mut conditional_class_names: HashSet<String> = HashSet::new();
     for condition in &runtime_class_conditions {
       conditional_class_names.extend(condition.when_true.iter().cloned());
@@ -3879,6 +3889,13 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
         class_names.push(rule.class_name.clone());
       }
     }
+
+    let class_css_map: HashMap<String, String> = artifacts
+      .rules
+      .iter()
+      .map(|rule| (rule.class_name.clone(), rule.css.clone()))
+      .collect();
+
 
     for css in &artifacts.raw_rules {
       let sheet = css.clone();
@@ -3944,7 +3961,69 @@ impl<'a, 'b> ClassNamesBodyVisitor<'a, 'b> {
       }));
     }
 
-    for expr_item in precomputed_exprs {
+    let compute_expr_priority = |expr: &Expr| -> (u8, u8) {
+      fn collect_class_names(expr: &Expr, output: &mut Vec<String>) {
+        match expr {
+          Expr::Lit(Lit::Str(str_lit)) => {
+            for part in str_lit.value.split_whitespace() {
+              if !part.is_empty() {
+                output.push(part.to_string());
+              }
+            }
+          }
+          Expr::Cond(cond) => {
+            collect_class_names(&cond.cons, output);
+            collect_class_names(&cond.alt, output);
+          }
+          Expr::Bin(bin) if matches!(bin.op, BinaryOp::LogicalAnd) => {
+            collect_class_names(&bin.right, output);
+          }
+          _ => {}
+        }
+      }
+
+      let mut class_names = Vec::new();
+      collect_class_names(expr, &mut class_names);
+      if class_names.is_empty() {
+        return (3u8, u8::MAX);
+      }
+      class_names
+        .iter()
+        .filter_map(|class_name| class_css_map.get(class_name))
+        .map(|css| css.split('{').next().unwrap_or("").trim())
+        .map(|selector| {
+          let lower = selector.to_ascii_lowercase();
+          let base = if lower.contains(':') {
+            1u8
+          } else if lower.contains('>') || lower.contains('+') || lower.contains('~') {
+            2u8
+          } else {
+            0u8
+          };
+          let secondary = selector_priority(selector);
+          (base, secondary)
+        })
+        .min()
+        .unwrap_or((3u8, u8::MAX))
+    };
+
+    let mut ordered_exprs: Vec<(u8, u8, usize, Expr)> = precomputed_exprs
+      .into_iter()
+      .enumerate()
+      .map(|(index, expr)| {
+        let (base, secondary) = compute_expr_priority(&expr);
+        (base, secondary, index, expr)
+      })
+      .collect();
+
+    ordered_exprs.sort_by(|a, b| {
+      a.0
+        .cmp(&b.0)
+        .then_with(|| a.1.cmp(&b.1))
+        .then_with(|| a.2.cmp(&b.2))
+    });
+
+    for (_, _, _, expr_item) in ordered_exprs {
       elems.push(Some(ExprOrSpread {
         spread: None,
         expr: Box::new(expr_item),
