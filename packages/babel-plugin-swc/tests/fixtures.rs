@@ -34,22 +34,34 @@ fn fixtures_match_expected_outputs() {
         let module = parse_fixture_module(&input_path, &source);
 
         let non_extract_output = transform_fixture(&fixture_dir, module.clone(), false);
-        let expected_non_extract = read_expected(&fixture_dir.join("out.js"));
-        assert_eq!(
-            normalise_line_endings(&non_extract_output.code),
-            normalise_line_endings(&expected_non_extract),
-            "non-extract output mismatch for {:?}",
-            fixture_dir.file_name().unwrap()
-        );
+        let expected_non_extract = if overwrite {
+            String::new()
+        } else {
+            read_expected(&fixture_dir.join("out.js"))
+        };
+        if !overwrite {
+            assert_eq!(
+                normalise_line_endings(&non_extract_output.code),
+                normalise_line_endings(&expected_non_extract),
+                "non-extract output mismatch for {:?}",
+                fixture_dir.file_name().unwrap()
+            );
+        }
 
         let extract_output = transform_fixture(&fixture_dir, module, true);
-        let expected_style_rules = read_expected_json(&fixture_dir.join("swc-style-rules.json"));
-        assert_eq!(
-            extract_output.style_rules,
-            expected_style_rules,
-            "style rules mismatch for {:?}",
-            fixture_dir.file_name().unwrap()
-        );
+        let expected_style_rules = if overwrite {
+            Vec::new()
+        } else {
+            read_expected_json(&fixture_dir.join("swc-style-rules.json"))
+        };
+        if !overwrite {
+            assert_eq!(
+                extract_output.style_rules,
+                expected_style_rules,
+                "style rules mismatch for {:?}",
+                fixture_dir.file_name().unwrap()
+            );
+        }
 
         if overwrite {
             fs::write(
