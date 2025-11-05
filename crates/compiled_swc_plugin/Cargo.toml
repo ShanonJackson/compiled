@@ -8,12 +8,19 @@ description = "SWC plugin replacement for the Compiled Babel plugins"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "collect_style_rules"
+path = "src/bin/collect_style_rules.rs"
+
 [dependencies]
+anyhow = "1.0"
+clap = { workspace = true }
 once_cell = { workspace = true }
 rustc-hash = "1.1"
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
+indexmap = "2.2"
 oxc_resolver = "11.9.0"
 thiserror = "1.0"
 swc_core = { workspace = true, features = [
@@ -24,5 +31,15 @@ swc_core = { workspace = true, features = [
     "ecma_utils",
     "ecma_visit",
     "ecma_plugin_transform",
+    "base",
 ] }
 swc_plugin_macro = { workspace = true }
+swc_atoms = { workspace = true }
+swc_design_system_tokens = { path = "../../../swc-design-system-tokens/transform" }
+walkdir = "2.5.0"
+swc_common = { workspace = true, features = ["concurrent"] }
+swc_ecma_transforms_base = { workspace = true }
+
+[dev-dependencies]
+swc_ecma_transforms_react = { workspace = true }
+swc_ecma_visit = { workspace = true }

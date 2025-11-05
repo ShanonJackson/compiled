@@ -2,11 +2,11 @@
 import { forwardRef } from 'react';
 import * as React from 'react';
 import { ax, ix, CC, CS } from "@compiled/react/runtime";
-const _14 = "._syaz14zx{color:crimson}";
-const _13 = "._syazxbvz{color:#1e90ff}";
-const _12 = "@media (min-width:600px){._72bc18cn:hover{content:\"hover\"}._1qiwr3uz:hover{background-color:#000}}";
-const _11 = "._1wybdlk8{font-size:14px}";
-const _10 = "._aetr1vm8:after{content:\"!\"}";
+const _12 = "._syaz14zx{color:crimson}";
+const _11 = "._syazxbvz{color:#1e90ff}";
+const _10 = "@media (min-width:600px){._72bc18cn:hover{content:\"hover\"}._1qiwr3uz:hover{background-color:#000}}";
+const _1 = "._1wybdlk8{font-size:14px}";
+const _0 = "._aetr1vm8:after{content:\"!\"}";
 const _9 = "._y44v65d0{animation:k17e8rkr 2s linear}";
 const _8 = "@keyframes k17e8rkr{0%{opacity:0}to{opacity:1}}";
 const _7 = "._d7ut1o36:focus ._d7ut1o36{outline-width:medium}";
@@ -39,9 +39,9 @@ if (process.env.NODE_ENV !== 'production') {
   Wrapper.displayName = 'Wrapper';
 }
 export const Component = () => <CC>
-  <CS>{[_8, _9, _10]}</CS>
+  <CS>{[_8, _9, _0]}</CS>
   {<CC>
-  <CS>{[_11, _12, _13, _14]}</CS>
+  <CS>{[_1, _10, _11, _12]}</CS>
   {<Wrapper className={ax(["_1wybdlk8 _72bc18cn _1qiwr3uz", toneMap.primary])}>
         <span className={ax(["_y44v65d0 _aetr1vm8"])}>
           combo

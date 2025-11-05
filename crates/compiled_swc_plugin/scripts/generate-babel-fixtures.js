@@ -9,9 +9,30 @@ function loadPlugin(moduleId) {
   return plugin && plugin.default ? plugin.default : plugin;
 }
 
-const compiledPlugin = loadPlugin('@compiled/babel-plugin');
-
 const fixturesRoot = path.join(__dirname, '..', 'tests', 'fixtures');
+
+function loadFixtureConfig(fixtureDir) {
+  const configPath = path.join(fixtureDir, 'config.json');
+  if (!fs.existsSync(configPath)) {
+    return {
+      pluginOptions: { extract: false },
+      nodeEnv: undefined,
+      babelEnv: undefined,
+    };
+  }
+
+  const raw = fs.readFileSync(configPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  const { nodeEnv, babelEnv, ...pluginOptions } = parsed;
+  return {
+    pluginOptions: {
+      extract: parsed.extract ?? false,
+      ...pluginOptions,
+    },
+    nodeEnv,
+    babelEnv,
+  };
+}
 
 function syntaxPluginsForExtension(ext) {
   switch (ext) {
@@ -25,7 +46,35 @@ function syntaxPluginsForExtension(ext) {
   }
 }
 
-function transformFixture(inputPath, source) {
+function applyEnv(env, callback) {
+  const prevNode = process.env.NODE_ENV;
+  const prevBabel = process.env.BABEL_ENV;
+
+  if (env.nodeEnv !== undefined) {
+    process.env.NODE_ENV = env.nodeEnv;
+  }
+  if (env.babelEnv !== undefined) {
+    process.env.BABEL_ENV = env.babelEnv;
+  }
+
+  try {
+    return callback();
+  } finally {
+    if (prevNode === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = prevNode;
+    }
+
+    if (prevBabel === undefined) {
+      delete process.env.BABEL_ENV;
+    } else {
+      process.env.BABEL_ENV = prevBabel;
+    }
+  }
+}
+
+function transformFixture(inputPath, source, pluginOptions) {
   const ext = path.extname(inputPath);
   const parserPlugins = syntaxPluginsForExtension(ext);
   const result = transformSync(source, {
@@ -34,7 +83,7 @@ function transformFixture(inputPath, source) {
     configFile: false,
     parserOpts: { plugins: parserPlugins },
     sourceType: 'module',
-    plugins: [[compiledPlugin, { extract: false }]],
+    plugins: [[loadPlugin('@compiled/babel-plugin'), pluginOptions]],
     generatorOpts: {
       retainLines: false,
     },
@@ -89,6 +138,7 @@ fs.readdirSync(fixturesRoot, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .forEach((entry) => {
     const fixtureDir = path.join(fixturesRoot, entry.name);
+    const { pluginOptions, nodeEnv, babelEnv } = loadFixtureConfig(fixtureDir);
     const inputCandidates = ['in.tsx', 'in.ts', 'in.jsx', 'in.js'];
     const inputPath = inputCandidates
       .map((candidate) => path.join(fixtureDir, candidate))
@@ -100,12 +150,17 @@ fs.readdirSync(fixturesRoot, { withFileTypes: true })
 
     const outputPath = path.join(fixtureDir, 'babel-out.js');
     const source = fs.readFileSync(inputPath, 'utf8');
-    const compiledCode = transformFixture(inputPath, source);
+    const compiledCode = applyEnv(
+      { nodeEnv, babelEnv },
+      () => transformFixture(inputPath, source, pluginOptions)
+    );
     fs.writeFileSync(outputPath, compiledCode);
     console.log(`Updated ${path.relative(process.cwd(), outputPath)}`);
 
     const swcOutputPath = path.join(fixtureDir, 'out.js');
-    const swcCode = transformForSwcOutput(inputPath, compiledCode);
+    const swcCode = applyEnv({ nodeEnv, babelEnv }, () =>
+      transformForSwcOutput(inputPath, compiledCode)
+    );
     fs.writeFileSync(swcOutputPath, swcCode);
     console.log(`Updated ${path.relative(process.cwd(), swcOutputPath)}`);
   });
