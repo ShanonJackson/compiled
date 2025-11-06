@@ -4,3 +4,4 @@
 //! individual helpers can be moved across without friction.
 
 pub mod property;
+pub mod shorthand;

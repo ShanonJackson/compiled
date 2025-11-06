@@ -11,10 +11,10 @@ cleanup() {
 }
 
 # Remove any atlassian mirrors
-sed -i.bak -E 's/https:\/\/packages.atlassian.com\/api\/npm\/npm-remote\//https:\/\/registry.yarnpkg.com\//g' yarn.lock
+sed -i.bak -E 's/https:\/\/packages.atlassian.com\/api\/npm\/npm-remote\//https:\/\/registry.npmjs.org\//g' yarn.lock
 
 # Deduplicate
-npx yarn-deduplicate
+npx --yes yarn-deduplicate
 
 # Run yarn again to transform any changes
 yarn --ignore-scripts

@@ -4,14 +4,78 @@
 //! be expanded incrementally as additional features are translated from the
 //! Babel implementation.
 
-use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 
-use crate::postcss::{normalise_content_value, normalise_timing_function};
+use crate::options::PluginConfig;
+use crate::postcss::{
+    minify_color, normalise_content_value, normalise_current_color, normalise_ordered_value,
+    normalise_timing_function, normalise_zero_unit, reduce_initial_value,
+};
 use crate::utils::kebab_case::kebab_case;
 
-pub type CssObject = IndexMap<String, CssValue>;
+#[derive(Debug, Clone, PartialEq)]
+pub struct CssObject(Vec<(String, CssValue)>);
+
+impl CssObject {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn insert(&mut self, key: String, value: CssValue) {
+        self.0.push((key, value));
+    }
+
+    pub fn iter(&self) -> CssObjectIter<'_> {
+        CssObjectIter(self.0.iter())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, key: &str) -> Option<&CssValue> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value)
+    }
+}
+
+impl Default for CssObject {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IntoIterator for CssObject {
+    type Item = (String, CssValue);
+    type IntoIter = std::vec::IntoIter<(String, CssValue)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a CssObject {
+    type Item = (&'a String, &'a CssValue);
+    type IntoIter = CssObjectIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub struct CssObjectIter<'a>(std::slice::Iter<'a, (String, CssValue)>);
+
+impl<'a> Iterator for CssObjectIter<'a> {
+    type Item = (&'a String, &'a CssValue);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(key, value)| (key, value))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
@@ -264,7 +328,11 @@ pub fn array_to_css_string(values: &[CssValue]) -> Option<String> {
     }
 }
 
-pub fn normalise_property_pair(key: &str, value: CssValue) -> Option<(String, String)> {
+pub fn normalise_property_pair(
+    key: &str,
+    value: CssValue,
+    config: &PluginConfig,
+) -> Option<(String, String)> {
     let property_name = if key.starts_with("--") {
         key.to_owned()
     } else {
@@ -296,6 +364,34 @@ pub fn normalise_property_pair(key: &str, value: CssValue) -> Option<(String, St
         base_value
     };
 
+    if config.optimize_css && !property_name.starts_with("--") {
+        if let Some(ordered) = normalise_ordered_value(&property_name, &value) {
+            value = ordered;
+        }
+
+        if let Some(replacement) = reduce_initial_value(&property_name, &value) {
+            value = replacement;
+        }
+
+        if let Some(zero) = normalise_zero_unit(&value) {
+            value = zero;
+        }
+
+        let normalised = normalise_current_color(&value);
+        if normalised.as_ref() != value {
+            value = normalised.into_owned();
+        }
+
+        if let Some(minified) = minify_color(&value) {
+            value = minified;
+        }
+    } else if config.optimize_css {
+        let normalised = normalise_current_color(&value);
+        if normalised.as_ref() != value {
+            value = normalised.into_owned();
+        }
+    }
+
     if has_important {
         value.push_str("!important");
     }
@@ -314,7 +410,7 @@ pub fn normalise_at_rule_key(key: &str) -> String {
         .replace(" )", ")")
 }
 
-pub fn serialize_css_object(map: &CssObject) -> Option<String> {
+pub fn serialize_css_object(map: &CssObject, config: &PluginConfig) -> Option<String> {
     #[derive(Debug)]
     enum Part {
         Declaration(String),
@@ -328,20 +424,20 @@ pub fn serialize_css_object(map: &CssObject) -> Option<String> {
             CssValue::Object(nested) => {
                 let selector = collapse_whitespace(key);
                 if key.starts_with('@') {
-                    if let Some(body) = serialize_css_object(nested) {
+                    if let Some(body) = serialize_css_object(nested, config) {
                         parts.push(Part::Block(format!(
                             "{}{{{body}}}",
                             normalise_at_rule_key(&selector)
                         )));
                     }
-                } else if let Some(body) = serialize_css_object(nested) {
+                } else if let Some(body) = serialize_css_object(nested, config) {
                     parts.push(Part::Block(format!("{selector}{{{body}}}")));
                 }
             }
             CssValue::Array(items) => {
                 if let Some(joined) = array_to_css_string(items) {
                     if let Some((name, value)) =
-                        normalise_property_pair(key, CssValue::String(joined))
+                        normalise_property_pair(key, CssValue::String(joined), config)
                     {
                         parts.push(Part::Declaration(format!("{name}:{value}")));
                     }
@@ -350,17 +446,17 @@ pub fn serialize_css_object(map: &CssObject) -> Option<String> {
                         if let CssValue::Object(obj) = item {
                             let selector = collapse_whitespace(key);
                             if key.starts_with('@') {
-                                if let Some(body) = serialize_css_object(obj) {
+                                if let Some(body) = serialize_css_object(obj, config) {
                                     parts.push(Part::Block(format!(
                                         "{}{{{body}}}",
                                         normalise_at_rule_key(&selector)
                                     )));
                                 }
-                            } else if let Some(body) = serialize_css_object(obj) {
+                            } else if let Some(body) = serialize_css_object(obj, config) {
                                 parts.push(Part::Block(format!("{selector}{{{body}}}")));
                             }
                         } else if let Some((name, value)) =
-                            normalise_property_pair(key, item.clone())
+                            normalise_property_pair(key, item.clone(), config)
                         {
                             parts.push(Part::Declaration(format!("{name}:{value}")));
                         }
@@ -369,13 +465,13 @@ pub fn serialize_css_object(map: &CssObject) -> Option<String> {
             }
             CssValue::Bool(flag) => {
                 if let Some((name, value)) =
-                    normalise_property_pair(key, CssValue::String(flag.to_string()))
+                    normalise_property_pair(key, CssValue::String(flag.to_string()), config)
                 {
                     parts.push(Part::Declaration(format!("{name}:{value}")));
                 }
             }
             _ => {
-                if let Some((name, value)) = normalise_property_pair(key, value.clone()) {
+                if let Some((name, value)) = normalise_property_pair(key, value.clone(), config) {
                     parts.push(Part::Declaration(format!("{name}:{value}")));
                 }
             }
@@ -412,22 +508,23 @@ pub fn serialize_css_object(map: &CssObject) -> Option<String> {
 }
 
 impl CssValue {
-    pub fn into_template_segment(self) -> Option<String> {
+    pub fn into_template_segment(self, config: &PluginConfig) -> Option<String> {
         match self {
-            CssValue::Object(map) => serialize_css_object(&map),
+            CssValue::Object(map) => serialize_css_object(&map, config),
             CssValue::Array(values) => array_to_css_string(&values),
             other => other.into_css_string(),
         }
     }
 
-    pub fn to_template_segment(&self) -> Option<String> {
-        self.clone().into_template_segment()
+    pub fn to_template_segment(&self, config: &PluginConfig) -> Option<String> {
+        self.clone().into_template_segment(config)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{add_unit_if_needed, CssValue};
+    use super::{add_unit_if_needed, normalise_property_pair, CssValue};
+    use crate::options::PluginConfig;
 
     #[test]
     fn appends_px_for_lengths() {
@@ -452,6 +549,79 @@ mod tests {
         assert_eq!(
             add_unit_if_needed("color", CssValue::String(String::new())),
             None
+        );
+    }
+
+    #[test]
+    fn timing_normalisation_runs_without_optimisation() {
+        let mut config = PluginConfig::default();
+        config.optimize_css = false;
+
+        let value = CssValue::String("200ms".into());
+
+        assert_eq!(
+            normalise_property_pair("animationDuration", value.clone(), &config),
+            Some(("animation-duration".into(), "0.200s".into()))
+        );
+
+        config.optimize_css = true;
+        assert_eq!(
+            normalise_property_pair("animationDuration", value, &config),
+            Some(("animation-duration".into(), "0.200s".into()))
+        );
+    }
+
+    #[test]
+    fn current_color_normalisation_respects_optimize_flag() {
+        let mut config = PluginConfig::default();
+        let value = CssValue::String("currentcolor".into());
+
+        config.optimize_css = true;
+        assert_eq!(
+            normalise_property_pair("color", value.clone(), &config),
+            Some(("color".into(), "currentColor".into()))
+        );
+
+        config.optimize_css = false;
+        assert_eq!(
+            normalise_property_pair("color", value, &config),
+            Some(("color".into(), "currentcolor".into()))
+        );
+    }
+
+    #[test]
+    fn reduces_initial_values_when_optimised() {
+        let mut config = PluginConfig::default();
+        config.optimize_css = true;
+
+        let value = CssValue::String("initial".into());
+        assert_eq!(
+            normalise_property_pair("marginLeft", value, &config),
+            Some(("margin-left".into(), "0".into()))
+        );
+    }
+
+    #[test]
+    fn converts_zero_units() {
+        let mut config = PluginConfig::default();
+        config.optimize_css = true;
+
+        let value = CssValue::String("0px".into());
+        assert_eq!(
+            normalise_property_pair("padding", value, &config),
+            Some(("padding".into(), "0".into()))
+        );
+    }
+
+    #[test]
+    fn minifies_color_values() {
+        let mut config = PluginConfig::default();
+        config.optimize_css = true;
+
+        let value = CssValue::String("rebeccapurple".into());
+        assert_eq!(
+            normalise_property_pair("color", value, &config),
+            Some(("color".into(), "#639".into()))
         );
     }
 }

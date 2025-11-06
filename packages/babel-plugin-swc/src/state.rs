@@ -3,12 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use oxc_resolver::Resolver;
+use oxc_resolver::{ResolveContext, Resolver};
+use swc_core::common::comments::SingleThreadedComments;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast::{
-    ArrayLit, BinaryOp, CondExpr, EsVersion, Expr, ExprOrSpread, Lit, MemberExpr, MemberProp,
-    Module, ObjectLit, Prop, PropOrSpread, Tpl, UnaryOp,
+    ArrayLit, BinaryOp, CallExpr, CondExpr, EsVersion, Expr, ExprOrSpread, Lit, MemberExpr,
+    MemberProp, Module, ObjectLit, Prop, PropOrSpread, Tpl, UnaryOp,
 };
 use swc_core::ecma::parser::{parse_file_as_module, EsSyntax, Syntax, TsSyntax};
 
@@ -47,6 +48,28 @@ impl ModuleAnalysis {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AggregatedAtRule {
+    display_stack: Vec<String>,
+    body: String,
+    index: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+enum ClassRuleEntry {
+    Standalone(String),
+    Aggregated(Vec<String>),
+}
+
+fn wrap_rule_stack(stack: &[String], body: &str) -> String {
+    let mut rule = body.to_string();
+    for at_rule in stack.iter().rev() {
+        rule = format!("{at_rule}{{{rule}}}");
+    }
+
+    rule
+}
+
 #[allow(dead_code)]
 pub struct TransformState {
     pub config: PluginConfig,
@@ -55,11 +78,20 @@ pub struct TransformState {
     included_files: Vec<PathBuf>,
     style_rules: Vec<String>,
     seen_style_rules: HashSet<String>,
+    aggregated_at_rules: HashMap<Vec<String>, AggregatedAtRule>,
+    seen_atomic_selectors: HashSet<String>,
     css_idents: HashSet<String>,
     styled_idents: HashSet<String>,
     keyframes_idents: HashSet<String>,
     class_names_idents: HashSet<String>,
     css_map_idents: HashSet<String>,
+    runtime_class_library_used: bool,
+    runtime_components_used: bool,
+    uses_xcss: bool,
+    styled_display_names: HashSet<String>,
+    class_rules: HashMap<String, ClassRuleEntry>,
+    css_map_sheets: HashMap<String, Vec<String>>,
+    pending_css_map_calls: HashMap<String, CallExpr>,
     import_bindings: HashMap<String, ImportBinding>,
     resolved_imports: HashMap<String, CssValue>,
     local_bindings: HashMap<String, CssValue>,
@@ -94,11 +126,20 @@ impl TransformState {
             included_files: Vec::new(),
             style_rules: Vec::new(),
             seen_style_rules: HashSet::new(),
+            aggregated_at_rules: HashMap::new(),
+            seen_atomic_selectors: HashSet::new(),
             css_idents: HashSet::new(),
             styled_idents: HashSet::new(),
             keyframes_idents: HashSet::new(),
             class_names_idents: HashSet::new(),
             css_map_idents: HashSet::new(),
+            runtime_class_library_used: false,
+            runtime_components_used: false,
+            uses_xcss: false,
+            styled_display_names: HashSet::new(),
+            class_rules: HashMap::new(),
+            css_map_sheets: HashMap::new(),
+            pending_css_map_calls: HashMap::new(),
             import_bindings: HashMap::new(),
             resolved_imports: HashMap::new(),
             local_bindings: HashMap::new(),
@@ -108,8 +149,28 @@ impl TransformState {
         }
     }
 
+    pub fn begin_pass(&mut self) {
+        self.class_rules.clear();
+        self.css_map_sheets.clear();
+        self.aggregated_at_rules.clear();
+        self.seen_atomic_selectors.clear();
+        self.runtime_class_library_used = false;
+        self.runtime_components_used = false;
+        self.uses_xcss = false;
+        self.pending_css_map_calls.clear();
+        self.styled_display_names.clear();
+    }
+
     pub fn resolver(&self) -> &Resolver {
         &self.resolver
+    }
+
+    pub fn source_map(&self) -> Option<&SourceMap> {
+        self.metadata.source_map.as_deref()
+    }
+
+    pub fn comments(&self) -> Option<&SingleThreadedComments> {
+        self.metadata.comments.as_deref()
     }
 
     pub fn record_included_file(&mut self, file: impl Into<PathBuf>) {
@@ -124,6 +185,67 @@ impl TransformState {
         let rule = rule.into();
         if self.seen_style_rules.insert(rule.clone()) {
             self.style_rules.push(rule);
+        }
+    }
+
+    pub fn record_atomic_style(
+        &mut self,
+        at_rule_stack: Vec<String>,
+        at_rule_hash_key: String,
+        selector_rule: &str,
+    ) -> String {
+        let signature = format!("{at_rule_hash_key}|{selector_rule}");
+        if !self.seen_atomic_selectors.insert(signature) {
+            return self.current_wrapped_rule(&at_rule_stack, selector_rule);
+        }
+
+        if at_rule_stack.is_empty() {
+            let rule = selector_rule.to_string();
+            if self.config.extract {
+                if self.seen_style_rules.insert(rule.clone()) {
+                    self.style_rules.push(rule.clone());
+                }
+            }
+            return rule;
+        }
+
+        let entry = self
+            .aggregated_at_rules
+            .entry(at_rule_stack.clone())
+            .or_insert_with(|| AggregatedAtRule {
+                display_stack: at_rule_stack.clone(),
+                body: String::new(),
+                index: None,
+            });
+
+        entry.body.push_str(selector_rule);
+
+        let wrapped = wrap_rule_stack(&entry.display_stack, &entry.body);
+
+        if self.config.extract {
+            match entry.index {
+                Some(index) => {
+                    self.style_rules[index] = wrapped.clone();
+                }
+                None => {
+                    entry.index = Some(self.style_rules.len());
+                    self.style_rules.push(wrapped.clone());
+                }
+            }
+        }
+
+        wrapped
+    }
+
+    fn current_wrapped_rule(&self, at_rule_stack: &[String], selector_rule: &str) -> String {
+        if at_rule_stack.is_empty() {
+            return selector_rule.to_string();
+        }
+
+        if let Some(entry) = self.aggregated_at_rules.get(at_rule_stack) {
+            wrap_rule_stack(&entry.display_stack, &entry.body)
+        } else {
+            wrap_rule_stack(at_rule_stack, selector_rule)
         }
     }
 
@@ -165,6 +287,88 @@ impl TransformState {
 
     pub fn is_css_map_ident(&self, ident: &str) -> bool {
         self.css_map_idents.contains(ident)
+    }
+
+    pub fn record_class_rule(&mut self, class_name: &str, at_rule_stack: &[String], rule: &str) {
+        let entry = if at_rule_stack.is_empty() {
+            ClassRuleEntry::Standalone(rule.to_string())
+        } else {
+            ClassRuleEntry::Aggregated(at_rule_stack.to_vec())
+        };
+
+        self.class_rules.insert(class_name.to_string(), entry);
+    }
+
+    pub fn mark_runtime_class_library_used(&mut self) {
+        self.runtime_class_library_used = true;
+    }
+
+    pub fn mark_runtime_components_used(&mut self) {
+        self.runtime_components_used = true;
+    }
+
+    pub fn runtime_components_used(&self) -> bool {
+        self.runtime_components_used
+    }
+
+    pub fn mark_uses_xcss(&mut self) {
+        self.uses_xcss = true;
+    }
+
+    pub fn uses_xcss(&self) -> bool {
+        self.uses_xcss
+    }
+
+    pub fn record_styled_display_name(&mut self, name: impl Into<String>) {
+        self.styled_display_names.insert(name.into());
+    }
+
+    pub fn take_styled_display_names(&mut self) -> HashSet<String> {
+        std::mem::take(&mut self.styled_display_names)
+    }
+
+    pub fn runtime_class_library_ident(&self) -> &str {
+        if self
+            .config
+            .class_name_compression_map
+            .as_ref()
+            .map(|value| !value.is_null())
+            .unwrap_or(false)
+        {
+            "ac"
+        } else {
+            "ax"
+        }
+    }
+
+    pub fn lookup_class_rule(&self, class_name: &str) -> Option<String> {
+        match self.class_rules.get(class_name)? {
+            ClassRuleEntry::Standalone(rule) => Some(rule.clone()),
+            ClassRuleEntry::Aggregated(stack) => self
+                .aggregated_at_rules
+                .get(stack)
+                .map(|entry| wrap_rule_stack(&entry.display_stack, &entry.body)),
+        }
+    }
+
+    pub fn record_css_map_sheets(&mut self, binding: impl Into<String>, sheets: Vec<String>) {
+        self.css_map_sheets.insert(binding.into(), sheets);
+    }
+
+    pub fn css_map_sheets(&self) -> &HashMap<String, Vec<String>> {
+        &self.css_map_sheets
+    }
+
+    pub fn record_pending_css_map_call(&mut self, binding: impl Into<String>, call: CallExpr) {
+        self.pending_css_map_calls.insert(binding.into(), call);
+    }
+
+    pub fn pending_css_map_call(&self, binding: &str) -> Option<&CallExpr> {
+        self.pending_css_map_calls.get(binding)
+    }
+
+    pub fn remove_pending_css_map_call(&mut self, binding: &str) {
+        self.pending_css_map_calls.remove(binding);
     }
 
     pub fn register_import_binding(&mut self, local: impl Into<String>, binding: ImportBinding) {
@@ -210,7 +414,7 @@ impl TransformState {
         }
     }
 
-    fn resolve_module_path(&self, request: &str) -> Result<PathBuf> {
+    fn resolve_module_path(&mut self, request: &str) -> Result<PathBuf> {
         let filename = self
             .metadata
             .filename
@@ -221,10 +425,15 @@ impl TransformState {
             .parent()
             .ok_or_else(|| anyhow!("Input file has no parent directory"))?;
 
+        let mut context = ResolveContext::default();
         let resolution = self
             .resolver
-            .resolve(directory, request)
+            .resolve_with_context(directory, request, &mut context)
             .map_err(|err| anyhow!(format!("{:?}", err)))?;
+
+        for dependency in &context.file_dependencies {
+            self.record_included_file(dependency.clone());
+        }
 
         Ok(resolution.into_path_buf())
     }
@@ -594,7 +803,7 @@ impl TransformState {
 
             if let Some(expr) = tpl.exprs.get(index) {
                 let value = self.evaluate_static_expr(expr, analysis)?;
-                let segment = value.into_template_segment()?;
+                let segment = value.into_template_segment(&self.config)?;
                 result.push_str(&segment);
             }
         }

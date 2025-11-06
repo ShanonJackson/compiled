@@ -10,6 +10,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use swc_core::common::comments::SingleThreadedComments;
+use swc_core::common::sync::Lrc;
+use swc_core::common::SourceMap;
 use swc_core::ecma::ast::Ident;
 
 use crate::options::PluginConfig;
@@ -26,11 +29,28 @@ pub struct PluginOptions {
 /// bundler we expect this to be populated with information about the file being
 /// transformed alongside any contextual flags.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct TransformMetadata {
     pub filename: Option<PathBuf>,
     pub root_dir: Option<PathBuf>,
     pub caller: Option<String>,
+    pub source_map: Option<Lrc<SourceMap>>,
+    pub comments: Option<Lrc<SingleThreadedComments>>,
+}
+
+impl std::fmt::Debug for TransformMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransformMetadata")
+            .field("filename", &self.filename)
+            .field("root_dir", &self.root_dir)
+            .field("caller", &self.caller)
+            .field(
+                "source_map",
+                &self.source_map.as_ref().map(|_| "<SourceMap>"),
+            )
+            .field("comments", &self.comments.as_ref().map(|_| "<Comments>"))
+            .finish()
+    }
 }
 
 #[allow(dead_code)]

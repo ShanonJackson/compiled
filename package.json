@@ -42,6 +42,7 @@
     "start:ssr": "ttsc --build examples/ssr/tsconfig.json && yarn workspace @compiled/ssr-app start",
     "start:webpack": "yarn build:babel-fixture && ttsc --build examples/webpack/tsconfig.json && yarn workspace @compiled/webpack-app start",
     "start:webpack:extract": "EXTRACT_TO_CSS=true yarn start:webpack",
+    "pretest": "node scripts/pretest-build.js",
     "test": "jest --no-cache",
     "test:cover": "yarn test --collectCoverage",
     "test:imports": "node test/test-imports",
@@ -128,6 +129,7 @@
       }
     }
   },
+  "packageManager": "yarn@1.22.22",
   "size-limit": [
     {
       "path": "./packages/react/dist/browser/runtime/css-custom-property.js",

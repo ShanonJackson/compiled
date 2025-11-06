@@ -1,0 +1,1 @@
+<Component xcss={{ color: 'red' }} />;
