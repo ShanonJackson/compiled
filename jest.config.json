@@ -9,6 +9,7 @@
   "testMatch": ["**/src/**/*.test.{ts,tsx}"],
   "testPathIgnorePatterns": ["__perf__"],
   "transformIgnorePatterns": ["node_modules/(?!(@compiled|@parcel|ordered-binary))"],
+  "modulePathIgnorePatterns": ["<rootDir>/.*/dist"],
   "watchPathIgnorePatterns": ["dist/"],
   "watchPlugins": ["jest-watch-typeahead/filename", "jest-watch-typeahead/testname"]
 }

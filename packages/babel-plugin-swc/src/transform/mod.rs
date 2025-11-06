@@ -23,6 +23,8 @@ impl Transform {
     }
 
     pub fn apply(&mut self, program: Program) -> TransformResult {
+        self.state.begin_pass();
+
         // The heavy lifting lives inside the visitor which currently performs a
         // mostly identity transformation. This structure mirrors the layout of
         // the Babel implementation and allows us to progressively port features
@@ -39,5 +41,9 @@ impl Transform {
         };
 
         self.state.finalize(transformed)
+    }
+
+    pub fn state(&self) -> &TransformState {
+        &self.state
     }
 }

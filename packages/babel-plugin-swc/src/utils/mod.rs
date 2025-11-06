@@ -4,7 +4,9 @@
 //! required. New helpers can be ported from the Babel implementation on an
 //! as-needed basis as the transformation logic grows.
 
+pub mod build_display_name;
 pub mod cache;
+pub mod comments;
 pub mod hash;
 pub mod kebab_case;
 pub mod wtf8;

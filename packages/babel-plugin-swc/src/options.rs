@@ -18,7 +18,7 @@ pub struct PluginConfig {
     pub nonce: Option<String>,
     #[serde(default)]
     pub import_sources: Vec<String>,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub optimize_css: bool,
     #[serde(default)]
     pub resolver: Option<ResolverConfig>,
@@ -51,7 +51,7 @@ impl Default for PluginConfig {
             import_react: default_true(),
             nonce: None,
             import_sources: Vec::new(),
-            optimize_css: default_true(),
+            optimize_css: false,
             resolver: None,
             extensions: Vec::new(),
             parser_babel_plugins: Vec::new(),
@@ -84,23 +84,49 @@ impl Default for CacheMode {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolverConfig {
     #[serde(default)]
     pub working_directory: Option<String>,
     #[serde(default)]
-    pub conditions: Vec<String>,
-    #[serde(default)]
-    pub extensions: Vec<String>,
+    pub alias: Option<serde_json::Value>,
     #[serde(default)]
     pub alias_fields: Vec<Vec<String>>,
     #[serde(default)]
+    pub condition_names: Vec<String>,
+    #[serde(default)]
+    pub extension_alias: Option<serde_json::Value>,
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default)]
     pub exports_fields: Vec<Vec<String>>,
+    #[serde(default)]
+    pub imports_fields: Vec<Vec<String>>,
+    #[serde(default)]
+    pub fallback: Option<serde_json::Value>,
+    #[serde(default)]
+    pub fully_specified: Option<bool>,
     #[serde(default)]
     pub main_fields: Vec<String>,
     #[serde(default)]
     pub main_files: Vec<String>,
+    #[serde(default)]
+    pub modules: Vec<String>,
+    #[serde(default)]
+    pub prefer_relative: Option<bool>,
+    #[serde(default)]
+    pub prefer_absolute: Option<bool>,
+    #[serde(default)]
+    pub restrictions: Vec<String>,
+    #[serde(default)]
+    pub roots: Vec<String>,
+    #[serde(default)]
+    pub symlinks: Option<bool>,
+    #[serde(default)]
+    pub builtin_modules: Option<bool>,
+    #[serde(default)]
+    pub tsconfig: Option<serde_json::Value>,
 }
 
 fn default_true() -> bool {

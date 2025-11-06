@@ -1,0 +1,11 @@
+{
+  "name": "@compiled-resolver-conditional",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    ".": {
+      "compiled": "./compiled.js",
+      "default": "./browser.js"
+    }
+  }
+}

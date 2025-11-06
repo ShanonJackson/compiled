@@ -8,6 +8,14 @@
 
 use std::borrow::Cow;
 
+mod color;
+mod ordered_values;
+mod reduce_initial;
+
+pub use color::{is_color, minify_color};
+pub use ordered_values::normalise_ordered_value;
+pub use reduce_initial::from_initial;
+
 /// Normalises timing function shorthands such as `300ms` to `0.3s`.
 ///
 /// The implementation intentionally mirrors the behaviour of the PostCSS setup
@@ -69,6 +77,80 @@ pub fn normalise_timing_function(value: &str) -> Cow<'_, str> {
     }
 
     Cow::Owned(output)
+}
+
+/// Normalises the CSS `currentColor` keyword casing.
+///
+/// The JavaScript implementation performs this normalisation through the
+/// custom `normalize-current-color` PostCSS plugin when `optimizeCss` is
+/// enabled. The Rust port exposes the same helper so callers can decide when to
+/// apply it based on configuration.
+#[allow(dead_code)]
+pub fn normalise_current_color(value: &str) -> Cow<'_, str> {
+    if value.eq_ignore_ascii_case("currentcolor") || value.eq_ignore_ascii_case("current-color") {
+        Cow::Borrowed("currentColor")
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+#[allow(dead_code)]
+pub fn normalise_zero_unit(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut split_index = None;
+
+    for (index, ch) in trimmed.char_indices() {
+        if ch.is_ascii_digit() || ch == '+' || ch == '-' || ch == '.' {
+            continue;
+        }
+        split_index = Some(index);
+        break;
+    }
+
+    let Some(index) = split_index else {
+        if trimmed
+            .parse::<f64>()
+            .map(|number| number == 0.0)
+            .unwrap_or(false)
+        {
+            return Some(String::from("0"));
+        }
+        return None;
+    };
+
+    let (number_part, unit_part) = trimmed.split_at(index);
+    if unit_part.is_empty() {
+        return None;
+    }
+
+    if !unit_part
+        .chars()
+        .all(|ch| ch.is_ascii_alphabetic() || ch == '%' || ch == '-')
+    {
+        return None;
+    }
+
+    if number_part
+        .parse::<f64>()
+        .map(|number| number == 0.0)
+        .unwrap_or(false)
+    {
+        Some(String::from("0"))
+    } else {
+        None
+    }
+}
+
+pub fn reduce_initial_value(property: &str, value: &str) -> Option<String> {
+    if !value.eq_ignore_ascii_case("initial") {
+        return None;
+    }
+
+    from_initial(property).map(|replacement| replacement.to_string())
 }
 
 fn is_number_start(bytes: &[u8], index: usize) -> bool {
@@ -181,7 +263,10 @@ fn matches_keyword(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalise_timing_function;
+    use super::{
+        minify_color, normalise_current_color, normalise_timing_function, normalise_zero_unit,
+        reduce_initial_value,
+    };
 
     #[test]
     fn converts_milliseconds_to_seconds() {
@@ -210,5 +295,42 @@ mod tests {
     #[test]
     fn handles_negative_durations() {
         assert_eq!(normalise_timing_function("-200ms"), "-0.200s");
+    }
+
+    #[test]
+    fn normalises_current_color_keyword() {
+        assert_eq!(normalise_current_color("currentcolor"), "currentColor");
+        assert_eq!(normalise_current_color("CURRENT-COLOR"), "currentColor");
+    }
+
+    #[test]
+    fn leaves_other_values_untouched() {
+        assert_eq!(normalise_current_color("inherit"), "inherit");
+        assert_eq!(normalise_current_color("var(--token)"), "var(--token)");
+    }
+
+    #[test]
+    fn normalises_zero_units() {
+        assert_eq!(normalise_zero_unit("0px"), Some("0".to_string()));
+        assert_eq!(normalise_zero_unit("0.0em"), Some("0".to_string()));
+        assert_eq!(normalise_zero_unit(" 0rem "), Some("0".to_string()));
+        assert_eq!(normalise_zero_unit("1px"), None);
+    }
+
+    #[test]
+    fn reduces_initial_values() {
+        assert_eq!(
+            reduce_initial_value("margin-left", "initial"),
+            Some("0".to_string())
+        );
+        assert_eq!(reduce_initial_value("color", "initial"), None);
+        assert_eq!(reduce_initial_value("margin", "inherit"), None);
+    }
+
+    #[test]
+    fn minifies_simple_colors() {
+        assert_eq!(minify_color("rebeccapurple"), Some("#639".to_string()));
+        assert_eq!(minify_color("rgb(255, 0, 0)"), Some("red".to_string()));
+        assert_eq!(minify_color("var(--token)"), None);
     }
 }
