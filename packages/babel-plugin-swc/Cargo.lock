@@ -197,6 +197,8 @@ dependencies = [
  "indexmap",
  "once_cell",
  "oxc_resolver",
+ "percent-encoding",
+ "regex",
  "serde",
  "serde_json",
  "smallvec",

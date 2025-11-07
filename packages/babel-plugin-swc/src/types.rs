@@ -32,6 +32,7 @@ pub struct PluginOptions {
 #[derive(Clone, Default)]
 pub struct TransformMetadata {
     pub filename: Option<PathBuf>,
+    pub source_file_name: Option<PathBuf>,
     pub root_dir: Option<PathBuf>,
     pub caller: Option<String>,
     pub source_map: Option<Lrc<SourceMap>>,
@@ -42,6 +43,7 @@ impl std::fmt::Debug for TransformMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransformMetadata")
             .field("filename", &self.filename)
+            .field("source_file_name", &self.source_file_name)
             .field("root_dir", &self.root_dir)
             .field("caller", &self.caller)
             .field(

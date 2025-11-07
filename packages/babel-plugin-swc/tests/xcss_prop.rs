@@ -33,6 +33,7 @@ fn respects_process_xcss_flag() {
 
     let metadata = TransformMetadata {
         filename: Some(std::path::PathBuf::from("inline.tsx")),
+        source_file_name: None,
         root_dir: None,
         caller: None,
         source_map: Some(parsed.source_map.clone()),

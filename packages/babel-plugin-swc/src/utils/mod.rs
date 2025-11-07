@@ -7,6 +7,7 @@
 pub mod build_display_name;
 pub mod cache;
 pub mod comments;
+pub mod encode;
 pub mod hash;
 pub mod kebab_case;
 pub mod wtf8;
