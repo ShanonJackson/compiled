@@ -9,6 +9,7 @@ use swc_core::common::comments::SingleThreadedComments;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast::{EsVersion, Module, Program};
+use swc_core::ecma::codegen::{text_writer::JsWriter, Config as CodegenConfig, Emitter};
 use swc_core::ecma::parser::{parse_file_as_module, EsSyntax, Syntax};
 
 #[derive(Clone)]
@@ -82,6 +83,7 @@ pub fn run_transform(source: &str) {
 
     let metadata = TransformMetadata {
         filename: Some(PathBuf::from("inline.tsx")),
+        source_file_name: None,
         root_dir: None,
         caller: None,
         source_map: Some(parsed.source_map.clone()),
@@ -101,4 +103,24 @@ pub fn panic_message(error: Box<dyn Any + Send>) -> String {
     } else {
         "unknown panic".to_string()
     }
+}
+
+#[allow(dead_code)]
+pub fn emit_program(program: &Program) -> String {
+    let cm: Lrc<SourceMap> = Default::default();
+    let mut buf = Vec::new();
+
+    {
+        let writer = JsWriter::new(cm.clone(), "\n", &mut buf, None);
+        let mut emitter = Emitter {
+            cfg: CodegenConfig::default().with_target(EsVersion::Es2022),
+            comments: None,
+            cm,
+            wr: writer,
+        };
+
+        emitter.emit_program(program).expect("emit program");
+    }
+
+    String::from_utf8(buf).expect("utf8 program")
 }

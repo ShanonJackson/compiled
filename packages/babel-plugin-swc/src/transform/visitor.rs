@@ -5,13 +5,13 @@ use std::collections::HashSet;
 use swc_core::common::{SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, AssignPat, BinaryOp, BindingIdent, BlockStmt, BlockStmtOrExpr, CallExpr,
-    Callee, CondExpr, Decl, Expr, ExprOrSpread, Ident, IfStmt, ImportDecl, ImportSpecifier,
-    JSXAttr, JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXClosingElement, JSXElement,
-    JSXElementChild, JSXElementName, JSXExpr, JSXExprContainer, JSXOpeningElement, KeyValuePatProp,
-    KeyValueProp, Lit, MemberExpr, MemberProp, Module, ModuleDecl, ModuleExportName, ModuleItem,
-    NewExpr, ObjectLit, ObjectPat, ObjectPatProp, Pat, Prop, PropName, PropOrSpread, RestPat,
-    ReturnStmt, SpreadElement, Stmt, Str, TaggedTpl, ThrowStmt, Tpl, VarDecl, VarDeclKind,
-    VarDeclarator,
+    Callee, CondExpr, Decl, Expr, ExprOrSpread, Ident, IfStmt, ImportDecl, ImportNamedSpecifier,
+    ImportSpecifier, JSXAttr, JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXClosingElement,
+    JSXElement, JSXElementChild, JSXElementName, JSXExpr, JSXExprContainer, JSXOpeningElement,
+    KeyValuePatProp, KeyValueProp, Lit, MemberExpr, MemberProp, Module, ModuleDecl,
+    ModuleExportName, ModuleItem, NewExpr, ObjectLit, ObjectPat, ObjectPatProp, Pat, Prop,
+    PropName, PropOrSpread, RestPat, ReturnStmt, SpreadElement, Stmt, Str, TaggedTpl, ThrowStmt,
+    Tpl, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::visit::{noop_fold_type, Fold, FoldWith};
 
@@ -181,6 +181,7 @@ impl<'a> Fold for RootFolder<'a> {
 
         let mut module = module.fold_children_with(self);
         self.insert_styled_display_names(&mut module);
+        self.append_runtime_imports(&mut module);
         module
     }
 
@@ -586,6 +587,95 @@ impl<'a> RootFolder<'a> {
         }
 
         module.body = new_body;
+    }
+
+    fn append_runtime_imports(&mut self, module: &mut Module) {
+        let mut specifiers: Vec<String> = Vec::new();
+
+        let runtime_class_library_used = self.state.runtime_class_library_used();
+        let runtime_components_used =
+            !self.state.config.extract && self.state.runtime_components_used();
+        let uses_xcss = self.state.uses_xcss();
+
+        if runtime_class_library_used {
+            specifiers.push(self.state.runtime_class_library_ident().to_string());
+        }
+
+        if runtime_class_library_used || runtime_components_used || uses_xcss {
+            specifiers.push("ix".to_string());
+        }
+
+        if runtime_components_used {
+            specifiers.push("CC".to_string());
+            specifiers.push("CS".to_string());
+        }
+
+        if specifiers.is_empty() {
+            return;
+        }
+
+        let runtime_module = "@compiled/react/runtime";
+
+        if let Some(import_decl) = module.body.iter_mut().find_map(|item| match item {
+            ModuleItem::ModuleDecl(ModuleDecl::Import(import))
+                if wtf8_to_string(&import.src.value) == runtime_module =>
+            {
+                Some(import)
+            }
+            _ => None,
+        }) {
+            for name in specifiers {
+                let already_present = import_decl.specifiers.iter().any(|specifier| {
+                    matches!(
+                        specifier,
+                        ImportSpecifier::Named(existing)
+                            if existing.local.sym.as_ref() == name
+                    )
+                });
+
+                if already_present {
+                    continue;
+                }
+
+                import_decl
+                    .specifiers
+                    .push(ImportSpecifier::Named(ImportNamedSpecifier {
+                        span: DUMMY_SP,
+                        local: Ident::new(name.into(), DUMMY_SP, SyntaxContext::empty()),
+                        imported: None,
+                        is_type_only: false,
+                    }));
+            }
+        } else {
+            let specifiers = specifiers
+                .into_iter()
+                .map(|name| {
+                    ImportSpecifier::Named(ImportNamedSpecifier {
+                        span: DUMMY_SP,
+                        local: Ident::new(name.into(), DUMMY_SP, SyntaxContext::empty()),
+                        imported: None,
+                        is_type_only: false,
+                    })
+                })
+                .collect();
+
+            let import_decl = ImportDecl {
+                span: DUMMY_SP,
+                specifiers,
+                src: Box::new(Str {
+                    span: DUMMY_SP,
+                    value: runtime_module.into(),
+                    raw: None,
+                }),
+                type_only: false,
+                with: None,
+                phase: Default::default(),
+            };
+
+            let import = ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl));
+            self.state
+                .insert_module_item_at_start_preserving_comments(module, import);
+        }
     }
 
     fn collect_imports(&mut self, module: &Module) {
@@ -2467,6 +2557,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2507,6 +2598,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2540,6 +2632,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2572,6 +2665,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2604,6 +2698,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2648,6 +2743,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2700,6 +2796,7 @@ mod tests {
 
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2740,6 +2837,7 @@ mod tests {
         let module = parse_module(&entry_path, source);
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,
@@ -2786,6 +2884,7 @@ mod tests {
         let module = parse_module(&entry_path, source);
         let metadata = TransformMetadata {
             filename: Some(entry_path.clone()),
+            source_file_name: None,
             root_dir: Some(dir.path().to_path_buf()),
             caller: None,
             source_map: None,

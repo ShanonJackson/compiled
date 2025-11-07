@@ -119,6 +119,7 @@ fn transform_fixture(dir: &Path, parsed: &ParsedFixtureModule, extract: bool) ->
 
     let metadata = TransformMetadata {
         filename: Some(filename),
+        source_file_name: None,
         root_dir: Some(dir.to_path_buf()),
         caller: None,
         source_map: Some(parsed.source_map.clone()),

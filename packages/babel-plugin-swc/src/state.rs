@@ -4,22 +4,27 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use oxc_resolver::{ResolveContext, Resolver};
-use swc_core::common::comments::SingleThreadedComments;
+use swc_core::common::comments::{Comment, Comments, SingleThreadedComments};
 use swc_core::common::sync::Lrc;
-use swc_core::common::{FileName, SourceMap};
+use swc_core::common::Spanned;
+use swc_core::common::SyntaxContext;
+use swc_core::common::{BytePos, FileName, SourceMap, Span, DUMMY_SP};
 use swc_core::ecma::ast::{
-    ArrayLit, BinaryOp, CallExpr, CondExpr, EsVersion, Expr, ExprOrSpread, Lit, MemberExpr,
-    MemberProp, Module, ObjectLit, Prop, PropOrSpread, Tpl, UnaryOp,
+    ArrayLit, BinaryOp, CallExpr, Callee, CondExpr, EsVersion, Expr, ExprOrSpread, ExprStmt, Ident,
+    ImportDecl, Lit, MemberExpr, MemberProp, Module, ModuleDecl, ModuleItem, ObjectLit, Prop,
+    PropOrSpread, Stmt, Str, Tpl, UnaryOp,
 };
 use swc_core::ecma::parser::{parse_file_as_module, EsSyntax, Syntax, TsSyntax};
 
 use crate::{
     css::property::{trim_number, CssObject, CssValue},
     options::{CacheMode, PluginConfig},
+    postcss::{sort_atomic_style_sheet, SortConfig},
     resolver::create_resolver,
     types::{TransformMetadata, TransformResult},
     utils::{
         cache::{Cache, CacheOptions},
+        encode::to_uri_component,
         wtf8::wtf8_to_string,
     },
 };
@@ -59,6 +64,12 @@ struct AggregatedAtRule {
 enum ClassRuleEntry {
     Standalone(String),
     Aggregated(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
+struct PreservedLeadingComments {
+    span: Span,
+    comments: Vec<Comment>,
 }
 
 fn wrap_rule_stack(stack: &[String], body: &str) -> String {
@@ -303,6 +314,10 @@ impl TransformState {
         self.runtime_class_library_used = true;
     }
 
+    pub fn runtime_class_library_used(&self) -> bool {
+        self.runtime_class_library_used
+    }
+
     pub fn mark_runtime_components_used(&mut self) {
         self.runtime_components_used = true;
     }
@@ -406,12 +421,167 @@ impl TransformState {
         Some(value)
     }
 
-    pub fn finalize(&mut self, program: swc_core::ecma::ast::Program) -> TransformResult {
+    pub fn finalize(&mut self, mut program: swc_core::ecma::ast::Program) -> TransformResult {
+        if self.config.extract {
+            if let swc_core::ecma::ast::Program::Module(module) = &mut program {
+                self.insert_style_sheet_requires(module);
+                self.extract_styles_to_directory(module);
+            }
+        }
+
         TransformResult {
             program,
             style_rules: std::mem::take(&mut self.style_rules),
             included_files: std::mem::take(&mut self.included_files),
         }
+    }
+
+    fn insert_style_sheet_requires(&self, module: &mut Module) {
+        if self.config.compiled_require_exclude {
+            return;
+        }
+
+        let Some(style_sheet_path) = &self.config.style_sheet_path else {
+            return;
+        };
+
+        if self.style_rules.is_empty() {
+            return;
+        }
+
+        let preserved_comments = self.preserve_leading_comments(module);
+        let mut original_body = std::mem::take(&mut module.body);
+        let mut new_body = Vec::with_capacity(self.style_rules.len() + original_body.len());
+
+        for (index, rule) in self.style_rules.iter().enumerate() {
+            let encoded = to_uri_component(rule);
+            let specifier = format!("{style_sheet_path}?style={encoded}");
+
+            let require_call = Expr::Call(CallExpr {
+                span: DUMMY_SP,
+                ctxt: SyntaxContext::empty(),
+                args: vec![ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Lit(Lit::Str(Str {
+                        span: DUMMY_SP,
+                        value: specifier.into(),
+                        raw: None,
+                    }))),
+                }],
+                callee: Callee::Expr(Box::new(Expr::Ident(Ident::new(
+                    "require".into(),
+                    DUMMY_SP,
+                    SyntaxContext::empty(),
+                )))),
+                type_args: None,
+            });
+
+            let mut stmt = ModuleItem::Stmt(Stmt::Expr(ExprStmt {
+                span: DUMMY_SP,
+                expr: Box::new(require_call),
+            }));
+
+            if index == 0 {
+                if let Some(preserved) = &preserved_comments {
+                    set_module_item_span(&mut stmt, preserved.span);
+                }
+            }
+
+            new_body.push(stmt);
+        }
+
+        new_body.append(&mut original_body);
+        module.body = new_body;
+
+        if let Some(preserved) = preserved_comments {
+            self.restore_leading_comments(module, preserved);
+        }
+    }
+
+    fn extract_styles_to_directory(&self, module: &mut Module) {
+        let Some(config) = &self.config.extract_styles_to_directory else {
+            return;
+        };
+
+        if self.style_rules.is_empty() {
+            return;
+        }
+
+        let filename = self
+            .metadata
+            .filename
+            .as_ref()
+            .expect("Source filename was not defined");
+        let source_file_name = self
+            .metadata
+            .source_file_name
+            .as_ref()
+            .or_else(|| self.metadata.filename.as_ref())
+            .expect("Source filename was not defined");
+        let cwd = self
+            .metadata
+            .root_dir
+            .as_ref()
+            .expect("extractStylesToDirectory requires root_dir metadata");
+
+        let css_filename = filename
+            .file_stem()
+            .map(|stem| format!("{}.compiled.css", stem.to_string_lossy()))
+            .expect("Unable to determine CSS filename for extraction");
+
+        let source_str = source_file_name.to_string_lossy();
+        let source = &config.source;
+        let Some(index) = source_str.find(source) else {
+            panic!(
+                "{}: Source directory '{}' was not found relative to source file ('{}')",
+                filename.display(),
+                source,
+                source_str,
+            );
+        };
+
+        let relative_path = &source_str[index + source.len()..];
+        let mut css_path = cwd.join(&config.dest);
+
+        if let Some(parent) = Path::new(relative_path).parent() {
+            if !parent.as_os_str().is_empty() && parent != Path::new(".") {
+                css_path = css_path.join(parent);
+            }
+        }
+
+        css_path = css_path.join(&css_filename);
+
+        if let Some(dir) = css_path.parent() {
+            fs::create_dir_all(dir).unwrap_or_else(|err| {
+                panic!("failed to create stylesheet directory {:?}: {err}", dir)
+            });
+        }
+
+        let sort_config = SortConfig {
+            sort_at_rules_enabled: self.config.sort_at_rules,
+            sort_shorthand_enabled: self.config.sort_shorthand,
+        };
+        let stylesheet = sort_atomic_style_sheet(&self.style_rules, sort_config);
+
+        fs::write(&css_path, stylesheet).unwrap_or_else(|err| {
+            panic!("failed to write extracted stylesheet {:?}: {err}", css_path)
+        });
+
+        let import_src = format!("./{css_filename}");
+        let import = ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
+            span: DUMMY_SP,
+            specifiers: Vec::new(),
+            src: Box::new(Str {
+                span: DUMMY_SP,
+                value: import_src.into(),
+                raw: None,
+            }),
+            type_only: false,
+            with: None,
+            phase: Default::default(),
+        }));
+
+        self.insert_module_item_at_start_preserving_comments(module, import);
     }
 
     fn resolve_module_path(&mut self, request: &str) -> Result<PathBuf> {
@@ -849,6 +1019,75 @@ impl TransformState {
                 }
             }
         }
+    }
+
+    fn preserve_leading_comments(&self, module: &Module) -> Option<PreservedLeadingComments> {
+        let comments = self.metadata.comments.as_ref()?;
+        let first_item = module.body.first()?;
+        let span = module_item_span(first_item)?;
+        let comments_vec = comments.take_leading(span.lo())?;
+
+        Some(PreservedLeadingComments {
+            span,
+            comments: comments_vec,
+        })
+    }
+
+    fn restore_leading_comments(&self, module: &Module, preserved: PreservedLeadingComments) {
+        if let Some(comments) = &self.metadata.comments {
+            let mut updated = preserved.comments;
+            let target_lo = module.span.lo();
+
+            for comment in &mut updated {
+                let original_lo = comment.span.lo();
+                let original_hi = comment.span.hi();
+                let len = original_hi.0.saturating_sub(original_lo.0);
+                let target_hi = BytePos(target_lo.0.saturating_add(len));
+
+                comment.span = Span::new(target_lo, target_hi);
+            }
+
+            comments.add_leading_comments(target_lo, updated);
+        }
+    }
+
+    pub(crate) fn insert_module_item_at_start_preserving_comments(
+        &self,
+        module: &mut Module,
+        mut item: ModuleItem,
+    ) {
+        let preserved = self.preserve_leading_comments(module);
+
+        if let Some(ref preserved) = preserved {
+            set_module_item_span(&mut item, preserved.span);
+        }
+
+        module.body.insert(0, item);
+
+        if let Some(preserved) = preserved {
+            self.restore_leading_comments(module, preserved);
+        }
+    }
+}
+
+fn module_item_span(item: &ModuleItem) -> Option<Span> {
+    match item {
+        ModuleItem::Stmt(stmt) => Some(stmt.span()),
+        ModuleItem::ModuleDecl(decl) => Some(decl.span()),
+    }
+}
+
+fn set_module_item_span(item: &mut ModuleItem, span: Span) {
+    match item {
+        ModuleItem::Stmt(stmt) => {
+            if let Stmt::Expr(expr) = stmt {
+                expr.span = span;
+            }
+        }
+        ModuleItem::ModuleDecl(ModuleDecl::Import(import)) => {
+            import.span = span;
+        }
+        _ => {}
     }
 }
 

@@ -30,6 +30,7 @@ fn resolves_imports_via_alias_config() {
 
     let metadata = TransformMetadata {
         filename: Some(entry_path.clone()),
+        source_file_name: None,
         root_dir: Some(fixture_dir.clone()),
         caller: None,
         source_map: Some(parsed.source_map.clone()),
@@ -67,6 +68,7 @@ fn resolves_package_using_condition_names() {
 
     let metadata = TransformMetadata {
         filename: Some(entry_path.clone()),
+        source_file_name: None,
         root_dir: Some(fixture_dir.clone()),
         caller: None,
         source_map: Some(parsed.source_map.clone()),

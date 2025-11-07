@@ -1,3 +1,4 @@
+import { ix, CC, CS } from "@compiled/react/runtime";
 import { cssMap } from '@compiled/react';
 const styles = {
     primary: "_syaz5scu",
