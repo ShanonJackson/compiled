@@ -60,6 +60,8 @@ mod utils_get_jsx_attribute;
 mod utils_get_runtime_class_name_library;
 #[path = "utils/has-numeric-value.rs"]
 mod utils_has_numeric_value;
+#[path = "utils/hash.rs"]
+mod utils_hash;
 #[path = "utils/hoist-sheet.rs"]
 mod utils_hoist_sheet;
 #[path = "utils/is-compiled.rs"]
@@ -114,7 +116,7 @@ mod utils_traversers;
 mod utils_traversers_get_export;
 #[path = "utils/traversers/object.rs"]
 mod utils_traversers_object;
-#[path = "utils/traversers/set-imported-compiled-imports.rs"]
+#[path = "utils/traversers/set_imported_compiled_imports.rs"]
 mod utils_traversers_set_imported_compiled_imports;
 #[path = "utils/traversers/types.rs"]
 mod utils_traversers_types;

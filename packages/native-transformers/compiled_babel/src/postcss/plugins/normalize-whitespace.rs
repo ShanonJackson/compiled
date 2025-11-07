@@ -269,7 +269,7 @@ mod tests {
         let mut output = String::new();
         {
             let writer = BasicCssWriter::new(&mut output, None, Default::default());
-            let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+            let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
             generator.emit(stylesheet).expect("emit stylesheet");
         }
         output

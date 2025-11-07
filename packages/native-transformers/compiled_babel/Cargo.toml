@@ -30,3 +30,4 @@ swc_core = { version = "=26.3.4", features = [
 
 [dev-dependencies]
 insta = "1.39.0"
+swc_ecma_parser = "=14.0.2"
