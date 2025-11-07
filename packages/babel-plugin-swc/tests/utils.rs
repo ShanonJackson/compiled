@@ -82,6 +82,7 @@ pub fn run_transform(source: &str) {
 
     let metadata = TransformMetadata {
         filename: Some(PathBuf::from("inline.tsx")),
+        source_file_name: None,
         root_dir: None,
         caller: None,
         source_map: Some(parsed.source_map.clone()),
