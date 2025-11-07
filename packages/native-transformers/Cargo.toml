@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "compiled_babel",
+  "compiled_strip_runtime"
+]
+resolver = "2"
+
