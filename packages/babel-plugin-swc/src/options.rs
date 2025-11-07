@@ -42,6 +42,14 @@ pub struct PluginConfig {
     pub flatten_multiple_selectors: bool,
     #[serde(default)]
     pub extract: bool,
+    #[serde(default)]
+    pub style_sheet_path: Option<String>,
+    #[serde(default)]
+    pub compiled_require_exclude: bool,
+    #[serde(default)]
+    pub extract_styles_to_directory: Option<ExtractStylesToDirectory>,
+    #[serde(default = "default_true")]
+    pub sort_shorthand: bool,
 }
 
 impl Default for PluginConfig {
@@ -63,6 +71,10 @@ impl Default for PluginConfig {
             class_hash_prefix: None,
             flatten_multiple_selectors: default_true(),
             extract: false,
+            style_sheet_path: None,
+            compiled_require_exclude: false,
+            extract_styles_to_directory: None,
+            sort_shorthand: default_true(),
         }
     }
 }
@@ -127,6 +139,14 @@ pub struct ResolverConfig {
     pub builtin_modules: Option<bool>,
     #[serde(default)]
     pub tsconfig: Option<serde_json::Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractStylesToDirectory {
+    pub source: String,
+    pub dest: String,
 }
 
 fn default_true() -> bool {

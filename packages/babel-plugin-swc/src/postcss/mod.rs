@@ -11,10 +11,12 @@ use std::borrow::Cow;
 mod color;
 mod ordered_values;
 mod reduce_initial;
+mod sort;
 
 pub use color::{is_color, minify_color};
 pub use ordered_values::normalise_ordered_value;
 pub use reduce_initial::from_initial;
+pub use sort::{sort_atomic_style_sheet, SortConfig};
 
 /// Normalises timing function shorthands such as `300ms` to `0.3s`.
 ///
