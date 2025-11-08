@@ -41,6 +41,7 @@
 - **Progress:** Ported the call and member expression traversal helpers to Rust, including parenthesis skipping, object pattern parameter binding, namespace/object path evaluation, and parser-driven regression tests that mirror the Babel behaviour for inline functions, member callees, nested access paths, and unresolved fallbacks.
 - **Progress:** Ported the `evaluateExpression` helper to Rust with SWC-based literal evaluation, identifier binding resolution, and parser-driven tests for binary arithmetic, string concatenation, keyframe preservation, and TypeScript assertions, alongside support routines for stripping wrappers during evaluation.
 - **Progress:** Ported the object property stringification helper and its string concatenation utilities to Rust so computed keys, template literals, and `.concat()` calls resolve through the native evaluator with parity-focused unit tests mirroring the Babel suite.
+- **Progress:** Ported the cssMap helper utilities to Rust, including literal key guards, selector heuristics, error scaffolding, and unit tests to validate error paths and key handling against the Babel implementation.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
