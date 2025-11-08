@@ -35,8 +35,8 @@ const UPPER_THORN: char = '\u{00DE}';
 static UNIT_REGEX: Lazy<Regex> = Lazy::new(|| {
     const UNITS: &[&str] = &[
         "em", "ex", "cap", "ch", "ic", "rem", "lh", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax",
-        "cm", "mm", "Q", "in", "pc", "pt", "px", "deg", "grad", "rad", "turn", "s", "ms",
-        "Hz", "kHz", "dpi", "dpcm", "dppx", "x", "fr", "%",
+        "cm", "mm", "Q", "in", "pc", "pt", "px", "deg", "grad", "rad", "turn", "s", "ms", "Hz",
+        "kHz", "dpi", "dpcm", "dppx", "x", "fr", "%",
     ];
 
     let pattern = format!(
@@ -112,7 +112,10 @@ fn css_before_interpolation(input: &str) -> BeforeInterpolation {
         }
     }
 
-    BeforeInterpolation { css, variable_prefix }
+    BeforeInterpolation {
+        css,
+        variable_prefix,
+    }
 }
 
 fn css_after_interpolation(input: &str) -> AfterInterpolation {
@@ -134,7 +137,10 @@ fn css_after_interpolation(input: &str) -> AfterInterpolation {
 }
 
 /// Extracts prefix and suffix around an interpolation, mirroring the behaviour of the JS helper.
-pub fn css_affix_interpolation(before: &str, after: &str) -> (BeforeInterpolation, AfterInterpolation) {
+pub fn css_affix_interpolation(
+    before: &str,
+    after: &str,
+) -> (BeforeInterpolation, AfterInterpolation) {
     if before.ends_with("url(") && after.starts_with(')') {
         let mut css_before = before.to_string();
         for _ in 0.."url(".len() {
@@ -156,7 +162,10 @@ pub fn css_affix_interpolation(before: &str, after: &str) -> (BeforeInterpolatio
         );
     }
 
-    (css_before_interpolation(before), css_after_interpolation(after))
+    (
+        css_before_interpolation(before),
+        css_after_interpolation(after),
+    )
 }
 
 /// Converts camelCase strings into kebab-case, matching the JS implementation.
@@ -211,8 +220,8 @@ pub fn add_unit_if_needed(property: &str, value: CssValue<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_unit_if_needed, css_affix_interpolation, kebab_case, AfterInterpolation, BeforeInterpolation,
-        CssValue,
+        add_unit_if_needed, css_affix_interpolation, kebab_case, AfterInterpolation,
+        BeforeInterpolation, CssValue,
     };
 
     #[test]
@@ -254,18 +263,12 @@ mod tests {
 
     #[test]
     fn add_unit_skips_unitless_properties() {
-        assert_eq!(
-            add_unit_if_needed("opacity", CssValue::Number(0.5)),
-            "0.5"
-        );
+        assert_eq!(add_unit_if_needed("opacity", CssValue::Number(0.5)), "0.5");
     }
 
     #[test]
     fn add_unit_appends_px_for_non_unitless() {
-        assert_eq!(
-            add_unit_if_needed("margin", CssValue::Number(4.0)),
-            "4px"
-        );
+        assert_eq!(add_unit_if_needed("margin", CssValue::Number(4.0)), "4px");
     }
 
     #[test]
