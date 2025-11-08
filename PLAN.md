@@ -39,6 +39,7 @@
 - **Progress:** Extended the expression traversal suite by porting the binary and unary helpers to Rust so numeric coercion and negation rewriting follow the Babel behaviour, complete with parser-driven tests that validate evaluated operands and literal preservation.
 - **Progress:** Added scope-aware metadata bindings, ported `resolveBinding` to consult own and parent scopes, and translated `traverseIdentifier` so constant bindings resolve through the shared evaluator with parity-focused tests.
 - **Progress:** Ported the call and member expression traversal helpers to Rust, including parenthesis skipping, object pattern parameter binding, namespace/object path evaluation, and parser-driven regression tests that mirror the Babel behaviour for inline functions, member callees, nested access paths, and unresolved fallbacks.
+- **Progress:** Ported the `evaluateExpression` helper to Rust with SWC-based literal evaluation, identifier binding resolution, and parser-driven tests for binary arithmetic, string concatenation, keyframe preservation, and TypeScript assertions, alongside support routines for stripping wrappers during evaluation.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.

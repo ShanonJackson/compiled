@@ -232,8 +232,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use swc_core::common::sync::Lrc;
-    use swc_core::common::{FileName, SourceMap, DUMMY_SP};
     use swc_core::common::Spanned;
+    use swc_core::common::{FileName, SourceMap, DUMMY_SP};
     use swc_core::ecma::ast::{Expr, Lit, Number, Str};
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
@@ -278,9 +278,7 @@ mod tests {
             Expr::Member(member) => {
                 traverse_member_expression(member, meta, evaluate as EvaluateExpression)
             }
-            Expr::Ident(ident) => {
-                traverse_identifier(ident, meta, evaluate as EvaluateExpression)
-            }
+            Expr::Ident(ident) => traverse_identifier(ident, meta, evaluate as EvaluateExpression),
             Expr::Fn(_) | Expr::Arrow(_) => {
                 traverse_function(expr, meta, evaluate as EvaluateExpression)
             }
@@ -288,7 +286,10 @@ mod tests {
             _ => create_result_pair(expr.clone(), meta),
         };
 
-        if matches!(pair.value, Expr::Lit(_) | Expr::Object(_) | Expr::TaggedTpl(_)) {
+        if matches!(
+            pair.value,
+            Expr::Lit(_) | Expr::Object(_) | Expr::TaggedTpl(_)
+        ) {
             return pair;
         }
 
