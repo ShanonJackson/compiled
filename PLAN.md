@@ -33,6 +33,7 @@
 - **Progress:** Ported the runtime CSS item transformers and class name compression helper to Rust, including selector application logic and unit tests that validate conditional sheet merging and selector wrapping against the Babel behaviour.
 - **Progress:** Ported the CSS variable builder to Rust so inline style props deduplicate variables, retain suffix/prefix handling, and honour the transform hook used by downstream builders.
 - **Progress:** Ported the display name helper to Rust so development-only `displayName` assignments mirror the Babel output, including default fallbacks and literal handling tests.
+- **Progress:** Ported the runtime import appender so SWC augments or inserts the `@compiled/react/runtime` import with compression-aware specifiers identical to the Babel helper, including regression tests for deduplication and alias handling.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
