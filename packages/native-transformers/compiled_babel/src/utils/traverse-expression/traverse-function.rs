@@ -9,7 +9,11 @@ use crate::utils_create_result_pair::{create_result_pair, ResultPair};
 use crate::utils_types::EvaluateExpression;
 
 fn undefined_ident() -> Expr {
-    Expr::Ident(Ident::new("undefined".into(), DUMMY_SP, SyntaxContext::empty()))
+    Expr::Ident(Ident::new(
+        "undefined".into(),
+        DUMMY_SP,
+        SyntaxContext::empty(),
+    ))
 }
 
 struct ReturnFinder {
@@ -110,18 +114,17 @@ mod tests {
     use crate::types::{Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_create_result_pair::{create_result_pair, ResultPair};
     use crate::utils_types::EvaluateExpression;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use swc_core::common::sync::Lrc;
     use swc_core::common::{FileName, SourceMap};
     use swc_core::ecma::ast::{Expr, Lit, Number, Str};
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     fn parse_expression(code: &str) -> Expr {
         let cm: Lrc<SourceMap> = Default::default();
-        let fm = cm
-            .new_source_file(FileName::Custom("expr.tsx".into()).into(), code.into());
+        let fm = cm.new_source_file(FileName::Custom("expr.tsx".into()).into(), code.into());
         let lexer = Lexer::new(
             Syntax::Es(EsSyntax {
                 jsx: true,
@@ -162,7 +165,10 @@ mod tests {
             other => panic!("expected numeric literal, found {:?}", other),
         }
 
-        assert_eq!(pair.meta.state().file().filename, meta.state().file().filename);
+        assert_eq!(
+            pair.meta.state().file().filename,
+            meta.state().file().filename
+        );
     }
 
     #[test]

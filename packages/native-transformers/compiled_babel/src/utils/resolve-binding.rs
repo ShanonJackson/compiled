@@ -29,14 +29,16 @@ mod tests {
     use super::resolve_binding;
     use crate::types::{Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_create_result_pair::create_result_pair;
-    use crate::utils_types::{BindingPath, BindingSource, EvaluateExpression, PartialBindingWithMeta};
+    use crate::utils_types::{
+        BindingPath, BindingSource, EvaluateExpression, PartialBindingWithMeta,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use swc_core::common::sync::Lrc;
     use swc_core::common::{FileName, SourceMap, DUMMY_SP};
     use swc_core::ecma::ast::{Expr, Lit, Str};
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     fn create_metadata() -> Metadata {
         let cm: Lrc<SourceMap> = Default::default();
@@ -57,14 +59,16 @@ mod tests {
         }))
     }
 
-    fn identity_evaluate(expr: &Expr, meta: Metadata) -> crate::utils_create_result_pair::ResultPair {
+    fn identity_evaluate(
+        expr: &Expr,
+        meta: Metadata,
+    ) -> crate::utils_create_result_pair::ResultPair {
         create_result_pair(expr.clone(), meta)
     }
 
     fn parse_expression(code: &str) -> Expr {
         let cm: Lrc<SourceMap> = Default::default();
-        let fm = cm
-            .new_source_file(FileName::Custom("expr.tsx".into()).into(), code.into());
+        let fm = cm.new_source_file(FileName::Custom("expr.tsx".into()).into(), code.into());
         let lexer = Lexer::new(
             Syntax::Es(EsSyntax {
                 jsx: true,
@@ -93,8 +97,12 @@ mod tests {
 
         meta.insert_parent_binding("color", binding.clone());
 
-        let result = resolve_binding("color", meta.clone(), identity_evaluate as EvaluateExpression)
-            .expect("binding");
+        let result = resolve_binding(
+            "color",
+            meta.clone(),
+            identity_evaluate as EvaluateExpression,
+        )
+        .expect("binding");
 
         assert!(result.constant);
         assert_eq!(result.node, Some(binding_expr));
@@ -122,10 +130,16 @@ mod tests {
             scoped_meta.clone(),
             BindingSource::Module,
         );
-        own_scope.borrow_mut().insert("value".into(), own_binding.clone());
+        own_scope
+            .borrow_mut()
+            .insert("value".into(), own_binding.clone());
 
-        let result = resolve_binding("value", scoped_meta, identity_evaluate as EvaluateExpression)
-            .expect("binding");
+        let result = resolve_binding(
+            "value",
+            scoped_meta,
+            identity_evaluate as EvaluateExpression,
+        )
+        .expect("binding");
 
         assert_eq!(result.node, Some(string_literal("own")));
     }
@@ -152,11 +166,18 @@ mod tests {
         );
         meta.insert_parent_binding("theme", binding.clone());
 
-        let result = resolve_binding("theme", meta.clone(), identity_evaluate as EvaluateExpression)
-            .expect("binding");
+        let result = resolve_binding(
+            "theme",
+            meta.clone(),
+            identity_evaluate as EvaluateExpression,
+        )
+        .expect("binding");
 
         assert!(result.constant);
         assert_eq!(result.node, Some(expr));
-        assert_eq!(result.meta.state().file().filename, meta.state().file().filename);
+        assert_eq!(
+            result.meta.state().file().filename,
+            meta.state().file().filename
+        );
     }
 }

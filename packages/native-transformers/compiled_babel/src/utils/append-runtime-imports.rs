@@ -51,18 +51,14 @@ fn ensure_runtime_import(module: &mut swc_core::ecma::ast::Module, state: &mut T
         return;
     }
 
-    if let Some(existing) = module
-        .body
-        .iter_mut()
-        .find_map(|item| match item {
-            ModuleItem::ModuleDecl(ModuleDecl::Import(import))
-                if import.src.value.as_ref() == COMPILED_RUNTIME_MODULE =>
-            {
-                Some(import)
-            }
-            _ => None,
-        })
-    {
+    if let Some(existing) = module.body.iter_mut().find_map(|item| match item {
+        ModuleItem::ModuleDecl(ModuleDecl::Import(import))
+            if import.src.value.as_ref() == COMPILED_RUNTIME_MODULE =>
+        {
+            Some(import)
+        }
+        _ => None,
+    }) {
         let mut local_names: HashSet<String> = existing
             .specifiers
             .iter()
@@ -186,9 +182,8 @@ mod tests {
 
     #[test]
     fn appends_missing_specifiers_to_existing_import() {
-        let mut program = parse_program(
-            "import { ix } from '@compiled/react/runtime';\nconst value = 1;",
-        );
+        let mut program =
+            parse_program("import { ix } from '@compiled/react/runtime';\nconst value = 1;");
         let mut state = create_state(PluginOptions::default());
 
         append_runtime_imports(&mut program, &mut state);
@@ -212,9 +207,8 @@ mod tests {
 
     #[test]
     fn preserves_existing_aliases_without_duplicates() {
-        let mut program = parse_program(
-            "import { CC as CompiledRoot, ix } from '@compiled/react/runtime';",
-        );
+        let mut program =
+            parse_program("import { CC as CompiledRoot, ix } from '@compiled/react/runtime';");
         let mut state = create_state(PluginOptions::default());
 
         append_runtime_imports(&mut program, &mut state);

@@ -13,7 +13,9 @@ pub fn traverse_identifier(
     meta: Metadata,
     evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
-    if let Some(binding) = resolve_binding(expression.sym.as_ref(), meta.clone(), evaluate_expression) {
+    if let Some(binding) =
+        resolve_binding(expression.sym.as_ref(), meta.clone(), evaluate_expression)
+    {
         if binding.constant {
             if let Some(node) = binding.node.as_ref() {
                 let result = (evaluate_expression)(node, binding.meta.clone());
@@ -31,11 +33,11 @@ mod tests {
     use crate::types::{Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_create_result_pair::{create_result_pair, ResultPair};
     use crate::utils_types::{BindingPath, BindingSource, PartialBindingWithMeta};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use swc_core::common::sync::Lrc;
     use swc_core::common::{SourceMap, SyntaxContext, DUMMY_SP};
     use swc_core::ecma::ast::{Expr, Ident, Lit, Str};
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     fn create_metadata() -> Metadata {
         let cm: Lrc<SourceMap> = Default::default();
@@ -119,6 +121,9 @@ mod tests {
             other => panic!("expected identifier, found {:?}", other),
         }
 
-        assert_eq!(pair.meta.state().file().filename, inner_meta.state().file().filename);
+        assert_eq!(
+            pair.meta.state().file().filename,
+            inner_meta.state().file().filename
+        );
     }
 }

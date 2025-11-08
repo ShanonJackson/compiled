@@ -526,21 +526,11 @@ impl Metadata {
         self.own_scope.clone()
     }
 
-    pub fn insert_parent_binding(
-        &self,
-        name: impl Into<String>,
-        binding: PartialBindingWithMeta,
-    ) {
-        self.parent_scope
-            .borrow_mut()
-            .insert(name.into(), binding);
+    pub fn insert_parent_binding(&self, name: impl Into<String>, binding: PartialBindingWithMeta) {
+        self.parent_scope.borrow_mut().insert(name.into(), binding);
     }
 
-    pub fn insert_own_binding(
-        &self,
-        name: impl Into<String>,
-        binding: PartialBindingWithMeta,
-    ) {
+    pub fn insert_own_binding(&self, name: impl Into<String>, binding: PartialBindingWithMeta) {
         if let Some(scope) = &self.own_scope {
             scope.borrow_mut().insert(name.into(), binding);
         }
