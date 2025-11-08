@@ -11,7 +11,7 @@ use serde_json::Value;
 use swc_core::common::comments::Comment;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Span};
-use swc_core::ecma::ast::{Ident, Program};
+use swc_core::ecma::ast::{Expr, Ident, Program};
 
 use crate::constants::DEFAULT_IMPORT_SOURCES;
 use crate::utils_cache::{Cache, CacheOptions};
@@ -461,6 +461,7 @@ pub struct Metadata {
     pub own_span: Option<Span>,
     pub parent_scope: SharedScope,
     pub own_scope: Option<SharedScope>,
+    pub parent_expr: Option<Box<Expr>>,
 }
 
 impl Metadata {
@@ -472,6 +473,7 @@ impl Metadata {
             own_span: None,
             parent_scope: new_scope(),
             own_scope: None,
+            parent_expr: None,
         }
     }
 
@@ -516,6 +518,17 @@ impl Metadata {
             own_scope,
             ..self.clone()
         }
+    }
+
+    pub fn with_parent_expr(&self, parent_expr: Option<&Expr>) -> Self {
+        Self {
+            parent_expr: parent_expr.map(|expr| Box::new(expr.clone())),
+            ..self.clone()
+        }
+    }
+
+    pub fn parent_expr(&self) -> Option<&Expr> {
+        self.parent_expr.as_deref()
     }
 
     pub fn parent_scope(&self) -> SharedScope {

@@ -45,6 +45,7 @@
 - **Progress:** Translated the cssMap selector processing helper to Rust so extended selectors, at-rule collapsing, and duplicate detection mirror the Babel behaviour, with parser-driven unit tests guarding the error messages.
 - **Progress:** Ported the cssMap visitor scaffold to Rust, validating argument and scope invariants, reusing the selector merger, delegating CSS generation through an injectable builder, and storing the resulting sheets on the shared transform state with regression tests covering success and error cases.
 - **Progress:** Ported the AST helper utilities that build code-frame diagnostics and unwrap function bodies so IIFE wrapping and location formatting match the Babel helpers, complete with parser-backed unit tests.
+- **Progress:** Ported the template literal manipulation helpers to Rust, including nested conditional detection, quasi recomposition, conditional optimization, and unit tests mirroring the Babel behaviour.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
