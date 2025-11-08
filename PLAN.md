@@ -30,6 +30,7 @@
 - **Progress:** Ported the export traversers that drive cross-file binding resolution, returning matching nodes with spans for default and named exports and backing them with SWC parser-driven unit tests that mirror the Babel fixtures.
 - **Progress:** Mirrored the scalar helper utilities that gate expression evaluation by porting `isEmptyValue`, `hasNumericValue`, and `getJSXAttribute` to SWC with exhaustive numeric parsing and JSX attribute lookup tests so upcoming builders can reuse the same guards.
 - **Progress:** Ported the shared CSS item/type definitions and the runtime class name helper so downstream builders can reuse the Babel data structures and helper selection logic without deviating from the original behaviour.
+- **Progress:** Ported the runtime CSS item transformers and class name compression helper to Rust, including selector application logic and unit tests that validate conditional sheet merging and selector wrapping against the Babel behaviour.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
