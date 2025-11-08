@@ -35,6 +35,7 @@
 - **Progress:** Ported the display name helper to Rust so development-only `displayName` assignments mirror the Babel output, including default fallbacks and literal handling tests.
 - **Progress:** Ported the runtime import appender so SWC augments or inserts the `@compiled/react/runtime` import with compression-aware specifiers identical to the Babel helper, including regression tests for deduplication and alias handling.
 - **Progress:** Ported the compiled component builder and sheet hoisting helpers so runtime wrapper generation, class/style prop merging, and deterministic sheet identifiers match the Babel implementation, with unit tests covering class merge and hoist reuse scenarios.
+- **Progress:** Began porting the expression traversal helpers by translating `traverseFunction` to Rust so function returns are evaluated with metadata parity, including unit tests that mirror block bodies, implicit returns, and nested function handling.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
