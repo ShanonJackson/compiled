@@ -10,6 +10,7 @@ use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, Codeg
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
 use super::super::transform::{Plugin, TransformContext};
+use crate::utils_hash::hash;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AtomicifyRules;
@@ -382,71 +383,6 @@ fn serialize_at_rule_prelude(prelude: &AtRulePrelude) -> String {
             .expect("failed to serialize at-rule prelude");
     }
     output
-}
-
-fn hash(value: &str) -> String {
-    const M: u32 = 0x5bd1e995;
-    const R: u32 = 24;
-
-    let utf16: Vec<u16> = value.encode_utf16().collect();
-    let mut len = utf16.len();
-    let mut h: u32 = 0 ^ (len as u32);
-    let mut index: usize = 0;
-
-    while len >= 4 {
-        let mut k = u32::from(utf16[index] & 0xff)
-            | (u32::from(utf16[index + 1] & 0xff) << 8)
-            | (u32::from(utf16[index + 2] & 0xff) << 16)
-            | (u32::from(utf16[index + 3] & 0xff) << 24);
-
-        k = k.wrapping_mul(M);
-        k ^= k >> R;
-        k = k.wrapping_mul(M);
-
-        h = h.wrapping_mul(M);
-        h ^= k;
-
-        index += 4;
-        len -= 4;
-    }
-
-    if len == 3 {
-        h ^= u32::from(utf16[index + 2] & 0xff) << 16;
-    }
-    if len >= 2 {
-        h ^= u32::from(utf16[index + 1] & 0xff) << 8;
-    }
-    if len >= 1 {
-        h ^= u32::from(utf16[index] & 0xff);
-        h = h.wrapping_mul(M);
-    }
-
-    h ^= h >> 13;
-    h = h.wrapping_mul(M);
-    h ^= h >> 15;
-
-    to_base36(h)
-}
-
-fn to_base36(mut value: u32) -> String {
-    if value == 0 {
-        return "0".to_string();
-    }
-
-    let mut buffer = Vec::new();
-    while value > 0 {
-        let digit = (value % 36) as u8;
-        let ch = if digit < 10 {
-            b'0' + digit
-        } else {
-            b'a' + (digit - 10)
-        };
-        buffer.push(ch);
-        value /= 36;
-    }
-
-    buffer.reverse();
-    String::from_utf8(buffer).expect("base36 conversion produced invalid utf8")
 }
 
 fn is_comment_list(_list: &ListOfComponentValues) -> bool {
