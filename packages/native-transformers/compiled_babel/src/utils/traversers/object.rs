@@ -11,8 +11,12 @@ pub fn get_object_property_value(
     property_name: &str,
 ) -> Option<TraverserResult<Expr>> {
     for prop in &object.props {
-        let PropOrSpread::Prop(prop) = prop else { continue };
-        let Prop::KeyValue(key_value) = &**prop else { continue };
+        let PropOrSpread::Prop(prop) = prop else {
+            continue;
+        };
+        let Prop::KeyValue(key_value) = &**prop else {
+            continue;
+        };
 
         let PropName::Ident(ident) = &key_value.key else {
             continue;
@@ -58,8 +62,8 @@ mod tests {
         }));
         let object = object_with_property("primary", value.clone());
 
-        let result = get_object_property_value(&object, "primary")
-            .expect("property should be resolved");
+        let result =
+            get_object_property_value(&object, "primary").expect("property should be resolved");
 
         assert_eq!(result.node, value);
         assert_eq!(result.span, value.span());

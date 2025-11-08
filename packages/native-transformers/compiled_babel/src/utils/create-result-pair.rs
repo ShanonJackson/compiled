@@ -32,7 +32,10 @@ mod tests {
     fn pairs_value_and_metadata() {
         let cm: Lrc<SourceMap> = Default::default();
         let file = TransformFile::new(cm.clone(), Vec::new());
-        let state = Rc::new(RefCell::new(TransformState::new(file, PluginOptions::default())));
+        let state = Rc::new(RefCell::new(TransformState::new(
+            file,
+            PluginOptions::default(),
+        )));
         let meta = Metadata::new(state);
         let value = Expr::Lit(Lit::Str(Str {
             span: Default::default(),
@@ -43,6 +46,9 @@ mod tests {
         let pair = create_result_pair(value.clone(), meta.clone());
 
         assert_eq!(pair.value, value);
-        assert_eq!(pair.meta.state().file().filename, meta.state().file().filename);
+        assert_eq!(
+            pair.meta.state().file().filename,
+            meta.state().file().filename
+        );
     }
 }

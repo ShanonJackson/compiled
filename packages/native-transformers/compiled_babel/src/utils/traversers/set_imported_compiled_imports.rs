@@ -23,10 +23,14 @@ pub fn set_imported_compiled_imports(program: &Program, state: &mut TransformSta
     };
 
     for item in &module.body {
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else { continue };
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+            continue;
+        };
 
         for specifier in &import.specifiers {
-            let ImportSpecifier::Named(named) = specifier else { continue };
+            let ImportSpecifier::Named(named) = specifier else {
+                continue;
+            };
 
             if imported_name(named) == "css" {
                 state.imported_compiled_imports.css = Some(named.local.sym.to_string());
@@ -41,7 +45,7 @@ mod tests {
     use super::set_imported_compiled_imports;
     use crate::types::{PluginOptions, TransformFile, TransformState};
     use swc_core::common::sync::Lrc;
-    use swc_core::common::{SyntaxContext, DUMMY_SP, SourceMap};
+    use swc_core::common::{SourceMap, SyntaxContext, DUMMY_SP};
     use swc_core::ecma::ast::{
         Ident, ImportDecl, ImportNamedSpecifier, ImportPhase, ImportSpecifier, Module, ModuleDecl,
         ModuleExportName, ModuleItem, Program, Str,
@@ -103,7 +107,10 @@ mod tests {
         let mut state = state();
         set_imported_compiled_imports(&program, &mut state);
 
-        assert_eq!(state.imported_compiled_imports.css.as_deref(), Some("alias"));
+        assert_eq!(
+            state.imported_compiled_imports.css.as_deref(),
+            Some("alias")
+        );
     }
 
     #[test]
