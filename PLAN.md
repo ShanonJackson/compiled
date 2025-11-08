@@ -49,6 +49,7 @@
 - **Progress:** Ported the props usage normalizer to Rust so arrow-function parameters rewrite to `__cmplp` with support for nested destructuring, rest elements, and default values, backed by parser-driven unit tests.
 - **Progress:** Ported shared CSS utility helpers (`kebabCase`, `addUnitIfNeeded`, and `cssAffixInterpolation`) to Rust so upcoming builders can reuse the string casing, unit normalization, and interpolation logic with parity-focused unit tests.
 - **Progress:** Ported the `findOpenSelectors` helper to Rust so conditional CSS builders can detect unterminated selectors after stripping quoted braces, mirroring the Babel behaviour and backed by unit tests.
+- **Progress:** Implemented the shared CSS item helpers (`mergeSubsequentUnconditionalCssItems` and `getItemCss`) in Rust with parity-focused unit tests to prepare downstream visitors for the native pipeline.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
