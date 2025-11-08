@@ -28,6 +28,7 @@
 - **Progress:** Ported the compiled usage detection helpers (`is-compiled` and `is-jsx-function`) to SWC, including handling for runtime-import aliases, styled member/composition calls, and JSX pragma guards, and backed them with unit tests that mirror the Babel behaviour.
 - **Progress:** Mirrored the Babel traversal helpers that underpin expression evaluation by introducing a native `ResultPair`, porting the object property resolver, and wiring `setImportedCompiledImports` so runtime CSS aliases discovered in imported modules are cached on the shared transform state with parity tests.
 - **Progress:** Ported the export traversers that drive cross-file binding resolution, returning matching nodes with spans for default and named exports and backing them with SWC parser-driven unit tests that mirror the Babel fixtures.
+- **Progress:** Mirrored the scalar helper utilities that gate expression evaluation by porting `isEmptyValue`, `hasNumericValue`, and `getJSXAttribute` to SWC with exhaustive numeric parsing and JSX attribute lookup tests so upcoming builders can reuse the same guards.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
