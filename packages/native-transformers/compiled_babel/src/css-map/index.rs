@@ -1,8 +1,7 @@
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    CallExpr, Expr, Ident, KeyValueProp, Lit, ObjectLit, Prop, PropOrSpread, Str,
-    TaggedTpl,
+    CallExpr, Expr, Ident, KeyValueProp, Lit, ObjectLit, Prop, PropOrSpread, Str, TaggedTpl,
 };
 
 use crate::css_map_process_selectors::merge_extended_selectors_into_properties;
@@ -145,16 +144,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::{visit_css_map_path_with_builder, CssMapUsage};
-    use swc_core::atoms::Atom;
     use crate::types::{Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_types::{CssItem, CssOutput};
     use std::cell::RefCell;
     use std::panic::AssertUnwindSafe;
     use std::rc::Rc;
+    use swc_core::atoms::Atom;
     use swc_core::common::sync::Lrc;
     use swc_core::common::{SourceMap, SyntaxContext, DUMMY_SP};
     use swc_core::ecma::ast::{
-        Callee, CallExpr, Expr, ExprOrSpread, Ident, KeyValueProp, Lit, Number, ObjectLit, Prop,
+        CallExpr, Callee, Expr, ExprOrSpread, Ident, KeyValueProp, Lit, Number, ObjectLit, Prop,
         PropName, PropOrSpread, Str, TaggedTpl, Tpl, TplElement,
     };
 
