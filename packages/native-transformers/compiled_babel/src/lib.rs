@@ -46,6 +46,8 @@ mod utils_comments;
 mod utils_compress_class_names_for_runtime;
 #[path = "utils/constants.rs"]
 mod utils_constants;
+#[path = "utils/css.rs"]
+mod utils_css;
 #[path = "utils/create-result-pair.rs"]
 mod utils_create_result_pair;
 #[path = "utils/css-builders.rs"]
