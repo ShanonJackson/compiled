@@ -15,6 +15,7 @@ use swc_core::ecma::ast::{Ident, Program};
 
 use crate::constants::DEFAULT_IMPORT_SOURCES;
 use crate::utils_cache::{Cache, CacheOptions};
+use crate::utils_types::PartialBindingWithMeta;
 
 fn normalized_join(root: &Path, segment: &str) -> PathBuf {
     root.join(segment).components().collect()
@@ -444,6 +445,13 @@ pub enum MetadataContext {
     Fragment,
 }
 
+/// Shared scope map that mirrors Babel's `NodePath` binding storage.
+pub type SharedScope = Rc<RefCell<IndexMap<String, PartialBindingWithMeta>>>;
+
+fn new_scope() -> SharedScope {
+    Rc::new(RefCell::new(IndexMap::new()))
+}
+
 /// Metadata wrapper that mirrors the Babel helpers.
 #[derive(Clone, Debug)]
 pub struct Metadata {
@@ -451,6 +459,8 @@ pub struct Metadata {
     pub context: MetadataContext,
     pub parent_span: Option<Span>,
     pub own_span: Option<Span>,
+    pub parent_scope: SharedScope,
+    pub own_scope: Option<SharedScope>,
 }
 
 impl Metadata {
@@ -460,6 +470,8 @@ impl Metadata {
             context: MetadataContext::Root,
             parent_span: None,
             own_span: None,
+            parent_scope: new_scope(),
+            own_scope: None,
         }
     }
 
@@ -490,6 +502,52 @@ impl Metadata {
 
     pub fn state_mut(&self) -> RefMut<'_, TransformState> {
         self.state.borrow_mut()
+    }
+
+    pub fn with_parent_scope(&self, parent_scope: SharedScope) -> Self {
+        Self {
+            parent_scope,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_own_scope(&self, own_scope: Option<SharedScope>) -> Self {
+        Self {
+            own_scope,
+            ..self.clone()
+        }
+    }
+
+    pub fn parent_scope(&self) -> SharedScope {
+        self.parent_scope.clone()
+    }
+
+    pub fn own_scope(&self) -> Option<SharedScope> {
+        self.own_scope.clone()
+    }
+
+    pub fn insert_parent_binding(
+        &self,
+        name: impl Into<String>,
+        binding: PartialBindingWithMeta,
+    ) {
+        self.parent_scope
+            .borrow_mut()
+            .insert(name.into(), binding);
+    }
+
+    pub fn insert_own_binding(
+        &self,
+        name: impl Into<String>,
+        binding: PartialBindingWithMeta,
+    ) {
+        if let Some(scope) = &self.own_scope {
+            scope.borrow_mut().insert(name.into(), binding);
+        }
+    }
+
+    pub fn allocate_own_scope(&self) -> SharedScope {
+        new_scope()
     }
 }
 
