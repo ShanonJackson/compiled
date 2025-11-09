@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use swc_core::common::{Span, Spanned};
 use swc_core::ecma::ast::{
     BlockStmt, Decl, DefaultDecl, EmptyStmt, Expr, Ident, ImportDecl, ImportNamedSpecifier,
-    ImportSpecifier, Module, ModuleDecl, ModuleExportName, ModuleItem, Pat, Program, Stmt, VarDecl,
-    VarDeclarator,
+    ImportSpecifier, Lit, Module, ModuleDecl, ModuleExportName, ModuleItem, Null, Pat, Program,
+    Stmt, VarDecl, VarDeclarator,
 };
 use swc_core::ecma::visit::{noop_visit_mut_type, VisitMut, VisitMutWith};
 
@@ -20,6 +20,10 @@ use crate::types::{
     TransformMetadata, TransformState,
 };
 use crate::utils_append_runtime_imports::append_runtime_imports;
+use crate::utils_is_compiled::{
+    is_compiled_css_call_expression, is_compiled_css_tagged_template_expression,
+    is_compiled_keyframes_call_expression, is_compiled_keyframes_tagged_template_expression,
+};
 use crate::xcss_prop::visit_xcss_prop;
 
 /// Primary SWC transform that will eventually mirror `@compiled/babel-plugin`.
@@ -72,7 +76,7 @@ mod tests {
     use swc_core::common::sync::Lrc;
     use swc_core::common::{FileName, SourceMap};
     use swc_core::ecma::ast::{
-        BlockStmtOrExpr, Decl, Expr, ImportSpecifier, JSXElementName, ModuleDecl, ModuleItem,
+        BlockStmtOrExpr, Decl, Expr, ImportSpecifier, JSXElementName, Lit, ModuleDecl, ModuleItem,
         Program, Stmt,
     };
     use swc_core::ecma::visit::VisitMutWith;
@@ -156,6 +160,72 @@ mod tests {
         assert!(imports.css.is_empty());
         assert!(imports.keyframes.is_empty());
         assert!(imports.css_map.is_empty());
+    }
+
+    #[test]
+    fn replaces_css_variable_initialiser_with_null() {
+        let source = r#"
+            import { css } from '@compiled/react';
+
+            const styles = css`color: red;`;
+        "#;
+
+        let (mut program, _) = parse_program(source);
+
+        let mut transform = CompiledBabelTransform::new(PluginOptions::default());
+        program.visit_mut_with(&mut transform);
+
+        let Program::Module(module) = &program else {
+            panic!("expected module program");
+        };
+
+        let var_decl = module
+            .body
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) => Some(var),
+                _ => None,
+            })
+            .expect("expected variable declaration");
+
+        let Some(init) = var_decl.decls[0].init.as_ref() else {
+            panic!("expected css init");
+        };
+
+        assert!(matches!(init.as_ref(), Expr::Lit(Lit::Null(_))));
+    }
+
+    #[test]
+    fn replaces_keyframes_initialiser_with_null() {
+        let source = r#"
+            import { keyframes } from '@compiled/react';
+
+            const fadeOut = keyframes`from { opacity: 1; } to { opacity: 0; }`;
+        "#;
+
+        let (mut program, _) = parse_program(source);
+
+        let mut transform = CompiledBabelTransform::new(PluginOptions::default());
+        program.visit_mut_with(&mut transform);
+
+        let Program::Module(module) = &program else {
+            panic!("expected module program");
+        };
+
+        let var_decl = module
+            .body
+            .iter()
+            .find_map(|item| match item {
+                ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) => Some(var),
+                _ => None,
+            })
+            .expect("expected variable declaration");
+
+        let Some(init) = var_decl.decls[0].init.as_ref() else {
+            panic!("expected keyframes init");
+        };
+
+        assert!(matches!(init.as_ref(), Expr::Lit(Lit::Null(_))));
     }
 
     #[test]
@@ -445,6 +515,7 @@ impl CompiledBabelTransform {
             has_styled_import,
             has_class_names_import,
             has_css_map_import,
+            has_keyframes_import,
             process_xcss,
         ) = {
             let state = self.state.borrow();
@@ -465,6 +536,10 @@ impl CompiledBabelTransform {
                 imports
                     .as_ref()
                     .map(|imports| !imports.css_map.is_empty())
+                    .unwrap_or(false),
+                imports
+                    .as_ref()
+                    .map(|imports| !imports.keyframes.is_empty())
                     .unwrap_or(false),
                 state.opts.process_xcss.unwrap_or(false),
             )
@@ -498,6 +573,12 @@ impl CompiledBabelTransform {
         if process_xcss {
             let metadata = Metadata::new(self.state());
             let mut visitor = XcssVisitor::new(metadata);
+            module.visit_mut_with(&mut visitor);
+        }
+
+        if has_css_import || has_keyframes_import {
+            let metadata = Metadata::new(self.state());
+            let mut visitor = CompiledUtilCleanupVisitor::new(metadata);
             module.visit_mut_with(&mut visitor);
         }
     }
@@ -795,6 +876,41 @@ impl VisitMut for XcssVisitor {
                 .with_own_span(Some(expr.span()));
             visit_xcss_prop(expr, &meta);
         }
+    }
+}
+
+struct CompiledUtilCleanupVisitor {
+    meta: Metadata,
+}
+
+impl CompiledUtilCleanupVisitor {
+    fn new(meta: Metadata) -> Self {
+        Self { meta }
+    }
+
+    fn should_cleanup(&self, expr: &Expr) -> bool {
+        let state = self.meta.state.borrow();
+
+        is_compiled_css_call_expression(expr, &state)
+            || is_compiled_css_tagged_template_expression(expr, &state)
+            || is_compiled_keyframes_call_expression(expr, &state)
+            || is_compiled_keyframes_tagged_template_expression(expr, &state)
+    }
+}
+
+impl VisitMut for CompiledUtilCleanupVisitor {
+    noop_visit_mut_type!();
+
+    fn visit_mut_var_declarator(&mut self, declarator: &mut VarDeclarator) {
+        if let Some(init) = declarator.init.as_mut() {
+            if self.should_cleanup(init) {
+                let span = init.span();
+                *init = Box::new(Expr::Lit(Lit::Null(Null { span })));
+                return;
+            }
+        }
+
+        declarator.visit_mut_children_with(self);
     }
 }
 
