@@ -3,16 +3,19 @@ use std::rc::Rc;
 
 use std::path::{Path, PathBuf};
 
+use swc_core::common::Spanned;
 use swc_core::ecma::ast::{
-    ImportDecl, ImportNamedSpecifier, ImportSpecifier, Module, ModuleDecl, ModuleExportName,
-    ModuleItem, Program,
+    Expr, ImportDecl, ImportNamedSpecifier, ImportSpecifier, Module, ModuleDecl,
+    ModuleExportName, ModuleItem, Program,
 };
 use swc_core::ecma::visit::{noop_visit_mut_type, VisitMut, VisitMutWith};
 
+use crate::css_prop::visit_css_prop;
 use crate::types::{
-    CompiledImports, PluginOptions, SharedTransformState, TransformFile, TransformMetadata,
-    TransformState,
+    CompiledImports, Metadata, PluginOptions, SharedTransformState, TransformFile,
+    TransformMetadata, TransformState,
 };
+use crate::utils_append_runtime_imports::append_runtime_imports;
 
 /// Primary SWC transform that will eventually mirror `@compiled/babel-plugin`.
 pub struct CompiledBabelTransform {
@@ -56,10 +59,13 @@ impl CompiledBabelTransform {
 #[cfg(test)]
 mod tests {
     use super::CompiledBabelTransform;
-    use crate::types::PluginOptions;
+    use crate::types::{PluginOptions, TransformFile, TransformFileOptions};
     use swc_core::common::sync::Lrc;
     use swc_core::common::{FileName, SourceMap};
-    use swc_core::ecma::ast::{ModuleDecl, ModuleItem, Program};
+    use swc_core::ecma::ast::{
+        BlockStmtOrExpr, Decl, Expr, ImportSpecifier, JSXElementName, ModuleDecl, ModuleItem,
+        Program, Stmt,
+    };
     use swc_core::ecma::visit::VisitMutWith;
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
@@ -94,7 +100,11 @@ mod tests {
         let Program::Module(module) = &program else {
             panic!("expected module program");
         };
-        assert!(module.body.is_empty());
+        assert_eq!(module.body.len(), 1);
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = &module.body[0] else {
+            panic!("expected runtime import");
+        };
+        assert_eq!(runtime_import.src.value.as_ref(), "@compiled/react/runtime");
 
         let state = transform.state();
         let state_ref = state.borrow();
@@ -138,6 +148,80 @@ mod tests {
         assert!(imports.keyframes.is_empty());
         assert!(imports.css_map.is_empty());
     }
+
+    #[test]
+    fn transforms_css_prop_into_compiled_component() {
+        let source = r#"
+            import { css } from '@compiled/react';
+
+            const Component = () => <div css={{ color: 'red' }} />;
+        "#;
+
+        let (mut program, cm) = parse_program(source);
+
+        let mut transform = CompiledBabelTransform::new(PluginOptions::default());
+        {
+            let file = TransformFile::with_options(
+                cm.clone(),
+                Vec::new(),
+                TransformFileOptions {
+                    filename: Some("test.tsx".into()),
+                    ..TransformFileOptions::default()
+                },
+            );
+            let mut state = transform.state.borrow_mut();
+            state.filename = file.filename.clone();
+            state.cwd = file.cwd.clone();
+            state.root = file.root.clone();
+            state.file = file;
+        }
+        program.visit_mut_with(&mut transform);
+
+        let Program::Module(module) = &program else {
+            panic!("expected module program");
+        };
+
+        assert_eq!(module.body.len(), 2);
+
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = &module.body[0] else {
+            panic!("expected runtime import");
+        };
+        assert_eq!(runtime_import.src.value.as_ref(), "@compiled/react/runtime");
+        let specifiers: Vec<String> = runtime_import
+            .specifiers
+            .iter()
+            .map(|specifier| match specifier {
+                ImportSpecifier::Named(named) => named.local.sym.to_string(),
+                ImportSpecifier::Default(default) => default.local.sym.to_string(),
+                ImportSpecifier::Namespace(namespace) => namespace.local.sym.to_string(),
+            })
+            .collect();
+        assert_eq!(specifiers, vec!["ax", "ix", "CC", "CS"]);
+
+        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = &module.body[1] else {
+            panic!("expected variable declaration");
+        };
+        assert_eq!(var_decl.decls.len(), 1);
+        let declarator = &var_decl.decls[0];
+        let Some(init) = &declarator.init else {
+            panic!("expected initializer");
+        };
+
+        let Expr::Arrow(arrow) = &**init else {
+            panic!("expected arrow expression");
+        };
+        let BlockStmtOrExpr::Expr(body_expr) = arrow.body.as_ref() else {
+            panic!("expected expression body");
+        };
+        let Expr::JSXElement(element) = &**body_expr else {
+            panic!("expected jsx element");
+        };
+
+        let JSXElementName::Ident(ident) = &element.opening.name else {
+            panic!("expected CC identifier");
+        };
+        assert_eq!(ident.sym.as_ref(), "CC");
+    }
 }
 
 fn imported_name(specifier: &ImportNamedSpecifier) -> &str {
@@ -179,30 +263,38 @@ fn is_compiled_module(user_module: &str, state: &TransformState) -> bool {
         .any(|origin| normalized_join(Path::new(""), origin) == resolved)
 }
 
-fn record_compiled_import(imports: &mut CompiledImports, name: &str, local: String) -> bool {
+fn record_compiled_import(imports: &mut CompiledImports, name: &str, local: &str) -> bool {
     match name {
         "styled" => {
-            imports.styled.push(local);
+            imports.styled.push(local.to_string());
             true
         }
         "ClassNames" => {
-            imports.class_names.push(local);
+            imports.class_names.push(local.to_string());
             true
         }
         "css" => {
-            imports.css.push(local);
+            imports.css.push(local.to_string());
             true
         }
         "keyframes" => {
-            imports.keyframes.push(local);
+            imports.keyframes.push(local.to_string());
             true
         }
         "cssMap" => {
-            imports.css_map.push(local);
+            imports.css_map.push(local.to_string());
             true
         }
         _ => false,
     }
+}
+
+fn has_active_compiled_imports(imports: &CompiledImports) -> bool {
+    !(imports.class_names.is_empty()
+        && imports.css.is_empty()
+        && imports.keyframes.is_empty()
+        && imports.styled.is_empty()
+        && imports.css_map.is_empty())
 }
 
 impl VisitMut for CompiledBabelTransform {
@@ -210,7 +302,19 @@ impl VisitMut for CompiledBabelTransform {
 
     fn visit_mut_program(&mut self, program: &mut Program) {
         match program {
-            Program::Module(module) => self.visit_mut_module(module),
+            Program::Module(module) => {
+                self.visit_mut_module(module);
+
+                let mut state = self.state.borrow_mut();
+                let has_imports = state
+                    .compiled_imports
+                    .as_ref()
+                    .map(has_active_compiled_imports)
+                    .unwrap_or(false);
+                if has_imports || state.uses_xcss {
+                    append_runtime_imports(program, &mut state);
+                }
+            }
             Program::Script(script) => script.visit_mut_children_with(self),
         }
     }
@@ -237,6 +341,21 @@ impl CompiledBabelTransform {
                 module.body.remove(index);
             }
         }
+
+        let should_process_css_prop = {
+            let state = self.state.borrow();
+            state
+                .compiled_imports
+                .as_ref()
+                .map(has_active_compiled_imports)
+                .unwrap_or(false)
+        };
+
+        if should_process_css_prop {
+            let metadata = Metadata::new(self.state());
+            let mut visitor = CssPropVisitor::new(metadata);
+            module.visit_mut_with(&mut visitor);
+        }
     }
 
     fn visit_mut_import_decl(&mut self, import: &mut ImportDecl) -> bool {
@@ -247,32 +366,68 @@ impl CompiledBabelTransform {
             return true;
         }
 
-        let compiled_imports = state
-            .compiled_imports
-            .get_or_insert_with(CompiledImports::default);
-
         let mut remaining = Vec::with_capacity(import.specifiers.len());
+        let mut css_alias: Option<String> = None;
 
-        for specifier in import.specifiers.drain(..) {
-            match specifier {
-                ImportSpecifier::Named(named) => {
-                    let imported = imported_name(&named).to_string();
-                    let local = named.local.sym.to_string();
+        {
+            let compiled_imports = state
+                .compiled_imports
+                .get_or_insert_with(CompiledImports::default);
 
-                    if record_compiled_import(compiled_imports, &imported, local) {
-                        continue;
+            for specifier in import.specifiers.drain(..) {
+                match specifier {
+                    ImportSpecifier::Named(named) => {
+                        let imported = imported_name(&named).to_string();
+                        let local = named.local.sym.to_string();
+
+                        if record_compiled_import(compiled_imports, &imported, &local) {
+                            if imported == "css" && css_alias.is_none() {
+                                css_alias = Some(local);
+                            }
+                            continue;
+                        }
+
+                        remaining.push(ImportSpecifier::Named(named));
                     }
-
-                    remaining.push(ImportSpecifier::Named(named));
-                }
-                other => {
-                    remaining.push(other);
+                    other => {
+                        remaining.push(other);
+                    }
                 }
             }
         }
 
         import.specifiers = remaining;
 
+        if let Some(alias) = css_alias {
+            state.imported_compiled_imports.css = Some(alias);
+        }
+
         !import.specifiers.is_empty()
+    }
+}
+
+struct CssPropVisitor {
+    meta: Metadata,
+}
+
+impl CssPropVisitor {
+    fn new(meta: Metadata) -> Self {
+        Self { meta }
+    }
+}
+
+impl VisitMut for CssPropVisitor {
+    noop_visit_mut_type!();
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        if matches!(expr, Expr::JSXElement(_)) {
+            let meta = self
+                .meta
+                .with_parent_expr(Some(expr))
+                .with_own_span(Some(expr.span()));
+            visit_css_prop(expr, &meta);
+        }
     }
 }

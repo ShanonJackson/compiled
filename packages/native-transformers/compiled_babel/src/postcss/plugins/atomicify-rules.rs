@@ -33,6 +33,7 @@ impl Plugin for AtomicifyRules {
         let options = AtomicifyOptions {
             class_name_compression_map: ctx.options.class_name_compression_map.as_ref(),
             class_hash_prefix: ctx.options.class_hash_prefix.as_deref(),
+            declaration_placeholder: ctx.options.declaration_placeholder.as_deref(),
         };
 
         let mut transformed: Vec<Rule> = Vec::with_capacity(stylesheet.rules.len());
@@ -72,6 +73,27 @@ pub fn atomicify_rules() -> AtomicifyRules {
 struct AtomicifyOptions<'a> {
     class_name_compression_map: Option<&'a std::collections::HashMap<String, String>>,
     class_hash_prefix: Option<&'a str>,
+    declaration_placeholder: Option<&'a str>,
+}
+
+fn normalize_selectors(
+    selectors: Vec<String>,
+    options: &AtomicifyOptions<'_>,
+) -> Vec<String> {
+    if let Some(placeholder) = options.declaration_placeholder {
+        selectors
+            .into_iter()
+            .map(|selector| {
+                if selector.trim() == placeholder {
+                    String::new()
+                } else {
+                    selector
+                }
+            })
+            .collect()
+    } else {
+        selectors
+    }
 }
 
 fn atomicify_qualified_rule(
@@ -80,7 +102,7 @@ fn atomicify_qualified_rule(
     ctx: &mut TransformContext<'_>,
     at_rule_label: &str,
 ) -> Vec<QualifiedRule> {
-    let selectors = collect_rule_selectors(&rule);
+    let selectors = normalize_selectors(collect_rule_selectors(&rule), options);
     let mut replacements: Vec<QualifiedRule> = Vec::new();
 
     for component in rule.block.value {
