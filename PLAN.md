@@ -55,6 +55,7 @@
 - **Progress:** Ported the styled visitor to Rust with builder injection, invalid logical expression guards, display name emission, and parser-driven tests covering member, call, and user-defined component scenarios.
 - **Progress:** Ported the CSS prop visitor to Rust, including comment directive checks, attribute cleanup, and builder injection hooks, with parser-driven tests covering replacements, disabled directives, and empty CSS outputs.
 - **Progress:** Ported the classNames visitor to Rust so render-prop usage rewrites CSS calls, normalizes style props, hoists sheets, and leverages the shared runtime helper, complete with parser-driven unit tests for aliasing, member expressions, and error handling.
+- **Progress:** Ported the xcss prop visitor to Rust with inline-object invariants, cssMap cache warming, builder injection, and regression tests covering inline objects, cssMap fallbacks, and error paths while updating the cssMap helpers to support mutable builders.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.

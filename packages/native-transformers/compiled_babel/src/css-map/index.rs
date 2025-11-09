@@ -25,10 +25,10 @@ pub fn visit_css_map_path_with_builder<'a, F>(
     usage: CssMapUsage<'a>,
     parent_identifier: Option<&Ident>,
     meta: &Metadata,
-    build_css: F,
+    mut build_css: F,
 ) -> ObjectLit
 where
-    F: Fn(&Expr, &Metadata) -> CssOutput,
+    F: FnMut(&Expr, &Metadata) -> CssOutput,
 {
     match usage {
         CssMapUsage::TaggedTemplate(_) => {

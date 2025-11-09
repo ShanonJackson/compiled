@@ -1,8 +1,14 @@
+use crate::css_map::{visit_css_map_path_with_builder, CssMapUsage};
+use crate::types::Metadata;
 use crate::utils_css::kebab_case;
+use crate::utils_evaluate_expression::evaluate_expression;
+use crate::utils_is_compiled::is_compiled_css_map_call_expression;
+use crate::utils_resolve_binding::resolve_binding;
 use crate::utils_types::{
-    ConditionalCssItem, CssItem, CssMapItem, CssOutput, LogicalCssItem, SheetCssItem,
-    UnconditionalCssItem,
+    ConditionalCssItem, CssItem, CssMapItem, CssOutput, LogicalCssItem, PartialBindingWithMeta,
+    SheetCssItem, UnconditionalCssItem,
 };
+use swc_core::ecma::ast::{Expr, Ident};
 
 /// Merge consecutive unconditional CSS items while preserving the position of
 /// any sheet entries. This mirrors the behaviour of the Babel helper and is
@@ -59,6 +65,63 @@ pub fn get_item_css(item: &CssItem) -> String {
         CssItem::Sheet(sheet) => sheet.css.clone(),
         CssItem::Map(map) => map.css.clone(),
     }
+}
+
+/// Mirrors the Babel `generateCacheForCSSMap` helper by warming the cssMap cache for a given
+/// identifier when possible. Returns `true` when the cache was populated.
+pub fn generate_cache_for_css_map_with_builder<F>(
+    identifier: &Ident,
+    meta: &Metadata,
+    build_css: &mut F,
+) -> bool
+where
+    F: FnMut(&Expr, &Metadata) -> CssOutput,
+{
+    let name = identifier.sym.as_ref().to_string();
+
+    {
+        let state = meta.state();
+        if state.css_map.contains_key(&name) || state.ignore_member_expressions.contains(&name) {
+            return false;
+        }
+    }
+
+    let resolved = resolve_binding(name.as_str(), meta.clone(), evaluate_expression);
+
+    if let Some(PartialBindingWithMeta {
+        node: Some(node),
+        meta: binding_meta,
+        ..
+    }) = resolved
+    {
+        let is_css_map_call = {
+            let state_ref = binding_meta.state();
+            is_compiled_css_map_call_expression(&node, &state_ref)
+        };
+
+        if is_css_map_call {
+            if let Expr::Call(call) = &node {
+                visit_css_map_path_with_builder(
+                    CssMapUsage::Call(call),
+                    Some(identifier),
+                    &binding_meta,
+                    |expr, metadata| build_css(expr, metadata),
+                );
+
+                let has_cache = meta.state().css_map.contains_key(&name);
+                if !has_cache {
+                    meta.state_mut()
+                        .ignore_member_expressions
+                        .insert(name.clone());
+                }
+
+                return has_cache;
+            }
+        }
+    }
+
+    meta.state_mut().ignore_member_expressions.insert(name);
+    false
 }
 
 fn wrap_with_selector(selector: &str, css: String) -> String {
@@ -154,16 +217,67 @@ pub fn to_css_declaration(key: &str, result: &CssOutput) -> CssOutput {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_item_css, merge_subsequent_unconditional_css_items, to_css_declaration, to_css_rule,
+        generate_cache_for_css_map_with_builder, get_item_css,
+        merge_subsequent_unconditional_css_items, to_css_declaration, to_css_rule,
     };
+    use crate::types::{CompiledImports, Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_types::{
-        ConditionalCssItem, CssItem, CssOutput, LogicalCssItem, LogicalOperator, SheetCssItem,
+        BindingSource, ConditionalCssItem, CssItem, CssOutput, LogicalCssItem, LogicalOperator,
+        PartialBindingWithMeta, SheetCssItem,
     };
-    use swc_core::common::{SyntaxContext, DUMMY_SP};
-    use swc_core::ecma::ast::{Expr, Ident};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use swc_core::common::sync::Lrc;
+    use swc_core::common::{SourceMap, SyntaxContext, DUMMY_SP};
+    use swc_core::ecma::ast::{
+        CallExpr, Callee, Expr, ExprOrSpread, Ident, KeyValueProp, ObjectLit, Prop, PropName,
+        PropOrSpread,
+    };
 
     fn ident_expr(name: &str) -> Expr {
         Expr::Ident(Ident::new(name.into(), DUMMY_SP, SyntaxContext::empty()))
+    }
+
+    fn create_metadata() -> Metadata {
+        let cm: Lrc<SourceMap> = Default::default();
+        let file = TransformFile::new(cm, Vec::new());
+        let state = Rc::new(RefCell::new(TransformState::new(
+            file,
+            PluginOptions::default(),
+        )));
+
+        Metadata::new(state)
+    }
+
+    fn css_map_call() -> Expr {
+        let selector_ident = Ident::new("primary".into(), DUMMY_SP, SyntaxContext::empty());
+        let variant = ObjectLit {
+            span: DUMMY_SP,
+            props: Vec::new(),
+        };
+
+        let argument = ObjectLit {
+            span: DUMMY_SP,
+            props: vec![PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                key: PropName::Ident(selector_ident.into()),
+                value: Box::new(Expr::Object(variant)),
+            })))],
+        };
+
+        Expr::Call(CallExpr {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            callee: Callee::Expr(Box::new(Expr::Ident(Ident::new(
+                "cssMap".into(),
+                DUMMY_SP,
+                SyntaxContext::empty(),
+            )))),
+            args: vec![ExprOrSpread {
+                spread: None,
+                expr: Box::new(Expr::Object(argument)),
+            }],
+            type_args: None,
+        })
     }
 
     #[test]
@@ -307,5 +421,66 @@ mod tests {
             CssItem::Sheet(mapped) => assert_eq!(mapped.css, sheet_css),
             _ => panic!("expected sheet item"),
         }
+    }
+
+    #[test]
+    fn generate_cache_populates_css_map() {
+        let metadata = create_metadata();
+        {
+            let mut state = metadata.state_mut();
+            state.compiled_imports = Some(CompiledImports {
+                css_map: vec!["cssMap".into()],
+                ..CompiledImports::default()
+            });
+        }
+
+        let binding_meta = metadata.clone();
+        let css_map_expr = css_map_call();
+        let binding = PartialBindingWithMeta::new(
+            Some(css_map_expr.clone()),
+            None,
+            true,
+            binding_meta.clone(),
+            BindingSource::Module,
+        );
+        binding_meta.insert_parent_binding("styles", binding);
+
+        let ident = Ident::new("styles".into(), DUMMY_SP, SyntaxContext::empty());
+        let mut calls = 0usize;
+        let mut build_css = |expr: &Expr, _meta: &Metadata| {
+            calls += 1;
+            assert!(matches!(expr, Expr::Object(_)));
+            CssOutput {
+                css: vec![CssItem::Sheet(SheetCssItem {
+                    css: ".a{color:red;}".into(),
+                })],
+                variables: Vec::new(),
+            }
+        };
+
+        let populated = generate_cache_for_css_map_with_builder(&ident, &metadata, &mut build_css);
+
+        assert!(populated);
+        assert_eq!(calls, 1);
+
+        let state = metadata.state();
+        let sheets = state.css_map.get("styles").expect("cache entry");
+        assert_eq!(sheets.len(), 1);
+        assert!(state.ignore_member_expressions.is_empty());
+    }
+
+    #[test]
+    fn generate_cache_marks_identifier_when_binding_missing() {
+        let metadata = create_metadata();
+        let ident = Ident::new("styles".into(), DUMMY_SP, SyntaxContext::empty());
+        let mut build_css = |_expr: &Expr, _meta: &Metadata| CssOutput::new();
+
+        let populated = generate_cache_for_css_map_with_builder(&ident, &metadata, &mut build_css);
+
+        assert!(!populated);
+
+        let state = metadata.state();
+        assert!(state.ignore_member_expressions.contains("styles"));
+        assert!(state.css_map.is_empty());
     }
 }
