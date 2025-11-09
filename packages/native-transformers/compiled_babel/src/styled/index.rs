@@ -1,12 +1,14 @@
-use swc_core::common::Span;
+use swc_core::common::{Span, DUMMY_SP};
 use swc_core::ecma::ast::{
-    BlockStmtOrExpr, CallExpr, Callee, Expr, MemberExpr, MemberProp, Stmt, TaggedTpl,
+    ArrayLit, BlockStmtOrExpr, CallExpr, Callee, Expr, ExprOrSpread, MemberExpr, MemberProp, Stmt,
+    TaggedTpl,
 };
 
 use crate::types::{Metadata, Tag, TagType};
 use crate::utils_ast::build_code_frame_error;
 use crate::utils_build_display_name::build_display_name;
 use crate::utils_build_styled_component::build_styled_component;
+use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_types::CssOutput;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -282,6 +284,36 @@ where
 
     result.transformed = true;
     result
+}
+
+/// Public entry point that mirrors the Babel visitor by wiring in the shared
+/// `build_css` implementation.
+pub fn visit_styled(
+    node: &mut Expr,
+    meta: &Metadata,
+    variable_name: Option<&str>,
+) -> StyledVisitResult {
+    visit_styled_with_builder(node, meta, |css_node, metadata| match css_node {
+        StyledCssNode::Expression(expr) => build_css_from_expr(&expr, metadata),
+        StyledCssNode::Expressions(expressions) => {
+            let elements = expressions
+                .into_iter()
+                .map(|expr| {
+                    Some(ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(expr),
+                    })
+                })
+                .collect();
+
+            let array = Expr::Array(ArrayLit {
+                span: DUMMY_SP,
+                elems: elements,
+            });
+
+            build_css_from_expr(&array, metadata)
+        }
+    }, variable_name)
 }
 
 trait LogicalOpExt {

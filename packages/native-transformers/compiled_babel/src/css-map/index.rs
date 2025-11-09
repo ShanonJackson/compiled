@@ -9,6 +9,7 @@ use crate::types::Metadata;
 use crate::utils_css_map::{
     create_error_message, error_if_not_valid_object_property, ErrorMessages,
 };
+use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_transform_css_items::transform_css_items;
 use crate::utils_types::CssOutput;
 
@@ -139,6 +140,16 @@ where
             }
         }
     }
+}
+
+/// Convenience wrapper around `visit_css_map_path_with_builder` that wires in
+/// the shared `build_css` helper.
+pub fn visit_css_map_path<'a>(
+    usage: CssMapUsage<'a>,
+    parent_identifier: Option<&Ident>,
+    meta: &Metadata,
+) -> ObjectLit {
+    visit_css_map_path_with_builder(usage, parent_identifier, meta, build_css_from_expr)
 }
 
 #[cfg(test)]

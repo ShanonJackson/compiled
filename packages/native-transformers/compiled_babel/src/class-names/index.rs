@@ -12,6 +12,7 @@ use crate::types::Metadata;
 use crate::utils_ast::{build_code_frame_error, pick_function_body};
 use crate::utils_build_compiled_component::compiled_template;
 use crate::utils_build_css_variables::build_css_variables;
+use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_get_runtime_class_name_library::get_runtime_class_name_library;
 use crate::utils_transform_css_items::transform_css_items;
 use crate::utils_types::{CssOutput, Variable};
@@ -350,6 +351,32 @@ where
     *node = compiled_template(body, &collected_sheets, meta);
 
     true
+}
+
+/// Convenience wrapper that delegates to the shared `build_css` helper so
+/// production callers don't need to provide a custom builder.
+pub fn visit_class_names(node: &mut Expr, meta: &Metadata) -> bool {
+    visit_class_names_with_builder(node, meta, |css_node, metadata| match css_node {
+        ClassNamesCssNode::Expression(expr) => build_css_from_expr(&expr, metadata),
+        ClassNamesCssNode::Expressions(expressions) => {
+            let elements = expressions
+                .into_iter()
+                .map(|expr| {
+                    Some(ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(expr),
+                    })
+                })
+                .collect();
+
+            let array = Expr::Array(ArrayLit {
+                span: DUMMY_SP,
+                elems: elements,
+            });
+
+            build_css_from_expr(&array, metadata)
+        }
+    })
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@ use swc_core::ecma::visit::{noop_visit_type, Visit, VisitWith};
 use crate::types::Metadata;
 use crate::utils_ast::build_code_frame_error;
 use crate::utils_build_compiled_component::compiled_template;
-use crate::utils_css_builders::generate_cache_for_css_map_with_builder;
+use crate::utils_css_builders::{
+    build_css as build_css_from_expr, generate_cache_for_css_map_with_builder,
+};
 use crate::utils_transform_css_items::transform_css_items;
 use crate::utils_types::CssOutput;
 
@@ -279,6 +281,13 @@ where
             }
         },
     }
+}
+
+/// Wrapper that uses the shared `build_css` helper to transform `xcss` props
+/// without requiring callers to provide a custom builder.
+pub fn visit_xcss_prop(node: &mut Expr, meta: &Metadata) -> bool {
+    let mut build = |expr: &Expr, metadata: &Metadata| build_css_from_expr(expr, metadata);
+    visit_xcss_prop_with_builder(node, meta, &mut build)
 }
 
 #[cfg(test)]

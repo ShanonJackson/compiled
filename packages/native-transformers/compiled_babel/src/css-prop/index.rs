@@ -8,6 +8,7 @@ use crate::constants::{
 use crate::types::Metadata;
 use crate::utils_build_compiled_component::build_compiled_component;
 use crate::utils_comments::get_node_comments;
+use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_types::CssOutput;
 
 fn is_css_attribute(attr: &JSXAttr) -> bool {
@@ -127,6 +128,12 @@ where
     let jsx_expr = Expr::JSXElement(element.as_ref().clone().into());
     let replacement = build_compiled_component(jsx_expr, &css_output, meta);
     *node = replacement;
+}
+
+/// Convenience wrapper that mirrors the Babel visitor by invoking the shared
+/// `build_css` helper when transforming a `css` prop.
+pub fn visit_css_prop(node: &mut Expr, meta: &Metadata) {
+    visit_css_prop_with_builder(node, meta, build_css_from_expr);
 }
 
 #[cfg(test)]
