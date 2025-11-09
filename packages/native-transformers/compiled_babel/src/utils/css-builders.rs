@@ -1,26 +1,34 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
+use swc_core::common::sync::Lrc;
+use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
+use swc_core::ecma::ast::{
+    ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
+    ExprOrSpread, Ident, Lit, MemberExpr, TaggedTpl, Tpl, UnaryExpr, UnaryOp,
+};
+use swc_ecma_codegen::text_writer::JsWriter;
+use swc_ecma_codegen::{Config, Emitter, Node};
+
 use crate::css_map::{visit_css_map_path_with_builder, CssMapUsage};
 use crate::types::{Metadata, MetadataContext};
 use crate::utils_ast::build_code_frame_error;
-use crate::utils_css::kebab_case;
+use crate::utils_css::{css_affix_interpolation, kebab_case};
 use crate::utils_evaluate_expression::evaluate_expression;
 use crate::utils_hash::hash;
 use crate::utils_is_compiled::{
     is_compiled_css_call_expression, is_compiled_css_map_call_expression,
-    is_compiled_css_tagged_template_expression,
+    is_compiled_css_tagged_template_expression, is_compiled_keyframes_call_expression,
+    is_compiled_keyframes_tagged_template_expression,
+};
+use crate::utils_manipulate_template_literal::{
+    has_nested_template_literals_with_conditional_rules, is_quasi_mid_statement,
+    optimize_conditional_statement,
 };
 use crate::utils_resolve_binding::resolve_binding;
 use crate::utils_types::{
     BindingSource, ConditionalCssItem, CssItem, CssMapItem, CssOutput, LogicalCssItem,
     LogicalOperator, PartialBindingWithMeta, SheetCssItem, UnconditionalCssItem, Variable,
 };
-use swc_core::common::sync::Lrc;
-use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
-use swc_core::ecma::ast::{
-    ArrayLit, ArrowExpr, BinExpr, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr, ExprOrSpread,
-    Ident, Lit, MemberExpr, TaggedTpl, UnaryExpr, UnaryOp,
-};
-use swc_ecma_codegen::text_writer::JsWriter;
-use swc_ecma_codegen::{Config, Emitter, Node};
 
 fn print_expression(expr: &Expr) -> String {
     let cm: Lrc<SourceMap> = Default::default();
@@ -62,6 +70,67 @@ fn call_arguments_as_array(call: &CallExpr) -> Expr {
         span: call.span,
         elems: elements,
     })
+}
+
+fn is_logical_expression(expr: &Expr) -> bool {
+    if let Expr::Bin(bin) = expr {
+        matches!(
+            bin.op,
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing
+        )
+    } else {
+        false
+    }
+}
+
+fn normalize_content_value(value: &str) -> String {
+    static CONTENT_VALUE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?s)^([A-Za-z\-]+\(.+|.*-quote|inherit|initial|none|normal|revert|unset)(\s|$)",
+        )
+        .expect("valid content value regex")
+    });
+
+    if value.is_empty() {
+        return String::from("\"\"");
+    }
+
+    if value.contains('"') || value.contains('\'') || CONTENT_VALUE_PATTERN.is_match(value) {
+        value.to_string()
+    } else {
+        format!("\"{}\"", value)
+    }
+}
+
+fn is_custom_property_name(value: &str) -> bool {
+    value.starts_with("--")
+}
+
+fn get_variable_declarator_value_for_parent_expr(expr: &Expr, meta: &Metadata) -> (Expr, String) {
+    let mut expression = expr.clone();
+    let mut variable_name = print_expression(expr);
+
+    if let Expr::Ident(ident) = expr {
+        let base_name = ident.sym.as_ref();
+        variable_name = match &meta.context {
+            MetadataContext::Keyframes { keyframe } => format!("{keyframe}:{base_name}"),
+            _ => base_name.to_string(),
+        };
+
+        if let Some(binding) = resolve_binding(base_name, meta.clone(), evaluate_expression) {
+            if let Some(node) = &binding.node {
+                expression = node.clone();
+                variable_name = match &meta.context {
+                    MetadataContext::Keyframes { keyframe } => {
+                        format!("{keyframe}:{base_name}")
+                    }
+                    _ => print_expression(node),
+                };
+            }
+        }
+    }
+
+    (expression, variable_name)
 }
 
 /// Merge consecutive unconditional CSS items while preserving the position of
@@ -310,6 +379,228 @@ where
     }
 
     None
+}
+
+pub fn extract_template_literal_with_builder<F>(
+    node: &Tpl,
+    meta: &Metadata,
+    build_css: &mut F,
+) -> CssOutput
+where
+    F: FnMut(&Expr, &Metadata) -> CssOutput,
+{
+    let mut template = node.clone();
+
+    for index in 0..template.exprs.len() {
+        if !is_quasi_mid_statement(&template.quasis[index]) {
+            continue;
+        }
+
+        let has_nested = has_nested_template_literals_with_conditional_rules(&template, meta);
+
+        let Some(expression) = template.exprs.get_mut(index) else {
+            continue;
+        };
+
+        let Expr::Arrow(arrow) = expression.as_mut() else {
+            continue;
+        };
+
+        let has_conditional_body = matches!(
+            arrow.body.as_ref(),
+            BlockStmtOrExpr::Expr(body) if matches!(**body, Expr::Cond(_))
+        );
+
+        if !has_conditional_body {
+            continue;
+        }
+
+        if has_nested {
+            continue;
+        }
+
+        if template.quasis.len() <= index + 1 {
+            continue;
+        }
+
+        let (head, tail) = template.quasis.split_at_mut(index + 1);
+        let quasi = &mut head[index];
+        if let Some(next_quasi) = tail.first_mut() {
+            optimize_conditional_statement(quasi, Some(next_quasi), arrow);
+        }
+    }
+
+    let mut css: Vec<CssItem> = Vec::new();
+    let mut variables: Vec<Variable> = Vec::new();
+    let mut literal_result = String::new();
+
+    for index in 0..template.quasis.len() {
+        let raw = template.quasis[index].raw.as_ref().to_string();
+        let node_expression = template.exprs.get(index).map(|expr| expr.as_ref());
+
+        let arrow_has_logical_body = node_expression
+            .and_then(|expr| match expr {
+                Expr::Arrow(arrow) => {
+                    if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+                        Some(is_logical_expression(body))
+                    } else {
+                        Some(false)
+                    }
+                }
+                _ => None,
+            })
+            .unwrap_or(false);
+
+        if node_expression.is_none() || arrow_has_logical_body {
+            let suffix = match meta.context {
+                MetadataContext::Keyframes { .. } | MetadataContext::Fragment => "",
+                MetadataContext::Root => ";",
+            };
+
+            literal_result.push_str(&raw);
+            literal_result.push_str(suffix);
+            continue;
+        }
+
+        let node_expression = node_expression.unwrap();
+        let evaluated = evaluate_expression(node_expression, meta.clone());
+        callback_if_file_included(meta, &evaluated.meta);
+
+        match &evaluated.value {
+            Expr::Lit(Lit::Str(str_lit)) => {
+                literal_result.push_str(&raw);
+                literal_result.push_str(str_lit.value.as_ref());
+                continue;
+            }
+            Expr::Lit(Lit::Num(num_lit)) => {
+                literal_result.push_str(&raw);
+                literal_result.push_str(&num_lit.value.to_string());
+                continue;
+            }
+            _ => {}
+        }
+
+        let does_expression_have_conditional_css = matches!(
+            node_expression,
+            Expr::Arrow(arrow) if matches!(
+                arrow.body.as_ref(),
+                BlockStmtOrExpr::Expr(expr) if matches!(**expr, Expr::Cond(_))
+            )
+        );
+
+        let state = evaluated.meta.state();
+        let does_expression_contain_css_block = matches!(evaluated.value, Expr::Object(_))
+            || is_compiled_css_tagged_template_expression(&evaluated.value, &state)
+            || is_compiled_css_call_expression(&evaluated.value, &state);
+        drop(state);
+
+        let can_build_expression_as_css = does_expression_contain_css_block
+            || does_expression_have_conditional_css
+            || matches!(node_expression, Expr::Tpl(_));
+
+        if can_build_expression_as_css {
+            let nested_meta = meta.with_context(MetadataContext::Fragment);
+            let build_meta = if matches!(node_expression, Expr::Tpl(_)) {
+                nested_meta
+            } else {
+                evaluated.meta.clone()
+            };
+            let result = build_css(&evaluated.value, &build_meta);
+
+            if !result.css.is_empty() {
+                let prefix = format!("{literal_result}{raw}");
+                if !prefix.is_empty() {
+                    css.push(CssItem::unconditional(prefix));
+                }
+
+                css.extend(result.css);
+                variables.extend(result.variables);
+                literal_result.clear();
+                continue;
+            }
+        }
+
+        let state = evaluated.meta.state();
+        let is_keyframes = is_compiled_keyframes_call_expression(&evaluated.value, &state)
+            || is_compiled_keyframes_tagged_template_expression(&evaluated.value, &state);
+        drop(state);
+
+        if is_keyframes {
+            let mut keyframes_output = extract_keyframes_with_builder(
+                &evaluated.value,
+                &evaluated.meta,
+                &raw,
+                "",
+                build_css,
+            );
+
+            if let Some(sheet) = keyframes_output.css.get(0) {
+                css.push(sheet.clone());
+            }
+
+            if let Some(unconditional) = keyframes_output.css.get(1) {
+                literal_result.push_str(&get_item_css(unconditional));
+            }
+
+            variables.append(&mut keyframes_output.variables);
+            continue;
+        }
+
+        let (variable_expression, variable_name) =
+            get_variable_declarator_value_for_parent_expr(node_expression, meta);
+        let Some(next_quasi) = template.quasis.get_mut(index + 1) else {
+            panic!("Template literal missing trailing quasi for interpolation");
+        };
+
+        let (before, after) = css_affix_interpolation(&raw, next_quasi.raw.as_ref());
+
+        next_quasi.raw = after.css.clone().into();
+        next_quasi.cooked = Some(after.css.clone().into());
+
+        let mut name = format!("--_{}", hash(&variable_name));
+        if before.variable_prefix == "-" {
+            name.push('-');
+        }
+
+        variables.push(Variable {
+            name: name.clone(),
+            expression: variable_expression,
+            prefix: if before.variable_prefix.is_empty() {
+                None
+            } else {
+                Some(before.variable_prefix.clone())
+            },
+            suffix: if after.variable_suffix.is_empty() {
+                None
+            } else {
+                Some(after.variable_suffix.clone())
+            },
+        });
+
+        literal_result.push_str(&before.css);
+        literal_result.push_str(&format!("var({name})"));
+    }
+
+    css.push(CssItem::unconditional(literal_result));
+
+    for expression in &template.exprs {
+        if let Expr::Arrow(arrow) = expression.as_ref() {
+            if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+                if is_logical_expression(body) {
+                    let pair = evaluate_expression(body, meta.clone());
+                    callback_if_file_included(meta, &pair.meta);
+                    let result = build_css(&pair.value, &pair.meta);
+                    css.extend(result.css);
+                    variables.extend(result.variables);
+                }
+            }
+        }
+    }
+
+    CssOutput {
+        css: merge_subsequent_unconditional_css_items(css),
+        variables,
+    }
 }
 
 pub fn extract_logical_expression_with_builder<F>(
@@ -621,13 +912,15 @@ mod tests {
         assert_no_imported_css_variables, callback_if_file_included,
         extract_conditional_expression_with_builder, extract_keyframes_with_builder,
         extract_logical_expression_with_builder, extract_member_expression_with_builder,
-        find_binding_identifier, generate_cache_for_css_map_with_builder, get_item_css,
+        extract_template_literal_with_builder, find_binding_identifier,
+        generate_cache_for_css_map_with_builder, get_item_css,
         merge_subsequent_unconditional_css_items, to_css_declaration, to_css_rule,
     };
     use crate::types::{
         CompiledImports, Metadata, MetadataContext, PluginOptions, TransformFile,
         TransformFileOptions, TransformState,
     };
+    use crate::utils_hash::hash;
     use crate::utils_types::{
         BindingSource, ConditionalCssItem, CssItem, CssOutput, LogicalCssItem, LogicalOperator,
         PartialBindingWithMeta, SheetCssItem, UnconditionalCssItem, Variable,
@@ -817,6 +1110,87 @@ mod tests {
             extract_keyframes_with_builder(&expr, &metadata, "animation: ", ";", &mut build_css);
 
         assert_keyframe_sheet(&output, "kqbs1so", "animation: ", ";");
+    }
+
+    #[test]
+    fn extract_template_literal_inlines_literals() {
+        let metadata = create_metadata();
+        let expr = parse_expression("`color: ${'red'};`");
+        let mut build_css = |_value: &Expr, _meta: &Metadata| -> CssOutput {
+            panic!("builder should not be invoked for literal interpolations")
+        };
+
+        let Expr::Tpl(template) = expr else {
+            panic!("expected template literal expression");
+        };
+
+        let output = extract_template_literal_with_builder(&template, &metadata, &mut build_css);
+
+        assert!(output.variables.is_empty());
+        assert_eq!(output.css.len(), 1);
+
+        match &output.css[0] {
+            CssItem::Unconditional(unconditional) => {
+                assert_eq!(unconditional.css, "color: red;;");
+            }
+            other => panic!("expected unconditional css item, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_template_literal_invokes_builder_for_objects() {
+        let metadata = create_metadata();
+        let expr = parse_expression("`color: ${({ marginTop: 4 })}`");
+        let mut invoked_with_object = false;
+
+        let mut build_css = |value: &Expr, _meta: &Metadata| {
+            invoked_with_object = matches!(value, Expr::Object(_));
+            CssOutput {
+                css: vec![CssItem::unconditional("margin-top: 4px;")],
+                variables: Vec::new(),
+            }
+        };
+
+        let Expr::Tpl(template) = expr else {
+            panic!("expected template literal expression");
+        };
+
+        let output = extract_template_literal_with_builder(&template, &metadata, &mut build_css);
+
+        assert!(
+            invoked_with_object,
+            "expected builder to be invoked with object expression"
+        );
+        assert!(output.css.iter().any(
+            |item| matches!(item, CssItem::Unconditional(unconditional) if unconditional
+                .css
+                .contains("margin-top: 4px;"))
+        ));
+    }
+
+    #[test]
+    fn extract_template_literal_creates_variables() {
+        let metadata = create_metadata();
+        let expr = parse_expression("`font-size: ${fontSize}px;`");
+        let mut build_css = |_value: &Expr, _meta: &Metadata| CssOutput::new();
+
+        let Expr::Tpl(template) = expr else {
+            panic!("expected template literal expression");
+        };
+
+        let output = extract_template_literal_with_builder(&template, &metadata, &mut build_css);
+
+        assert_eq!(output.variables.len(), 1);
+        let variable = &output.variables[0];
+
+        let expected_name = format!("--_{}", hash("fontSize"));
+        assert_eq!(variable.name, expected_name);
+        assert_eq!(variable.prefix, None);
+        assert_eq!(variable.suffix.as_deref(), Some("px"));
+
+        assert_eq!(output.css.len(), 1);
+        let css = get_item_css(&output.css[0]);
+        assert!(css.contains(&format!("var({})", variable.name)));
     }
 
     #[test]
