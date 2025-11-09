@@ -4,7 +4,8 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
-    ExprOrSpread, Ident, Lit, MemberExpr, TaggedTpl, Tpl, UnaryExpr, UnaryOp,
+    ExprOrSpread, Ident, Lit, MemberExpr, ObjectLit, Prop, PropOrSpread, SpreadElement, TaggedTpl,
+    Tpl, TplElement, UnaryExpr, UnaryOp,
 };
 use swc_ecma_codegen::text_writer::JsWriter;
 use swc_ecma_codegen::{Config, Emitter, Node};
@@ -12,7 +13,8 @@ use swc_ecma_codegen::{Config, Emitter, Node};
 use crate::css_map::{visit_css_map_path_with_builder, CssMapUsage};
 use crate::types::{Metadata, MetadataContext};
 use crate::utils_ast::build_code_frame_error;
-use crate::utils_css::{css_affix_interpolation, kebab_case};
+use crate::utils_css::{add_unit_if_needed, css_affix_interpolation, kebab_case, CssValue};
+use crate::utils_css_map::{create_error_message, ErrorMessages};
 use crate::utils_evaluate_expression::evaluate_expression;
 use crate::utils_hash::hash;
 use crate::utils_is_compiled::{
@@ -20,9 +22,14 @@ use crate::utils_is_compiled::{
     is_compiled_css_tagged_template_expression, is_compiled_keyframes_call_expression,
     is_compiled_keyframes_tagged_template_expression,
 };
+use crate::utils_is_empty::is_empty_value;
 use crate::utils_manipulate_template_literal::{
     has_nested_template_literals_with_conditional_rules, is_quasi_mid_statement,
-    optimize_conditional_statement,
+    optimize_conditional_statement, recompose_template_literal,
+};
+use crate::utils_object_property_to_string::{
+    can_be_statically_concatenated, expression_to_string, expression_type,
+    object_property_to_string,
 };
 use crate::utils_resolve_binding::resolve_binding;
 use crate::utils_types::{
@@ -816,6 +823,382 @@ where
     }
 }
 
+fn css_property_name(key: &str) -> String {
+    if is_custom_property_name(key) {
+        key.to_string()
+    } else {
+        kebab_case(key)
+    }
+}
+
+pub fn extract_array_with_builder<F>(
+    array: &ArrayLit,
+    meta: &Metadata,
+    build_css: &mut F,
+) -> CssOutput
+where
+    F: FnMut(&Expr, &Metadata) -> CssOutput,
+{
+    let mut css: Vec<CssItem> = Vec::new();
+    let mut variables: Vec<Variable> = Vec::new();
+
+    for element in &array.elems {
+        let Some(element) = element else {
+            let message = "undefined isn't a supported CSS type - try using an object or string";
+            let error = build_code_frame_error(message, Some(array.span), meta);
+            panic!("{error}");
+        };
+
+        if element.spread.is_some() {
+            let error = build_code_frame_error(
+                "SpreadElement isn't a supported CSS type - try using an object or string",
+                Some(element.expr.span()),
+                meta,
+            );
+            panic!("{error}");
+        }
+
+        let expr = element.expr.as_ref();
+
+        let result = if let Expr::Cond(cond) = expr {
+            extract_conditional_expression_with_builder(cond, meta, build_css)
+        } else {
+            build_css(expr, meta)
+        };
+
+        css.extend(result.css);
+        variables.extend(result.variables);
+    }
+
+    CssOutput { css, variables }
+}
+
+pub fn extract_object_expression_with_builder<F>(
+    object: &ObjectLit,
+    meta: &Metadata,
+    build_css: &mut F,
+) -> CssOutput
+where
+    F: FnMut(&Expr, &Metadata) -> CssOutput,
+{
+    let mut css: Vec<CssItem> = Vec::new();
+    let mut variables: Vec<Variable> = Vec::new();
+
+    for property in &object.props {
+        match property {
+            PropOrSpread::Prop(prop) => {
+                let Prop::KeyValue(key_value) = prop.as_ref() else {
+                    continue;
+                };
+
+                let key = object_property_to_string(key_value, meta.clone());
+                let evaluated = evaluate_expression(key_value.value.as_ref(), meta.clone());
+                let mut prop_value = evaluated.value;
+                let updated_meta = evaluated.meta;
+
+                callback_if_file_included(meta, &updated_meta);
+
+                if let Expr::Lit(Lit::Str(str_lit)) = &prop_value {
+                    let value = if key == "content" {
+                        normalize_content_value(str_lit.value.as_ref())
+                    } else {
+                        str_lit.value.as_ref().to_string()
+                    };
+
+                    css.push(CssItem::unconditional(format!(
+                        "{}: {};",
+                        css_property_name(&key),
+                        value
+                    )));
+
+                    continue;
+                }
+
+                if let Expr::Call(call) = &prop_value {
+                    if can_be_statically_concatenated(call) {
+                        let value = expression_to_string(&prop_value, updated_meta.clone());
+                        let value = if key == "content" {
+                            normalize_content_value(&value)
+                        } else {
+                            value
+                        };
+
+                        css.push(CssItem::unconditional(format!(
+                            "{}: {};",
+                            css_property_name(&key),
+                            value
+                        )));
+
+                        continue;
+                    }
+                }
+
+                if let Expr::Lit(Lit::Num(num_lit)) = &prop_value {
+                    css.push(CssItem::unconditional(format!(
+                        "{}: {};",
+                        css_property_name(&key),
+                        add_unit_if_needed(&key, CssValue::Number(num_lit.value))
+                    )));
+
+                    continue;
+                }
+
+                if is_empty_value(&prop_value) {
+                    continue;
+                }
+
+                let logical_expression = matches!(
+                    prop_value,
+                    Expr::Bin(ref bin)
+                        if matches!(
+                            bin.op,
+                            BinaryOp::LogicalAnd
+                                | BinaryOp::LogicalOr
+                                | BinaryOp::NullishCoalescing
+                        )
+                );
+
+                if matches!(prop_value, Expr::Object(_)) || logical_expression {
+                    let result = build_css(&prop_value, &updated_meta);
+                    let mapped = if logical_expression {
+                        to_css_rule(&key, &result)
+                    } else {
+                        to_css_rule(&key, &result)
+                    };
+                    css.extend(mapped.css);
+                    variables.extend(mapped.variables);
+                    continue;
+                }
+
+                if let Expr::Cond(cond) = &prop_value {
+                    let result =
+                        extract_conditional_expression_with_builder(cond, &updated_meta, build_css);
+                    let mapped = to_css_declaration(&key, &result);
+                    css.extend(mapped.css);
+                    variables.extend(mapped.variables);
+                    continue;
+                }
+
+                if let Expr::Tpl(template) = &prop_value {
+                    let result = if template.exprs.len() == 1 {
+                        if let Some(first_expr) = template.exprs.first() {
+                            if let Expr::Arrow(arrow) = first_expr.as_ref() {
+                                if matches!(
+                                    arrow.body.as_ref(),
+                                    BlockStmtOrExpr::Expr(body)
+                                        if matches!(**body, Expr::Cond(_))
+                                ) {
+                                    let mut optimized = template.clone();
+                                    recompose_template_literal(
+                                        &mut optimized,
+                                        &format!("{}:", css_property_name(&key)),
+                                        ";",
+                                    );
+                                    extract_template_literal_with_builder(
+                                        &optimized,
+                                        &updated_meta,
+                                        build_css,
+                                    )
+                                } else {
+                                    to_css_declaration(
+                                        &key,
+                                        &extract_template_literal_with_builder(
+                                            template,
+                                            &updated_meta,
+                                            build_css,
+                                        ),
+                                    )
+                                }
+                            } else {
+                                to_css_declaration(
+                                    &key,
+                                    &extract_template_literal_with_builder(
+                                        template,
+                                        &updated_meta,
+                                        build_css,
+                                    ),
+                                )
+                            }
+                        } else {
+                            to_css_declaration(
+                                &key,
+                                &extract_template_literal_with_builder(
+                                    template,
+                                    &updated_meta,
+                                    build_css,
+                                ),
+                            )
+                        }
+                    } else {
+                        to_css_declaration(
+                            &key,
+                            &extract_template_literal_with_builder(
+                                template,
+                                &updated_meta,
+                                build_css,
+                            ),
+                        )
+                    };
+
+                    css.extend(result.css);
+                    variables.extend(result.variables);
+                    continue;
+                }
+
+                if let Expr::Arrow(arrow) = &mut prop_value {
+                    enum TemplateInfo {
+                        Direct {
+                            span: swc_core::common::Span,
+                        },
+                        FromTemplate {
+                            span: swc_core::common::Span,
+                            quasis: Vec<TplElement>,
+                        },
+                    }
+
+                    let mut info: Option<TemplateInfo> = None;
+
+                    if let BlockStmtOrExpr::Expr(body) = arrow.body.as_mut() {
+                        match body.as_mut() {
+                            Expr::Cond(_) => {
+                                info = Some(TemplateInfo::Direct { span: arrow.span });
+                            }
+                            Expr::Tpl(inner_tpl) => {
+                                if inner_tpl.exprs.len() == 1 {
+                                    if let Some(first_expr) = inner_tpl.exprs.first() {
+                                        if matches!(first_expr.as_ref(), Expr::Cond(_)) {
+                                            let (span, quasis, conditional) = {
+                                                let span = inner_tpl.span;
+                                                let quasis = inner_tpl.quasis.clone();
+                                                let conditional = first_expr.as_ref().clone();
+                                                (span, quasis, conditional)
+                                            };
+                                            *body = Box::new(conditional);
+                                            info =
+                                                Some(TemplateInfo::FromTemplate { span, quasis });
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if let Some(template_info) = info {
+                        let mut optimized = match template_info {
+                            TemplateInfo::Direct { span } => Tpl {
+                                span,
+                                exprs: vec![Box::new(Expr::Arrow(arrow.clone()))],
+                                quasis: vec![
+                                    TplElement {
+                                        span,
+                                        tail: false,
+                                        cooked: Some("".into()),
+                                        raw: "".into(),
+                                    },
+                                    TplElement {
+                                        span,
+                                        tail: true,
+                                        cooked: Some("".into()),
+                                        raw: "".into(),
+                                    },
+                                ],
+                            },
+                            TemplateInfo::FromTemplate { span, quasis } => Tpl {
+                                span,
+                                exprs: vec![Box::new(Expr::Arrow(arrow.clone()))],
+                                quasis,
+                            },
+                        };
+
+                        recompose_template_literal(
+                            &mut optimized,
+                            &format!("{}:", css_property_name(&key)),
+                            ";",
+                        );
+                        let result = extract_template_literal_with_builder(
+                            &optimized,
+                            &updated_meta,
+                            build_css,
+                        );
+                        css.extend(result.css);
+                        variables.extend(result.variables);
+                        continue;
+                    }
+                }
+
+                let is_keyframes = {
+                    let state = updated_meta.state();
+                    let result = is_compiled_keyframes_call_expression(&prop_value, &state)
+                        || is_compiled_keyframes_tagged_template_expression(&prop_value, &state);
+                    result
+                };
+
+                if is_keyframes {
+                    let result = extract_keyframes_with_builder(
+                        &prop_value,
+                        &updated_meta,
+                        &format!("{}: ", css_property_name(&key)),
+                        ";",
+                        build_css,
+                    );
+                    css.extend(result.css);
+                    variables.extend(result.variables);
+                    continue;
+                }
+
+                let (variable_expression, variable_name) =
+                    get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
+                let name = format!("--_{}", hash(&variable_name));
+
+                variables.push(Variable {
+                    name: name.clone(),
+                    expression: variable_expression,
+                    prefix: None,
+                    suffix: None,
+                });
+
+                css.push(CssItem::unconditional(format!(
+                    "{}: var({name});",
+                    css_property_name(&key)
+                )));
+            }
+            PropOrSpread::Spread(SpreadElement { expr, .. }) => {
+                let binding = if let Expr::Ident(identifier) = expr.as_ref() {
+                    resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
+                        .or_else(|| {
+                            let error = build_code_frame_error(
+                                "Variable could not be found",
+                                Some(identifier.span),
+                                meta,
+                            );
+                            panic!("{error}");
+                        })
+                } else {
+                    None
+                };
+
+                let evaluated = evaluate_expression(expr, meta.clone());
+                let result = build_css(&evaluated.value, &evaluated.meta);
+
+                callback_if_file_included(meta, &evaluated.meta);
+
+                if let Some(binding) = &binding {
+                    assert_no_imported_css_variables(expr, meta, binding, &result);
+                }
+
+                css.extend(result.css);
+                variables.extend(result.variables);
+            }
+        }
+    }
+
+    CssOutput {
+        css: merge_subsequent_unconditional_css_items(css),
+        variables,
+    }
+}
+
 fn wrap_with_selector(selector: &str, css: String) -> String {
     format!("{selector} {{ {css} }}")
 }
@@ -906,6 +1289,267 @@ pub fn to_css_declaration(key: &str, result: &CssOutput) -> CssOutput {
     }
 }
 
+fn extract_template_literal(node: &Tpl, meta: &Metadata) -> CssOutput {
+    let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+    extract_template_literal_with_builder(node, meta, &mut build_css)
+}
+
+fn extract_member_expression(
+    member: &MemberExpr,
+    meta: &Metadata,
+    fallback: bool,
+) -> Option<CssOutput> {
+    let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+    extract_member_expression_with_builder(member, meta, fallback, &mut build_css)
+}
+
+fn extract_conditional_expression(node: &CondExpr, meta: &Metadata) -> CssOutput {
+    let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+    extract_conditional_expression_with_builder(node, meta, &mut build_css)
+}
+
+fn extract_logical_expression(arrow: &ArrowExpr, meta: &Metadata) -> CssOutput {
+    let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+    extract_logical_expression_with_builder(arrow, meta, &mut build_css)
+}
+
+fn extract_keyframes(expression: &Expr, meta: &Metadata, prefix: &str, suffix: &str) -> CssOutput {
+    let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+    extract_keyframes_with_builder(expression, meta, prefix, suffix, &mut build_css)
+}
+
+fn build_css_internal(node: &Expr, meta: &Metadata) -> CssOutput {
+    if let Expr::Array(array) = node {
+        let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+        return extract_array_with_builder(array, meta, &mut build_css);
+    }
+
+    if let Expr::Lit(Lit::Str(str_lit)) = node {
+        return CssOutput {
+            css: vec![CssItem::unconditional(str_lit.value.as_ref())],
+            variables: Vec::new(),
+        };
+    }
+
+    if let Expr::TsAs(ts_as) = node {
+        return build_css_internal(&ts_as.expr, meta);
+    }
+
+    if let Expr::TsConstAssertion(assertion) = node {
+        return build_css_internal(&assertion.expr, meta);
+    }
+
+    if let Expr::TsTypeAssertion(assertion) = node {
+        return build_css_internal(&assertion.expr, meta);
+    }
+
+    if let Expr::TsNonNull(non_null) = node {
+        return build_css_internal(&non_null.expr, meta);
+    }
+
+    if let Expr::Paren(paren) = node {
+        return build_css_internal(&paren.expr, meta);
+    }
+
+    if let Expr::Tpl(template) = node {
+        return extract_template_literal(template, meta);
+    }
+
+    if let Expr::Object(object) = node {
+        let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+        return extract_object_expression_with_builder(object, meta, &mut build_css);
+    }
+
+    if let Expr::Member(member) = node {
+        return extract_member_expression(member, meta, true).unwrap_or_else(CssOutput::new);
+    }
+
+    if let Expr::Arrow(arrow) = node {
+        if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+            return match &**body {
+                Expr::Object(object) => {
+                    let mut build_css =
+                        |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
+                    extract_object_expression_with_builder(object, meta, &mut build_css)
+                }
+                Expr::Bin(bin)
+                    if matches!(
+                        bin.op,
+                        BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing
+                    ) =>
+                {
+                    extract_logical_expression(arrow, meta)
+                }
+                Expr::Cond(cond) => extract_conditional_expression(cond, meta),
+                Expr::Member(member) => {
+                    extract_member_expression(member, meta, true).unwrap_or_else(CssOutput::new)
+                }
+                _ => CssOutput::new(),
+            };
+        }
+
+        return CssOutput::new();
+    }
+
+    if let Expr::Ident(identifier) = node {
+        let binding = resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
+            .unwrap_or_else(|| {
+                let error = build_code_frame_error(
+                    "Variable could not be found",
+                    Some(identifier.span),
+                    meta,
+                );
+                panic!("{error}");
+            });
+
+        let binding_node = binding.node.clone().unwrap_or_else(|| {
+            let error =
+                build_code_frame_error("Variable could not be found", Some(identifier.span), meta);
+            panic!("{error}");
+        });
+
+        {
+            let state = meta.state();
+            if state.css_map.contains_key(identifier.sym.as_ref()) {
+                let message = create_error_message(ErrorMessages::UseVariantOfCssMap.to_string());
+                let error = build_code_frame_error(&message, Some(identifier.span), meta);
+                panic!("{error}");
+            }
+        }
+
+        let result = build_css_internal(&binding_node, &binding.meta);
+        assert_no_imported_css_variables(&Expr::Ident(identifier.clone()), meta, &binding, &result);
+        callback_if_file_included(meta, &binding.meta);
+        return result;
+    }
+
+    if let Expr::Cond(cond) = node {
+        return extract_conditional_expression(cond, meta);
+    }
+
+    if let Expr::Bin(bin) = node {
+        if matches!(
+            bin.op,
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing
+        ) {
+            let expression = (*bin.left).clone();
+            let result = build_css_internal(&bin.right, meta);
+            let css = result
+                .css
+                .into_iter()
+                .map(|item| match item {
+                    CssItem::Logical(mut logical) => {
+                        logical.expression = Expr::Bin(BinExpr {
+                            span: logical.expression.span(),
+                            op: logical.operator.to_binary_op(),
+                            left: Box::new(expression.clone()),
+                            right: Box::new(logical.expression.clone()),
+                        });
+                        CssItem::Logical(logical)
+                    }
+                    CssItem::Map(mut map) => {
+                        map.expression = Expr::Bin(BinExpr {
+                            span: map.expression.span(),
+                            op: bin.op,
+                            left: Box::new(expression.clone()),
+                            right: Box::new(map.expression.clone()),
+                        });
+                        CssItem::Map(map)
+                    }
+                    other => CssItem::Logical(LogicalCssItem {
+                        expression: expression.clone(),
+                        operator: match bin.op {
+                            BinaryOp::LogicalOr => LogicalOperator::Or,
+                            BinaryOp::NullishCoalescing => LogicalOperator::Nullish,
+                            _ => LogicalOperator::And,
+                        },
+                        css: get_item_css(&other),
+                    }),
+                })
+                .collect();
+
+            return CssOutput {
+                css,
+                variables: result.variables,
+            };
+        }
+    }
+
+    if let Expr::TaggedTpl(tagged) = node {
+        let state = meta.state();
+        if is_compiled_css_tagged_template_expression(node, &state) {
+            drop(state);
+            return build_css_internal(&Expr::Tpl(*tagged.tpl.clone()), meta);
+        }
+        drop(state);
+    }
+
+    if let Expr::Call(call) = node {
+        let state = meta.state();
+        if is_compiled_css_call_expression(node, &state) {
+            drop(state);
+            if let Some(first) = call.args.first() {
+                return build_css_internal(&first.expr, meta);
+            }
+            return CssOutput::new();
+        }
+        drop(state);
+    }
+
+    let state = meta.state();
+    let has_imports = state
+        .compiled_imports
+        .as_ref()
+        .map(|imports| {
+            !imports.class_names.is_empty()
+                || !imports.css.is_empty()
+                || !imports.keyframes.is_empty()
+                || !imports.styled.is_empty()
+                || !imports.css_map.is_empty()
+        })
+        .unwrap_or(false);
+    drop(state);
+
+    let error_message = if has_imports {
+        "try to define them statically using Compiled APIs instead"
+    } else {
+        "no Compiled APIs were found in scope, if you're using createStrictAPI make sure to configure importSources"
+    };
+
+    let message = format!(
+        "This {} was unable to have its styles extracted — {}",
+        expression_type(node),
+        error_message
+    );
+    let error = build_code_frame_error(&message, Some(node.span()), meta);
+    panic!("{error}");
+}
+
+static INVALID_DYNAMIC_INDIRECT_SELECTOR_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?s)(\+|~|\||\|\|)[^=\{]+\{[^\}]+var\(--_/)")
+        .expect("valid dynamic selector regex")
+});
+
+pub fn build_css(node: &Expr, meta: &Metadata) -> CssOutput {
+    let output = build_css_internal(node, meta);
+
+    let has_invalid_selector = output.css.iter().any(|item| {
+        matches!(item, CssItem::Unconditional(_) | CssItem::Conditional(_))
+            && INVALID_DYNAMIC_INDIRECT_SELECTOR_REGEX.is_match(&get_item_css(item))
+    });
+
+    if has_invalid_selector {
+        let error = build_code_frame_error(
+            "Found a mix of an indirect selector and a dynamic variable which is unsupported with Compiled.  See: https://compiledcssinjs.com/docs/limitations#mixing-dynamic-styles-and-indirect-selectors",
+            None,
+            meta,
+        );
+        panic!("{error}");
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -914,7 +1558,8 @@ mod tests {
         extract_logical_expression_with_builder, extract_member_expression_with_builder,
         extract_template_literal_with_builder, find_binding_identifier,
         generate_cache_for_css_map_with_builder, get_item_css,
-        merge_subsequent_unconditional_css_items, to_css_declaration, to_css_rule,
+        merge_subsequent_unconditional_css_items, print_expression, to_css_declaration,
+        to_css_rule,
     };
     use crate::types::{
         CompiledImports, Metadata, MetadataContext, PluginOptions, TransformFile,
@@ -995,6 +1640,17 @@ mod tests {
         );
         let mut parser = Parser::new_from(lexer);
         *parser.parse_expr().expect("parse expression")
+    }
+
+    fn parse_object_literal(code: &str) -> ObjectLit {
+        match parse_expression(code) {
+            Expr::Object(object) => object,
+            Expr::Paren(paren) => match *paren.expr {
+                Expr::Object(object) => object,
+                other => panic!("expected object literal, found {other:?}"),
+            },
+            other => panic!("expected object literal expression, found {other:?}"),
+        }
     }
 
     fn assert_keyframe_sheet(
@@ -1191,6 +1847,173 @@ mod tests {
         assert_eq!(output.css.len(), 1);
         let css = get_item_css(&output.css[0]);
         assert!(css.contains(&format!("var({})", variable.name)));
+    }
+
+    #[test]
+    fn extract_object_expression_builds_template_literal_arrow_branch() {
+        let metadata = create_metadata();
+        let object =
+            parse_object_literal("({ fontSize: `${(props) => props.isHeading ? 20 : 14}px` })");
+        let mut build_css = |expr: &Expr, meta: &Metadata| super::build_css_internal(expr, meta);
+
+        let output =
+            super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
+
+        assert!(output.variables.is_empty());
+        assert_eq!(output.css.len(), 2);
+
+        match &output.css[0] {
+            CssItem::Conditional(conditional) => {
+                if let CssItem::Unconditional(unconditional) = conditional.consequent.as_ref() {
+                    assert_eq!(unconditional.css, "font-size:20px");
+                } else {
+                    panic!("expected unconditional consequent");
+                }
+
+                if let CssItem::Unconditional(unconditional) = conditional.alternate.as_ref() {
+                    assert_eq!(unconditional.css, "font-size:14px");
+                } else {
+                    panic!("expected unconditional alternate");
+                }
+            }
+            other => panic!("expected conditional css item, found {other:?}"),
+        }
+
+        match &output.css[1] {
+            CssItem::Unconditional(unconditional) => {
+                assert_eq!(unconditional.css, ";");
+            }
+            other => panic!("expected trailing unconditional item, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_object_expression_builds_arrow_template_branch() {
+        let metadata = create_metadata();
+        let object =
+            parse_object_literal("({ fontSize: (props) => `${props.isLast ? 5 : 10}px` })");
+        let mut build_css = |expr: &Expr, meta: &Metadata| super::build_css_internal(expr, meta);
+
+        let output =
+            super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
+
+        assert!(output.variables.is_empty());
+        assert_eq!(output.css.len(), 2);
+
+        match &output.css[0] {
+            CssItem::Conditional(conditional) => {
+                if let CssItem::Unconditional(unconditional) = conditional.consequent.as_ref() {
+                    assert_eq!(unconditional.css, "font-size:5px");
+                } else {
+                    panic!("expected unconditional consequent");
+                }
+
+                if let CssItem::Unconditional(unconditional) = conditional.alternate.as_ref() {
+                    assert_eq!(unconditional.css, "font-size:10px");
+                } else {
+                    panic!("expected unconditional alternate");
+                }
+            }
+            other => panic!("expected conditional css item, found {other:?}"),
+        }
+
+        match &output.css[1] {
+            CssItem::Unconditional(unconditional) => {
+                assert_eq!(unconditional.css, ";");
+            }
+            other => panic!("expected trailing unconditional item, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_object_expression_template_handles_multiple_arrows() {
+        let metadata = create_metadata();
+        let object = parse_object_literal(
+            r#"({
+                fontSize: `font-size: ${props => props.isHeading ? 20 : 14}px; line-height: ${props => props.isHeading ? 24 : 18}px;`
+            })"#,
+        );
+        let mut build_css = |expr: &Expr, meta: &Metadata| super::build_css_internal(expr, meta);
+
+        let output =
+            super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
+
+        assert!(output.variables.is_empty());
+
+        let mut font_size_checked = false;
+        let mut line_height_checked = false;
+        let mut trailing_semicolon = false;
+
+        for item in &output.css {
+            match item {
+                CssItem::Conditional(conditional) => {
+                    if let CssItem::Unconditional(unconditional) = conditional.consequent.as_ref() {
+                        if unconditional.css == "font-size: font-size: 20px;" {
+                            font_size_checked = true;
+                        }
+                        if unconditional.css == "font-size:  line-height: 24px;" {
+                            line_height_checked = true;
+                        }
+                    }
+
+                    if let CssItem::Unconditional(unconditional) = conditional.alternate.as_ref() {
+                        if unconditional.css == "font-size: font-size: 14px;" {
+                            font_size_checked = true;
+                        }
+                        if unconditional.css == "font-size:  line-height: 18px;" {
+                            line_height_checked = true;
+                        }
+                    }
+                }
+                CssItem::Unconditional(unconditional) => {
+                    if unconditional.css == "font-size: ;;" {
+                        trailing_semicolon = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert!(font_size_checked, "expected font-size conditional branches");
+        assert!(
+            line_height_checked,
+            "expected line-height conditional branches"
+        );
+        assert!(
+            trailing_semicolon,
+            "expected trailing unconditional semicolon item"
+        );
+    }
+
+    #[test]
+    fn extract_object_expression_creates_variable_for_arrow_expression() {
+        let metadata = create_metadata();
+        let object = parse_object_literal("({ fontSize: (props) => props.dynamicSize })");
+        let mut build_css = |expr: &Expr, meta: &Metadata| super::build_css_internal(expr, meta);
+
+        let output =
+            super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
+
+        assert_eq!(output.variables.len(), 1);
+        assert_eq!(output.css.len(), 1);
+
+        let arrow_expr = parse_expression("(props) => props.dynamicSize");
+        let expected_name = format!("--_{}", hash(&print_expression(&arrow_expr)));
+
+        let variable = &output.variables[0];
+        assert_eq!(variable.name, expected_name);
+        assert!(variable.prefix.is_none());
+        assert!(variable.suffix.is_none());
+
+        match &output.css[0] {
+            CssItem::Unconditional(unconditional) => {
+                assert_eq!(
+                    unconditional.css,
+                    format!("font-size: var({expected_name});")
+                );
+            }
+            other => panic!("expected unconditional css item, found {other:?}"),
+        }
     }
 
     #[test]

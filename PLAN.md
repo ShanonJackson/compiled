@@ -26,7 +26,7 @@
 - Preserve side effects such as `includedFiles`, `pathsToCleanup`, pragma-driven React imports, and hoisting semantics exactly as in the Babel implementation.
 - **Progress:** Core transform scaffolding, state management, and major visitors (css prop, styled, classNames, xcss, cssMap) now run natively with parity-focused unit coverage.
 - **Progress:** Expression evaluation, runtime/styled helpers, and CSS map utilities have been ported with cache integration and deterministic metadata emission.
-- **Progress:** CSS builder work continues with conditional/logical/member extraction helpers paving the way for the remaining Phase 3 ports.
+- **Progress:** Finished the outstanding `build_css` template literal and arrow-function branches, exported the stringification helpers they rely on, added unit coverage mirroring the Babel fixtures, and wired the visitors to use the shared `build_css` entry point.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.

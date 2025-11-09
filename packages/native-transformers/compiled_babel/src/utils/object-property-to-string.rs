@@ -74,7 +74,7 @@ fn is_string_concat_expression(expression: &Expr) -> Option<&CallExpr> {
 
 /// Determines whether a string concat expression can be statically concatenated by inspecting
 /// argument types.
-fn can_be_statically_concatenated(call: &CallExpr) -> bool {
+pub(crate) fn can_be_statically_concatenated(call: &CallExpr) -> bool {
     call.args.iter().all(|arg| {
         if arg.spread.is_some() {
             return false;
@@ -163,7 +163,7 @@ fn operator_to_string(op: BinaryOp) -> &'static str {
     }
 }
 
-fn expression_type(expr: &Expr) -> &'static str {
+pub(crate) fn expression_type(expr: &Expr) -> &'static str {
     match expr {
         Expr::Array(_) => "ArrayExpression",
         Expr::Arrow(_) => "ArrowFunctionExpression",
@@ -202,7 +202,7 @@ fn expression_type(expr: &Expr) -> &'static str {
     }
 }
 
-fn expression_to_string(expression: &Expr, meta: Metadata) -> String {
+pub(crate) fn expression_to_string(expression: &Expr, meta: Metadata) -> String {
     match expression {
         Expr::Lit(lit) => literal_to_string(lit),
         Expr::Ident(_) | Expr::Member(_) => {
