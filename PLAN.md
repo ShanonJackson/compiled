@@ -24,6 +24,13 @@
 - Integrate the Rust `postcss` pipeline to compute sheets/class names, ensuring selectors, conditionals, and map handling match current behaviour.
 - Swap Babel’s resolver wiring for `oxc_resolver` while keeping the same option surface and exposing sync resolution identical to the JS contract.
 - Preserve side effects such as `includedFiles`, `pathsToCleanup`, pragma-driven React imports, and hoisting semantics exactly as in the Babel implementation.
+- **Progress:** Core transform scaffolding, state management, and major visitors (css prop, styled, classNames, xcss, cssMap) now run natively with parity-focused unit coverage.
+- **Progress:** Expression evaluation, runtime/styled helpers, and CSS map utilities have been ported with cache integration and deterministic metadata emission.
+- **Progress:** Finished the outstanding `build_css` template literal and arrow-function branches, exported the stringification helpers they rely on, added unit coverage mirroring the Babel fixtures, and wired the visitors to use the shared `build_css` entry point.
+- **Progress:** Added production wrappers for the css prop, styled, classNames, xcss, and cssMap visitors so they call the shared `build_css` helper without bespoke builders, matching the Babel invocation surface.
+- **Progress:** The native transform now recognises compiled imports, recording alias metadata and stripping handled specifiers to mirror the Babel entry visitor.
+- **Progress:** Metadata now captures deduplicated style rules when extraction is enabled, mirroring the Babel + strip-runtime workflow for downstream bundlers.
+- **Progress:** Added a compiled util cleanup pass that nulls out `css`/`keyframes` variable initialisers after their styles are extracted, mirroring Babel's deferred path replacement.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
