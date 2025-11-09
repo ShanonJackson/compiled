@@ -3,6 +3,9 @@ use std::rc::Rc;
 
 use std::path::{Path, PathBuf};
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 use swc_core::common::{Span, Spanned, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     BlockStmt, ClassDecl, Decl, DefaultDecl, EmptyStmt, Expr, FnDecl, Ident, ImportDecl,
@@ -76,8 +79,9 @@ impl CompiledBabelTransform {
 mod tests {
     use super::CompiledBabelTransform;
     use crate::types::{PluginOptions, TransformFile, TransformFileOptions};
+    use swc_core::common::comments::{Comment, CommentKind};
     use swc_core::common::sync::Lrc;
-    use swc_core::common::{FileName, SourceMap};
+    use swc_core::common::{BytePos, FileName, SourceFile, SourceMap, Span};
     use swc_core::ecma::ast::{
         BlockStmtOrExpr, Decl, Expr, ImportSpecifier, JSXElementName, Lit, ModuleDecl, ModuleItem,
         Program, Stmt,
@@ -86,7 +90,7 @@ mod tests {
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
 
-    fn parse_program(code: &str) -> (Program, Lrc<SourceMap>) {
+    fn parse_program(code: &str) -> (Program, Lrc<SourceMap>, Lrc<SourceFile>) {
         let cm: Lrc<SourceMap> = Default::default();
         let fm = cm.new_source_file(Lrc::new(FileName::Custom("test.tsx".into())), code.into());
         let lexer = Lexer::new(
@@ -102,12 +106,12 @@ mod tests {
         let program = parser.parse_program().expect("failed to parse program");
         assert!(parser.take_errors().is_empty());
 
-        (program, cm)
+        (program, cm, fm)
     }
 
     #[test]
     fn records_compiled_imports_and_removes_matched_specifiers() {
-        let (mut program, _) =
+        let (mut program, _, _) =
             parse_program("import { styled, ClassNames } from '@compiled/react';");
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
@@ -158,7 +162,7 @@ mod tests {
 
     #[test]
     fn retains_unmatched_specifiers() {
-        let (mut program, _) = parse_program("import { something } from '@compiled/react';");
+        let (mut program, _, _) = parse_program("import { something } from '@compiled/react';");
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
         program.visit_mut_with(&mut transform);
@@ -187,6 +191,115 @@ mod tests {
     }
 
     #[test]
+    fn enables_css_prop_via_jsx_import_source_pragma() {
+        let source = "/** @jsxImportSource @compiled/react */\nconst element = <div />;";
+
+        let (mut program, cm, fm) = parse_program(source);
+
+        let mut transform = CompiledBabelTransform::new(PluginOptions::default());
+
+        let comment_source = "/** @jsxImportSource @compiled/react */";
+        let comment_start = source
+            .find(comment_source)
+            .expect("comment should be present") as u32;
+        let comment_span = Span::new(
+            BytePos(fm.start_pos.0 + comment_start),
+            BytePos(fm.start_pos.0 + comment_start + comment_source.len() as u32),
+        );
+        let comment = Comment {
+            kind: CommentKind::Block,
+            span: comment_span,
+            text: "* @jsxImportSource @compiled/react ".into(),
+        };
+
+        assert!(super::JSX_SOURCE_ANNOTATION_REGEX.is_match(comment.text.as_ref()));
+
+        {
+            let mut state = transform.state.borrow_mut();
+            *state.file_mut() = TransformFile::with_options(
+                cm.clone(),
+                vec![comment],
+                TransformFileOptions {
+                    filename: Some("test.tsx".into()),
+                    ..TransformFileOptions::default()
+                },
+            );
+        }
+
+        {
+            let state = transform.state();
+            let state_ref = state.borrow();
+            assert_eq!(state_ref.file.comments.len(), 1);
+        }
+
+        program.visit_mut_with(&mut transform);
+
+        let state = transform.state();
+        let state_ref = state.borrow();
+        assert!(
+            state_ref
+                .import_sources
+                .iter()
+                .any(|source| source == "@compiled/react")
+        );
+        assert!(state_ref.pragma.jsx_import_source);
+        assert!(state_ref.compiled_imports.is_some());
+        assert!(state_ref.file.comments.is_empty());
+    }
+
+    #[test]
+    fn enables_classic_jsx_pragma_when_imported_from_compiled() {
+        let source =
+            "import { jsx as compiledJsx } from '@compiled/react';\n/** @jsx compiledJsx */\nconst element = <div />;";
+
+        let (mut program, cm, fm) = parse_program(source);
+
+        let mut transform = CompiledBabelTransform::new(PluginOptions::default());
+
+        let comment_source = "/** @jsx compiledJsx */";
+        let comment_start = source
+            .find(comment_source)
+            .expect("comment should be present") as u32;
+        let comment_span = Span::new(
+            BytePos(fm.start_pos.0 + comment_start),
+            BytePos(fm.start_pos.0 + comment_start + comment_source.len() as u32),
+        );
+        let comment = Comment {
+            kind: CommentKind::Block,
+            span: comment_span,
+            text: "* @jsx compiledJsx ".into(),
+        };
+
+        assert!(super::JSX_ANNOTATION_REGEX.is_match(comment.text.as_ref()));
+
+        {
+            let mut state = transform.state.borrow_mut();
+            *state.file_mut() = TransformFile::with_options(
+                cm.clone(),
+                vec![comment],
+                TransformFileOptions {
+                    filename: Some("test.tsx".into()),
+                    ..TransformFileOptions::default()
+                },
+            );
+        }
+
+        {
+            let state = transform.state();
+            let state_ref = state.borrow();
+            assert_eq!(state_ref.file.comments.len(), 1);
+        }
+
+        program.visit_mut_with(&mut transform);
+
+        let state = transform.state();
+        let state_ref = state.borrow();
+        assert!(state_ref.pragma.jsx);
+        assert!(state_ref.compiled_imports.is_some());
+        assert!(state_ref.file.comments.is_empty());
+    }
+
+    #[test]
     fn replaces_css_variable_initialiser_with_null() {
         let source = r#"
             import { css } from '@compiled/react';
@@ -194,7 +307,7 @@ mod tests {
             const styles = css`color: red;`;
         "#;
 
-        let (mut program, _) = parse_program(source);
+        let (mut program, _, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
         program.visit_mut_with(&mut transform);
@@ -227,7 +340,7 @@ mod tests {
             const fadeOut = keyframes`from { opacity: 1; } to { opacity: 0; }`;
         "#;
 
-        let (mut program, _) = parse_program(source);
+        let (mut program, _, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
         program.visit_mut_with(&mut transform);
@@ -260,7 +373,7 @@ mod tests {
             console.log(css({ color: 'red' }));
         "#;
 
-        let (mut program, _) = parse_program(source);
+        let (mut program, _, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
         program.visit_mut_with(&mut transform);
@@ -290,7 +403,7 @@ mod tests {
             const animations = [keyframes`from { opacity: 1; } to { opacity: 0; }`];
         "#;
 
-        let (mut program, _) = parse_program(source);
+        let (mut program, _, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
         program.visit_mut_with(&mut transform);
@@ -327,7 +440,7 @@ mod tests {
             const Component = () => <div css={{ color: 'red' }} />;
         "#;
 
-        let (mut program, cm) = parse_program(source);
+        let (mut program, cm, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions::default());
         {
@@ -405,7 +518,7 @@ mod tests {
             const Component = () => <div css={{ color: 'red' }} />;
         "#;
 
-        let (mut program, cm) = parse_program(source);
+        let (mut program, cm, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions {
             extract: Some(true),
@@ -445,7 +558,7 @@ mod tests {
             const Component = () => <div css={{ color: 'red' }} />;
         "#;
 
-        let (mut program, cm) = parse_program(source);
+        let (mut program, cm, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions {
             import_react: Some(false),
@@ -490,7 +603,7 @@ mod tests {
             const Component = styled.div({ color: 'red' });
         "#;
 
-        let (mut program, cm) = parse_program(source);
+        let (mut program, cm, _) = parse_program(source);
 
         let mut transform = CompiledBabelTransform::new(PluginOptions {
             add_component_name: Some(true),
@@ -737,12 +850,23 @@ fn has_active_compiled_imports(imports: &CompiledImports) -> bool {
         && imports.css_map.is_empty())
 }
 
+static JSX_SOURCE_ANNOTATION_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\*?\s*@jsxImportSource\s+([^\s]+)")
+        .expect("jsx import source regex should compile")
+});
+
+static JSX_ANNOTATION_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\*?\s*@jsx\s+([^\s]+)").expect("jsx pragma regex should compile")
+});
+
 impl VisitMut for CompiledBabelTransform {
     noop_visit_mut_type!();
 
     fn visit_mut_program(&mut self, program: &mut Program) {
         match program {
             Program::Module(module) => {
+                self.remove_jsx_imports(module);
+                self.process_jsx_pragmas();
                 self.visit_mut_module(module);
 
                 let (should_import_react, has_styled_import) = {
@@ -778,12 +902,106 @@ impl VisitMut for CompiledBabelTransform {
                     insert_forward_ref_import(module);
                 }
             }
-            Program::Script(script) => script.visit_mut_children_with(self),
+            Program::Script(script) => {
+                self.process_jsx_pragmas();
+                script.visit_mut_children_with(self);
+            }
         }
     }
 }
 
 impl CompiledBabelTransform {
+    fn remove_jsx_imports(&mut self, module: &mut Module) {
+        let mut state = self.state.borrow_mut();
+
+        let mut index = 0;
+        while index < module.body.len() {
+            let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = &mut module.body[index] else {
+                index += 1;
+                continue;
+            };
+
+            if !is_compiled_module(import.src.value.as_ref(), &state) {
+                index += 1;
+                continue;
+            }
+
+            let mut remaining = Vec::with_capacity(import.specifiers.len());
+
+            for specifier in import.specifiers.drain(..) {
+                match specifier {
+                    ImportSpecifier::Named(named) => {
+                        if imported_name(&named) == "jsx" {
+                            state.pragma.classic_jsx_pragma_is_compiled = true;
+                            state.pragma.classic_jsx_pragma_local_name =
+                                Some(named.local.sym.to_string());
+                            continue;
+                        }
+
+                        remaining.push(ImportSpecifier::Named(named));
+                    }
+                    other => remaining.push(other),
+                }
+            }
+
+            import.specifiers = remaining;
+
+            if import.specifiers.is_empty() {
+                module.body.remove(index);
+                continue;
+            }
+
+            index += 1;
+        }
+    }
+
+    fn process_jsx_pragmas(&mut self) {
+        let mut state = self.state.borrow_mut();
+
+        if state.file.comments.is_empty() {
+            return;
+        }
+
+        let mut matched_index: Option<usize> = None;
+        let comments = state.file.comments.clone();
+
+        for (idx, comment) in comments.iter().enumerate() {
+            let text = comment.text.as_ref();
+
+            if let Some(captures) = JSX_SOURCE_ANNOTATION_REGEX.captures(text) {
+                let origin = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+                if state.import_sources.iter().any(|source| source == origin) {
+                    state
+                        .compiled_imports
+                        .get_or_insert_with(CompiledImports::default);
+                    state.pragma.jsx_import_source = true;
+                    matched_index = Some(idx);
+                }
+            }
+
+            if state.pragma.classic_jsx_pragma_is_compiled {
+                if let Some(captures) = JSX_ANNOTATION_REGEX.captures(text) {
+                    let Some(local_name) = &state.pragma.classic_jsx_pragma_local_name else {
+                        continue;
+                    };
+
+                    let matched = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+                    if matched == local_name {
+                        state
+                            .compiled_imports
+                            .get_or_insert_with(CompiledImports::default);
+                        state.pragma.jsx = true;
+                        matched_index = Some(idx);
+                    }
+                }
+            }
+        }
+
+        if let Some(index) = matched_index {
+            state.file.comments.remove(index);
+        }
+    }
+
     fn visit_mut_module(&mut self, module: &mut Module) {
         let mut index = 0;
 
@@ -806,6 +1024,7 @@ impl CompiledBabelTransform {
         }
 
         let (
+            css_prop_enabled,
             has_css_import,
             has_styled_import,
             has_class_names_import,
@@ -816,6 +1035,7 @@ impl CompiledBabelTransform {
             let state = self.state.borrow();
             let imports = state.compiled_imports.clone();
             (
+                imports.is_some(),
                 imports
                     .as_ref()
                     .map(|imports| !imports.css.is_empty())
@@ -847,7 +1067,7 @@ impl CompiledBabelTransform {
             visitor.insert_display_names(module);
         }
 
-        if has_css_import {
+        if css_prop_enabled {
             let metadata = Metadata::new(self.state());
             let mut visitor = CssPropVisitor::new(metadata);
             module.visit_mut_with(&mut visitor);
