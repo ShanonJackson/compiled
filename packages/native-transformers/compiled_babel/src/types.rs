@@ -126,6 +126,7 @@ pub struct PluginOptions {
     pub sort_at_rules: Option<bool>,
     pub class_hash_prefix: Option<String>,
     pub flatten_multiple_selectors: Option<bool>,
+    pub extract: Option<bool>,
 }
 
 impl Default for PluginOptions {
@@ -148,6 +149,7 @@ impl Default for PluginOptions {
             sort_at_rules: None,
             class_hash_prefix: None,
             flatten_multiple_selectors: None,
+            extract: None,
         }
     }
 }
@@ -348,6 +350,7 @@ pub struct TransformState {
     pub file: TransformFile,
     pub included_files: Vec<String>,
     pub sheets: IndexMap<String, Ident>,
+    pub style_rules: IndexSet<String>,
     pub sheet_identifier_counter: usize,
     pub cache: Cache<Value>,
     pub css_map: IndexMap<String, Vec<String>>,
@@ -393,6 +396,7 @@ impl TransformState {
             file,
             included_files: Vec::new(),
             sheets: IndexMap::new(),
+            style_rules: IndexSet::new(),
             sheet_identifier_counter: 0,
             cache,
             css_map: IndexMap::new(),

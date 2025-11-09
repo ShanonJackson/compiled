@@ -1526,8 +1526,7 @@ fn build_css_internal(node: &Expr, meta: &Metadata) -> CssOutput {
 }
 
 static INVALID_DYNAMIC_INDIRECT_SELECTOR_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)(\+|~|\||\|\|)[^=\{]+\{[^\}]+var\(--_")
-        .expect("valid dynamic selector regex")
+    Regex::new(r"(?s)(\+|~|\||\|\|)[^=\{]+\{[^\}]+var\(--_").expect("valid dynamic selector regex")
 });
 
 pub fn build_css(node: &Expr, meta: &Metadata) -> CssOutput {

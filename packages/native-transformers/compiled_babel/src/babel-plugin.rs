@@ -20,6 +20,7 @@ use crate::types::{
     TransformMetadata, TransformState,
 };
 use crate::utils_append_runtime_imports::append_runtime_imports;
+use crate::utils_style_rules::parse_style_rule;
 use crate::xcss_prop::visit_xcss_prop;
 
 /// Primary SWC transform that will eventually mirror `@compiled/babel-plugin`.
@@ -47,6 +48,14 @@ impl CompiledBabelTransform {
 
         if metadata.included_files.is_empty() {
             metadata.included_files = state.included_files.clone();
+        }
+
+        if metadata.style_rules.is_empty() && !state.style_rules.is_empty() {
+            metadata.style_rules = state
+                .style_rules
+                .iter()
+                .map(|rule| parse_style_rule(rule))
+                .collect();
         }
 
         metadata
@@ -226,6 +235,47 @@ mod tests {
             panic!("expected CC identifier");
         };
         assert_eq!(ident.sym.as_ref(), "CC");
+    }
+
+    #[test]
+    fn collects_style_rules_when_extract_enabled() {
+        let source = r#"
+            import { css } from '@compiled/react';
+
+            const Component = () => <div css={{ color: 'red' }} />;
+        "#;
+
+        let (mut program, cm) = parse_program(source);
+
+        let mut transform = CompiledBabelTransform::new(PluginOptions {
+            extract: Some(true),
+            ..PluginOptions::default()
+        });
+
+        {
+            let file = TransformFile::with_options(
+                cm.clone(),
+                Vec::new(),
+                TransformFileOptions {
+                    filename: Some("test.tsx".into()),
+                    ..TransformFileOptions::default()
+                },
+            );
+            let mut state = transform.state.borrow_mut();
+            state.filename = file.filename.clone();
+            state.cwd = file.cwd.clone();
+            state.root = file.root.clone();
+            state.file = file;
+        }
+
+        program.visit_mut_with(&mut transform);
+
+        let metadata = transform.into_metadata();
+        assert_eq!(metadata.style_rules.len(), 1);
+        let rule = &metadata.style_rules[0];
+        assert_eq!(rule.class_name, "_syaz5scu");
+        assert_eq!(rule.selector, "._syaz5scu");
+        assert_eq!(rule.css_text, "color:red");
     }
 
     #[test]

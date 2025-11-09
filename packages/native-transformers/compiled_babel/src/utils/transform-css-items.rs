@@ -118,6 +118,26 @@ fn wrap_css_with_selectors(css: &str, selectors: &[String]) -> String {
     result
 }
 
+fn record_style_rules(sheets: &[String], meta: &Metadata) {
+    if sheets.is_empty() {
+        return;
+    }
+
+    let should_collect = {
+        let state = meta.state();
+        state.opts.extract.unwrap_or(false)
+    };
+
+    if !should_collect {
+        return;
+    }
+
+    let mut state = meta.state_mut();
+    for sheet in sheets {
+        state.style_rules.insert(sheet.clone());
+    }
+}
+
 fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult {
     match item {
         CssItem::Conditional(conditional) => {
@@ -239,6 +259,7 @@ pub fn transform_css_items(css_items: &[CssItem], meta: &Metadata) -> TransformC
 
     for item in css_items {
         let result = transform_css_item(item, meta);
+        record_style_rules(&result.sheets, meta);
         sheets.extend(result.sheets);
         if let Some(class_expression) = result.class_expression {
             class_names.push(class_expression);

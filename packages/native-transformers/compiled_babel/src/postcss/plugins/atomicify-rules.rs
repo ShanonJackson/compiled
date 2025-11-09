@@ -49,7 +49,7 @@ impl Plugin for AtomicifyRules {
                     }
                 }
                 Rule::QualifiedRule(rule) => {
-                    let replacements = atomicify_qualified_rule(*rule, &options, ctx, "");
+                    let replacements = atomicify_qualified_rule(*rule, &options, ctx, None);
                     for replacement in replacements {
                         transformed.push(Rule::QualifiedRule(Box::new(replacement)));
                     }
@@ -76,10 +76,7 @@ struct AtomicifyOptions<'a> {
     declaration_placeholder: Option<&'a str>,
 }
 
-fn normalize_selectors(
-    selectors: Vec<String>,
-    options: &AtomicifyOptions<'_>,
-) -> Vec<String> {
+fn normalize_selectors(selectors: Vec<String>, options: &AtomicifyOptions<'_>) -> Vec<String> {
     if let Some(placeholder) = options.declaration_placeholder {
         selectors
             .into_iter()
@@ -100,7 +97,7 @@ fn atomicify_qualified_rule(
     rule: QualifiedRule,
     options: &AtomicifyOptions<'_>,
     ctx: &mut TransformContext<'_>,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> Vec<QualifiedRule> {
     let selectors = normalize_selectors(collect_rule_selectors(&rule), options);
     let mut replacements: Vec<QualifiedRule> = Vec::new();
@@ -152,14 +149,15 @@ fn atomicify_at_rule(
                 }
             }
             ComponentValue::QualifiedRule(rule) => {
-                let replacements = atomicify_qualified_rule(*rule, options, ctx, &label);
+                let replacements = atomicify_qualified_rule(*rule, options, ctx, Some(&label));
                 for replacement in replacements {
                     new_children.push(ComponentValue::QualifiedRule(Box::new(replacement)));
                 }
             }
             ComponentValue::Declaration(declaration) => {
                 let declaration = *declaration;
-                let atomic_rule = atomicify_declaration(&declaration, &[], options, ctx, &label);
+                let atomic_rule =
+                    atomicify_declaration(&declaration, &[], options, ctx, Some(&label));
                 new_children.push(ComponentValue::QualifiedRule(Box::new(atomic_rule)));
             }
             _ => {}
@@ -176,7 +174,7 @@ fn atomicify_declaration(
     selectors: &[String],
     options: &AtomicifyOptions<'_>,
     ctx: &mut TransformContext<'_>,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> QualifiedRule {
     let selector_text = build_atomic_selector(declaration, selectors, options, ctx, at_rule_label);
     let mut rule = parse_selector_as_rule(&selector_text);
@@ -189,7 +187,7 @@ fn build_atomic_selector(
     selectors: &[String],
     options: &AtomicifyOptions<'_>,
     ctx: &mut TransformContext<'_>,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> String {
     let base_selectors: Vec<Cow<'_, str>> = if selectors.is_empty() {
         vec![Cow::Borrowed("")]
@@ -223,11 +221,12 @@ fn atomic_class_name(
     declaration: &Declaration,
     options: &AtomicifyOptions<'_>,
     normalized_selector: &str,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> String {
     let prefix = options.class_hash_prefix.unwrap_or("");
     let prop = declaration_name(&declaration.name);
-    let group_seed = format!("{}{}{}{}", prefix, at_rule_label, normalized_selector, prop);
+    let at_rule = at_rule_label.unwrap_or("undefined");
+    let group_seed = format!("{}{}{}{}", prefix, at_rule, normalized_selector, prop);
     let group_hash = hash(&group_seed);
     let group = group_hash.chars().take(4).collect::<String>();
 

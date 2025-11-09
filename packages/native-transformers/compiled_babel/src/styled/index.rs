@@ -293,27 +293,32 @@ pub fn visit_styled(
     meta: &Metadata,
     variable_name: Option<&str>,
 ) -> StyledVisitResult {
-    visit_styled_with_builder(node, meta, |css_node, metadata| match css_node {
-        StyledCssNode::Expression(expr) => build_css_from_expr(&expr, metadata),
-        StyledCssNode::Expressions(expressions) => {
-            let elements = expressions
-                .into_iter()
-                .map(|expr| {
-                    Some(ExprOrSpread {
-                        spread: None,
-                        expr: Box::new(expr),
+    visit_styled_with_builder(
+        node,
+        meta,
+        |css_node, metadata| match css_node {
+            StyledCssNode::Expression(expr) => build_css_from_expr(&expr, metadata),
+            StyledCssNode::Expressions(expressions) => {
+                let elements = expressions
+                    .into_iter()
+                    .map(|expr| {
+                        Some(ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(expr),
+                        })
                     })
-                })
-                .collect();
+                    .collect();
 
-            let array = Expr::Array(ArrayLit {
-                span: DUMMY_SP,
-                elems: elements,
-            });
+                let array = Expr::Array(ArrayLit {
+                    span: DUMMY_SP,
+                    elems: elements,
+                });
 
-            build_css_from_expr(&array, metadata)
-        }
-    }, variable_name)
+                build_css_from_expr(&array, metadata)
+            }
+        },
+        variable_name,
+    )
 }
 
 trait LogicalOpExt {

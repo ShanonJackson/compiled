@@ -6,10 +6,10 @@ use swc_core::ecma::ast::{
 
 use crate::css_map_process_selectors::merge_extended_selectors_into_properties;
 use crate::types::Metadata;
+use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_css_map::{
     create_error_message, error_if_not_valid_object_property, ErrorMessages,
 };
-use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_transform_css_items::transform_css_items;
 use crate::utils_types::CssOutput;
 
