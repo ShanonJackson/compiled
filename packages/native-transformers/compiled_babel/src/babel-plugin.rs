@@ -29,6 +29,7 @@ use crate::utils_is_compiled::{
     is_compiled_keyframes_call_expression, is_compiled_keyframes_tagged_template_expression,
     is_compiled_styled_call_expression, is_compiled_styled_tagged_template_expression,
 };
+use crate::utils_module_scope;
 use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::xcss_prop::visit_xcss_prop;
 
@@ -236,12 +237,10 @@ mod tests {
 
         let state = transform.state();
         let state_ref = state.borrow();
-        assert!(
-            state_ref
-                .import_sources
-                .iter()
-                .any(|source| source == "@compiled/react")
-        );
+        assert!(state_ref
+            .import_sources
+            .iter()
+            .any(|source| source == "@compiled/react"));
         assert!(state_ref.pragma.jsx_import_source);
         assert!(state_ref.compiled_imports.is_some());
         assert!(state_ref.file.comments.is_empty());
@@ -855,9 +854,8 @@ static JSX_SOURCE_ANNOTATION_REGEX: Lazy<Regex> = Lazy::new(|| {
         .expect("jsx import source regex should compile")
 });
 
-static JSX_ANNOTATION_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\*?\s*@jsx\s+([^\s]+)").expect("jsx pragma regex should compile")
-});
+static JSX_ANNOTATION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\*?\s*@jsx\s+([^\s]+)").expect("jsx pragma regex should compile"));
 
 impl VisitMut for CompiledBabelTransform {
     noop_visit_mut_type!();
@@ -866,6 +864,7 @@ impl VisitMut for CompiledBabelTransform {
         match program {
             Program::Module(module) => {
                 self.remove_jsx_imports(module);
+                utils_module_scope::populate_module_scope(&self.state(), module);
                 self.process_jsx_pragmas();
                 self.visit_mut_module(module);
 

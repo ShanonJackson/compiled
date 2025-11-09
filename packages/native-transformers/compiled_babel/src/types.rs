@@ -13,6 +13,8 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Span};
 use swc_core::ecma::ast::{Expr, Ident, Program};
 
+use oxc_resolver::Resolver;
+
 use crate::constants::DEFAULT_IMPORT_SOURCES;
 use crate::utils_cache::{Cache, CacheOptions};
 use crate::utils_types::PartialBindingWithMeta;
@@ -340,6 +342,8 @@ pub struct TransformState {
     pub opts: PluginOptions,
     pub file: TransformFile,
     pub included_files: Vec<String>,
+    pub module_scope: SharedScope,
+    pub module_cache: IndexMap<String, CachedModule>,
     pub sheets: IndexMap<String, Ident>,
     pub style_rules: IndexSet<String>,
     pub sheet_identifier_counter: usize,
@@ -347,6 +351,7 @@ pub struct TransformState {
     pub css_map: IndexMap<String, Vec<String>>,
     pub ignore_member_expressions: IndexSet<String>,
     pub resolver: Option<ResolvedResolver>,
+    pub module_resolver: Option<Resolver>,
     pub transform_cache: TransformCache,
     pub filename: Option<String>,
     pub cwd: PathBuf,
@@ -386,6 +391,8 @@ impl TransformState {
             opts,
             file,
             included_files: Vec::new(),
+            module_scope: new_scope(),
+            module_cache: IndexMap::new(),
             sheets: IndexMap::new(),
             style_rules: IndexSet::new(),
             sheet_identifier_counter: 0,
@@ -393,6 +400,7 @@ impl TransformState {
             css_map: IndexMap::new(),
             ignore_member_expressions: IndexSet::new(),
             resolver,
+            module_resolver: None,
             transform_cache: TransformCache::default(),
             filename,
             cwd,
@@ -447,6 +455,13 @@ fn new_scope() -> SharedScope {
     Rc::new(RefCell::new(IndexMap::new()))
 }
 
+/// Cached module data used when resolving imported bindings.
+#[derive(Clone, Debug)]
+pub struct CachedModule {
+    pub program: Program,
+    pub state: SharedTransformState,
+}
+
 /// Metadata wrapper that mirrors the Babel helpers.
 #[derive(Clone, Debug)]
 pub struct Metadata {
@@ -461,12 +476,16 @@ pub struct Metadata {
 
 impl Metadata {
     pub fn new(state: SharedTransformState) -> Self {
+        let parent_scope = {
+            let state_ref = state.borrow();
+            state_ref.module_scope.clone()
+        };
         Self {
             state,
             context: MetadataContext::Root,
             parent_span: None,
             own_span: None,
-            parent_scope: new_scope(),
+            parent_scope,
             own_scope: None,
             parent_expr: None,
         }

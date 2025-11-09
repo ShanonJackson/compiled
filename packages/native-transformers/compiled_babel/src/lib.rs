@@ -82,6 +82,8 @@ mod utils_is_prop_valid_data;
 mod utils_manipulate_template_literal;
 #[path = "utils/__mocks__/cache.rs"]
 mod utils_mocks_cache;
+#[path = "utils/module_scope.rs"]
+mod utils_module_scope;
 #[path = "utils/normalize-props-usage.rs"]
 mod utils_normalize_props_usage;
 #[path = "utils/object-property-to-string.rs"]

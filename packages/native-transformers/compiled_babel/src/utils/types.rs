@@ -118,19 +118,60 @@ pub enum BindingSource {
     Module,
 }
 
+/// Describes how a binding was declared so helpers can recreate the original
+/// traversal semantics without relying on Babel `NodePath` internals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImportBindingKind {
+    Default,
+    Named(String),
+    Namespace,
+}
+
 /// Minimal representation of a binding path captured during traversal.
-///
-/// Babel exposes a `NodePath`, but in the SWC port we track the originating
-/// span so downstream helpers can continue to reason about the source location
-/// without depending on Babel internals.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BindingPathKind {
+    Unknown,
+    /// A variable declarator, optionally capturing the property path when the
+    /// binding originates from a destructured pattern.
+    Variable {
+        path: Vec<String>,
+        default: Option<Expr>,
+    },
+    /// An imported binding, storing the original source module and specifier
+    /// information so imported values can be resolved lazily.
+    Import {
+        source: String,
+        kind: ImportBindingKind,
+    },
+}
+
+/// Simplified binding path that mirrors the data exposed by Babel's `NodePath`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BindingPath {
     pub span: Option<Span>,
+    pub kind: BindingPathKind,
 }
 
 impl BindingPath {
     pub fn new(span: Option<Span>) -> Self {
-        Self { span }
+        Self {
+            span,
+            kind: BindingPathKind::Unknown,
+        }
+    }
+
+    pub fn variable(span: Option<Span>, path: Vec<String>, default: Option<Expr>) -> Self {
+        Self {
+            span,
+            kind: BindingPathKind::Variable { path, default },
+        }
+    }
+
+    pub fn import(span: Option<Span>, source: String, kind: ImportBindingKind) -> Self {
+        Self {
+            span,
+            kind: BindingPathKind::Import { source, kind },
+        }
     }
 }
 

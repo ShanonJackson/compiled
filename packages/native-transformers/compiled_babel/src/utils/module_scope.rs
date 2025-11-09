@@ -1,0 +1,319 @@
+use swc_core::common::{Span, Spanned};
+use swc_core::ecma::ast::{
+    ClassDecl, ClassExpr, Decl, DefaultDecl, Expr, FnDecl, FnExpr, ImportDecl, ImportSpecifier,
+    Module, ModuleDecl, ModuleExportName, ModuleItem, ObjectPatProp, Pat, Stmt, VarDecl,
+    VarDeclKind,
+};
+
+use crate::types::{Metadata, SharedTransformState};
+use crate::utils_types::{BindingPath, BindingSource, ImportBindingKind, PartialBindingWithMeta};
+
+fn prop_name_to_string(name: &swc_core::ecma::ast::PropName) -> Option<String> {
+    use swc_core::ecma::ast::PropName;
+
+    match name {
+        PropName::Ident(ident) => Some(ident.sym.to_string()),
+        PropName::Str(value) => Some(value.value.to_string()),
+        PropName::Num(value) => Some(value.value.to_string()),
+        PropName::BigInt(value) => Some(value.value.to_string()),
+        PropName::Computed(_) => None,
+    }
+}
+
+fn insert_module_binding(
+    metadata: &Metadata,
+    name: &str,
+    node: Option<Expr>,
+    path: Option<BindingPath>,
+    constant: bool,
+    source: BindingSource,
+) {
+    let binding = PartialBindingWithMeta::new(node, path, constant, metadata.clone(), source);
+    metadata.insert_parent_binding(name, binding);
+}
+
+fn register_function_decl(metadata: &Metadata, decl: &FnDecl) {
+    let name = decl.ident.sym.as_ref();
+    let expr = Expr::Fn(FnExpr {
+        ident: Some(decl.ident.clone()),
+        function: decl.function.clone(),
+    });
+    let path = BindingPath::new(Some(decl.ident.span));
+
+    insert_module_binding(
+        metadata,
+        name,
+        Some(expr),
+        Some(path),
+        true,
+        BindingSource::Module,
+    );
+}
+
+fn register_class_decl(metadata: &Metadata, decl: &ClassDecl) {
+    let name = decl.ident.sym.as_ref();
+    let expr = Expr::Class(ClassExpr {
+        ident: Some(decl.ident.clone()),
+        class: decl.class.clone(),
+    });
+    let path = BindingPath::new(Some(decl.ident.span));
+
+    insert_module_binding(
+        metadata,
+        name,
+        Some(expr),
+        Some(path),
+        true,
+        BindingSource::Module,
+    );
+}
+
+fn register_pattern(
+    pattern: &Pat,
+    init: Option<&Expr>,
+    constant: bool,
+    path: Vec<String>,
+    default_value: Option<Expr>,
+    metadata: &Metadata,
+    span: Option<Span>,
+) {
+    match pattern {
+        Pat::Ident(binding) => {
+            let name = binding.id.sym.as_ref();
+            let span = span.unwrap_or(binding.id.span);
+            let binding_path = if !path.is_empty() || default_value.is_some() {
+                Some(BindingPath::variable(Some(span), path, default_value))
+            } else {
+                Some(BindingPath::new(Some(span)))
+            };
+
+            insert_module_binding(
+                metadata,
+                name,
+                init.cloned(),
+                binding_path,
+                constant,
+                BindingSource::Module,
+            );
+        }
+        Pat::Assign(assign) => {
+            let assign_default = Some(*assign.right.clone()).or(default_value);
+
+            register_pattern(
+                &assign.left,
+                init,
+                constant,
+                path,
+                assign_default,
+                metadata,
+                Some(assign.span),
+            );
+        }
+        Pat::Object(object) => {
+            for prop in &object.props {
+                match prop {
+                    ObjectPatProp::KeyValue(key_value) => {
+                        if let Some(key) = prop_name_to_string(&key_value.key) {
+                            let mut next_path = path.clone();
+                            next_path.push(key);
+
+                            register_pattern(
+                                &key_value.value,
+                                init,
+                                constant,
+                                next_path,
+                                None,
+                                metadata,
+                                Some(key_value.value.span()),
+                            );
+                        }
+                    }
+                    ObjectPatProp::Assign(assign) => {
+                        let mut next_path = path.clone();
+                        next_path.push(assign.key.sym.to_string());
+                        let default_expr = assign.value.as_ref().map(|expr| expr.as_ref().clone());
+                        let span = Some(assign.key.span);
+                        let binding_path = BindingPath::variable(span, next_path, default_expr);
+
+                        insert_module_binding(
+                            metadata,
+                            assign.key.sym.as_ref(),
+                            init.cloned(),
+                            Some(binding_path),
+                            constant,
+                            BindingSource::Module,
+                        );
+                    }
+                    ObjectPatProp::Rest(rest) => {
+                        register_pattern(
+                            &rest.arg,
+                            init,
+                            constant,
+                            Vec::new(),
+                            None,
+                            metadata,
+                            Some(rest.span),
+                        );
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn register_var_decl(metadata: &Metadata, decl: &VarDecl) {
+    let constant = matches!(decl.kind, VarDeclKind::Const);
+
+    for declarator in &decl.decls {
+        let init = declarator.init.as_deref();
+        register_pattern(
+            &declarator.name,
+            init,
+            constant,
+            Vec::new(),
+            None,
+            metadata,
+            Some(declarator.span),
+        );
+    }
+}
+
+fn register_decl_for_scope(metadata: &Metadata, decl: &Decl) {
+    match decl {
+        Decl::Var(var_decl) => register_var_decl(metadata, var_decl),
+        Decl::Fn(fn_decl) => register_function_decl(metadata, fn_decl),
+        Decl::Class(class_decl) => register_class_decl(metadata, class_decl),
+        _ => {}
+    }
+}
+
+fn register_stmt_for_scope(metadata: &Metadata, stmt: &Stmt) {
+    if let Stmt::Decl(decl) = stmt {
+        register_decl_for_scope(metadata, decl);
+    }
+}
+
+fn register_import_decl_for_scope(metadata: &Metadata, import: &ImportDecl) {
+    let source = import.src.value.to_string();
+
+    for specifier in &import.specifiers {
+        match specifier {
+            ImportSpecifier::Named(named) => {
+                let local = named.local.sym.as_ref();
+                let kind = match &named.imported {
+                    Some(ModuleExportName::Ident(ident)) if ident.sym.as_ref() == "default" => {
+                        ImportBindingKind::Default
+                    }
+                    Some(ModuleExportName::Ident(ident)) => {
+                        ImportBindingKind::Named(ident.sym.to_string())
+                    }
+                    Some(ModuleExportName::Str(value)) => {
+                        ImportBindingKind::Named(value.value.to_string())
+                    }
+                    None => ImportBindingKind::Named(local.to_string()),
+                };
+
+                let path = BindingPath::import(Some(named.span), source.clone(), kind);
+                insert_module_binding(
+                    metadata,
+                    local,
+                    None,
+                    Some(path),
+                    true,
+                    BindingSource::Import,
+                );
+            }
+            ImportSpecifier::Default(default_specifier) => {
+                let local = default_specifier.local.sym.as_ref();
+                let path = BindingPath::import(
+                    Some(default_specifier.span),
+                    source.clone(),
+                    ImportBindingKind::Default,
+                );
+                insert_module_binding(
+                    metadata,
+                    local,
+                    None,
+                    Some(path),
+                    true,
+                    BindingSource::Import,
+                );
+            }
+            ImportSpecifier::Namespace(namespace) => {
+                let local = namespace.local.sym.as_ref();
+                let path = BindingPath::import(
+                    Some(namespace.span),
+                    source.clone(),
+                    ImportBindingKind::Namespace,
+                );
+                insert_module_binding(
+                    metadata,
+                    local,
+                    None,
+                    Some(path),
+                    true,
+                    BindingSource::Import,
+                );
+            }
+        }
+    }
+}
+
+fn register_module_decl_for_scope(metadata: &Metadata, decl: &ModuleDecl) {
+    match decl {
+        ModuleDecl::Import(import) => register_import_decl_for_scope(metadata, import),
+        ModuleDecl::ExportDecl(export_decl) => register_decl_for_scope(metadata, &export_decl.decl),
+        ModuleDecl::ExportDefaultDecl(default_decl) => match &default_decl.decl {
+            DefaultDecl::Fn(fn_expr) => {
+                if let Some(ident) = &fn_expr.ident {
+                    let expr = Expr::Fn(fn_expr.clone());
+                    let path = BindingPath::new(Some(default_decl.span));
+                    insert_module_binding(
+                        metadata,
+                        ident.sym.as_ref(),
+                        Some(expr),
+                        Some(path),
+                        true,
+                        BindingSource::Module,
+                    );
+                }
+            }
+            DefaultDecl::Class(class_expr) => {
+                if let Some(ident) = &class_expr.ident {
+                    let expr = Expr::Class(class_expr.clone());
+                    let path = BindingPath::new(Some(default_decl.span));
+                    insert_module_binding(
+                        metadata,
+                        ident.sym.as_ref(),
+                        Some(expr),
+                        Some(path),
+                        true,
+                        BindingSource::Module,
+                    );
+                }
+            }
+            DefaultDecl::TsInterfaceDecl(_) => {}
+        },
+        _ => {}
+    }
+}
+
+/// Populate the shared module scope on the provided transform state so that
+/// downstream binding resolution can mirror the Babel behaviour.
+pub fn populate_module_scope(state: &SharedTransformState, module: &Module) {
+    {
+        let mut state_mut = state.borrow_mut();
+        state_mut.module_scope.borrow_mut().clear();
+        state_mut.module_cache.clear();
+    }
+
+    let metadata = Metadata::new(state.clone());
+
+    for item in &module.body {
+        match item {
+            ModuleItem::ModuleDecl(decl) => register_module_decl_for_scope(&metadata, decl),
+            ModuleItem::Stmt(stmt) => register_stmt_for_scope(&metadata, stmt),
+        }
+    }
+}

@@ -310,6 +310,7 @@ dependencies = [
  "swc_core",
  "swc_ecma_codegen",
  "swc_ecma_parser",
+ "tempfile",
 ]
 
 [[package]]
