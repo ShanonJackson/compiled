@@ -1,5 +1,5 @@
 use swc_core::common::Span;
-use swc_core::ecma::ast::Expr;
+use swc_core::ecma::ast::{BinaryOp, Expr};
 
 use crate::types::Metadata;
 use crate::utils_create_result_pair::ResultPair;
@@ -32,6 +32,14 @@ impl LogicalOperator {
             LogicalOperator::Or => "||",
             LogicalOperator::Nullish => "??",
             LogicalOperator::And => "&&",
+        }
+    }
+
+    pub fn to_binary_op(&self) -> BinaryOp {
+        match self {
+            LogicalOperator::Or => BinaryOp::LogicalOr,
+            LogicalOperator::Nullish => BinaryOp::NullishCoalescing,
+            LogicalOperator::And => BinaryOp::LogicalAnd,
         }
     }
 }
