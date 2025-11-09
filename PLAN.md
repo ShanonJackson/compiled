@@ -52,6 +52,7 @@
 - **Progress:** Implemented the shared CSS item helpers (`mergeSubsequentUnconditionalCssItems` and `getItemCss`) in Rust with parity-focused unit tests to prepare downstream visitors for the native pipeline.
 - **Progress:** Ported the CSS builder mappers (`toCSSRule`/`toCSSDeclaration`) to Rust so selector wrapping and declaration emission mirror the Babel helper, complete with unit coverage for unconditional, conditional, logical, and sheet variants.
 - **Progress:** Ported the `isPropValid` allow list and the `buildStyledComponent` helper to Rust so styled wrappers now reuse the native CSS builders, emit runtime class names (including optional component prefixes), hoist sheets, guard against invalid DOM props, and expose development-only `innerRef` errors, with unit tests covering invalid prop destructuring and component name injection.
+- **Progress:** Ported the styled visitor to Rust with builder injection, invalid logical expression guards, display name emission, and parser-driven tests covering member, call, and user-defined component scenarios.
 - **Progress:** Ported the CSS prop visitor to Rust, including comment directive checks, attribute cleanup, and builder injection hooks, with parser-driven tests covering replacements, disabled directives, and empty CSS outputs.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
