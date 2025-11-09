@@ -154,21 +154,12 @@ impl Default for PluginOptions {
     }
 }
 
-/// Representation of a compiled style rule emitted by the transformer.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StyleRule {
-    pub class_name: String,
-    pub selector: String,
-    pub css_text: String,
-}
-
 /// Metadata returned from the transform.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformMetadata {
     pub included_files: Vec<String>,
-    pub style_rules: Vec<StyleRule>,
+    pub style_rules: Vec<String>,
 }
 
 /// Result of a transform run containing the mutated program and collected metadata.

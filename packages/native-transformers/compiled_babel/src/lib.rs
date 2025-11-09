@@ -88,8 +88,6 @@ mod utils_normalize_props_usage;
 mod utils_object_property_to_string;
 #[path = "utils/resolve-binding.rs"]
 mod utils_resolve_binding;
-#[path = "utils/style-rules.rs"]
-mod utils_style_rules;
 #[path = "utils/transform-css-items.rs"]
 mod utils_transform_css_items;
 #[path = "utils/traverse-expression/index.rs"]

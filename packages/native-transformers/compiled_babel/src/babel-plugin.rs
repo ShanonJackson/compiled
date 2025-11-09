@@ -20,7 +20,6 @@ use crate::types::{
     TransformMetadata, TransformState,
 };
 use crate::utils_append_runtime_imports::append_runtime_imports;
-use crate::utils_style_rules::parse_style_rule;
 use crate::xcss_prop::visit_xcss_prop;
 
 /// Primary SWC transform that will eventually mirror `@compiled/babel-plugin`.
@@ -51,11 +50,7 @@ impl CompiledBabelTransform {
         }
 
         if metadata.style_rules.is_empty() && !state.style_rules.is_empty() {
-            metadata.style_rules = state
-                .style_rules
-                .iter()
-                .map(|rule| parse_style_rule(rule))
-                .collect();
+            metadata.style_rules = state.style_rules.iter().cloned().collect();
         }
 
         metadata
@@ -271,11 +266,10 @@ mod tests {
         program.visit_mut_with(&mut transform);
 
         let metadata = transform.into_metadata();
-        assert_eq!(metadata.style_rules.len(), 1);
-        let rule = &metadata.style_rules[0];
-        assert_eq!(rule.class_name, "_syaz5scu");
-        assert_eq!(rule.selector, "._syaz5scu");
-        assert_eq!(rule.css_text, "color:red");
+        assert_eq!(
+            metadata.style_rules,
+            vec!["._syaz5scu{color:red}".to_string()]
+        );
     }
 
     #[test]
