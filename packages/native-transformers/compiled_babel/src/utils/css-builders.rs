@@ -1,8 +1,9 @@
 use crate::css_map::{visit_css_map_path_with_builder, CssMapUsage};
-use crate::types::Metadata;
+use crate::types::{Metadata, MetadataContext};
 use crate::utils_ast::build_code_frame_error;
 use crate::utils_css::kebab_case;
 use crate::utils_evaluate_expression::evaluate_expression;
+use crate::utils_hash::hash;
 use crate::utils_is_compiled::{
     is_compiled_css_call_expression, is_compiled_css_map_call_expression,
     is_compiled_css_tagged_template_expression,
@@ -12,11 +13,56 @@ use crate::utils_types::{
     BindingSource, ConditionalCssItem, CssItem, CssMapItem, CssOutput, LogicalCssItem,
     LogicalOperator, PartialBindingWithMeta, SheetCssItem, UnconditionalCssItem, Variable,
 };
-use swc_core::common::{Spanned, DUMMY_SP};
+use swc_core::common::sync::Lrc;
+use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
-    ArrowExpr, BinExpr, BlockStmtOrExpr, Callee, CondExpr, Expr, Ident, Lit, MemberExpr, UnaryExpr,
-    UnaryOp,
+    ArrayLit, ArrowExpr, BinExpr, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr, ExprOrSpread,
+    Ident, Lit, MemberExpr, TaggedTpl, UnaryExpr, UnaryOp,
 };
+use swc_ecma_codegen::text_writer::JsWriter;
+use swc_ecma_codegen::{Config, Emitter, Node};
+
+fn print_expression(expr: &Expr) -> String {
+    let cm: Lrc<SourceMap> = Default::default();
+    let mut buffer = Vec::new();
+
+    {
+        let mut writer = JsWriter::new(cm.clone(), "\n", &mut buffer, None);
+        writer.set_indent_str("  ");
+        let mut emitter = Emitter {
+            cfg: Config::default(),
+            comments: None,
+            cm,
+            wr: writer,
+        };
+
+        expr.emit_with(&mut emitter).expect("emit expression");
+    }
+
+    String::from_utf8(buffer).expect("expression to utf8 string")
+}
+
+fn call_arguments_as_array(call: &CallExpr) -> Expr {
+    let elements = call
+        .args
+        .iter()
+        .map(|arg| {
+            if arg.spread.is_some() {
+                panic!("Spread elements are not supported in keyframes arguments");
+            }
+
+            Some(ExprOrSpread {
+                spread: None,
+                expr: arg.expr.clone(),
+            })
+        })
+        .collect();
+
+    Expr::Array(ArrayLit {
+        span: call.span,
+        elems: elements,
+    })
+}
 
 /// Merge consecutive unconditional CSS items while preserving the position of
 /// any sheet entries. This mirrors the behaviour of the Babel helper and is
@@ -413,6 +459,72 @@ where
     CssOutput { css, variables }
 }
 
+/// Extracts CSS rules from a keyframes expression while reusing the provided builder
+/// for nested evaluation. Mirrors the Babel `extractKeyframes` helper by hashing the
+/// expression source to produce a deterministic animation name and wrapping the
+/// generated output in an `@keyframes` rule.
+pub fn extract_keyframes_with_builder<F>(
+    expression: &Expr,
+    meta: &Metadata,
+    prefix: &str,
+    suffix: &str,
+    build_css: &mut F,
+) -> CssOutput
+where
+    F: FnMut(&Expr, &Metadata) -> CssOutput,
+{
+    let code = print_expression(expression);
+    let name = format!("k{}", hash(&code));
+    let selector = format!("@keyframes {name}");
+
+    let keyframe_meta = meta.with_context(MetadataContext::Keyframes {
+        keyframe: name.clone(),
+    });
+
+    let inner_output = match expression {
+        Expr::Call(call) => {
+            let array_expr = call_arguments_as_array(call);
+            build_css(&array_expr, &keyframe_meta)
+        }
+        Expr::TaggedTpl(TaggedTpl { tpl, .. }) => {
+            build_css(&Expr::Tpl((**tpl).clone()), &keyframe_meta)
+        }
+        Expr::Tpl(tpl) => build_css(&Expr::Tpl(tpl.clone()), &keyframe_meta),
+        _ => build_css(expression, &keyframe_meta),
+    };
+
+    let wrapped = to_css_rule(&selector, &inner_output);
+
+    if wrapped
+        .css
+        .iter()
+        .any(|item| !matches!(item, CssItem::Unconditional(_)))
+    {
+        let error = build_code_frame_error(
+            "Keyframes contains unexpected CSS",
+            Some(expression.span()),
+            meta,
+        );
+        panic!("{error}");
+    }
+
+    let sheet_css = wrapped
+        .css
+        .iter()
+        .map(|item| get_item_css(item))
+        .collect::<String>();
+
+    CssOutput {
+        css: vec![
+            CssItem::Sheet(SheetCssItem { css: sheet_css }),
+            CssItem::Unconditional(UnconditionalCssItem {
+                css: format!("{prefix}{name}{suffix}"),
+            }),
+        ],
+        variables: wrapped.variables,
+    }
+}
+
 fn wrap_with_selector(selector: &str, css: String) -> String {
     format!("{selector} {{ {css} }}")
 }
@@ -507,18 +619,18 @@ pub fn to_css_declaration(key: &str, result: &CssOutput) -> CssOutput {
 mod tests {
     use super::{
         assert_no_imported_css_variables, callback_if_file_included,
-        extract_conditional_expression_with_builder, extract_logical_expression_with_builder,
-        extract_member_expression_with_builder, find_binding_identifier,
-        generate_cache_for_css_map_with_builder, get_item_css,
+        extract_conditional_expression_with_builder, extract_keyframes_with_builder,
+        extract_logical_expression_with_builder, extract_member_expression_with_builder,
+        find_binding_identifier, generate_cache_for_css_map_with_builder, get_item_css,
         merge_subsequent_unconditional_css_items, to_css_declaration, to_css_rule,
     };
     use crate::types::{
-        CompiledImports, Metadata, PluginOptions, TransformFile, TransformFileOptions,
-        TransformState,
+        CompiledImports, Metadata, MetadataContext, PluginOptions, TransformFile,
+        TransformFileOptions, TransformState,
     };
     use crate::utils_types::{
         BindingSource, ConditionalCssItem, CssItem, CssOutput, LogicalCssItem, LogicalOperator,
-        PartialBindingWithMeta, SheetCssItem, Variable,
+        PartialBindingWithMeta, SheetCssItem, UnconditionalCssItem, Variable,
     };
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -580,7 +692,8 @@ mod tests {
     }
 
     fn parse_expression_with_source_map(cm: &Lrc<SourceMap>, code: &str) -> Expr {
-        let source_file = cm.new_source_file(FileName::Custom("test.js".into()).into(), code.into());
+        let source_file =
+            cm.new_source_file(FileName::Custom("test.js".into()).into(), code.into());
         let lexer = Lexer::new(
             Syntax::Es(Default::default()),
             Default::default(),
@@ -589,6 +702,33 @@ mod tests {
         );
         let mut parser = Parser::new_from(lexer);
         *parser.parse_expr().expect("parse expression")
+    }
+
+    fn assert_keyframe_sheet(
+        css_output: &CssOutput,
+        expected_name: &str,
+        prefix: &str,
+        suffix: &str,
+    ) {
+        assert_eq!(css_output.variables.len(), 0);
+        assert_eq!(css_output.css.len(), 2);
+
+        match &css_output.css[0] {
+            CssItem::Sheet(SheetCssItem { css }) => {
+                let normalized: String = css.chars().filter(|ch| !ch.is_whitespace()).collect();
+                let expected =
+                    format!("@keyframes{expected_name}{{0%{{opacity:1}}to{{opacity:0}}}}");
+                assert_eq!(normalized, expected);
+            }
+            other => panic!("expected sheet css, found {other:?}"),
+        }
+
+        match &css_output.css[1] {
+            CssItem::Unconditional(UnconditionalCssItem { css }) => {
+                assert_eq!(css, &format!("{prefix}{expected_name}{suffix}"));
+            }
+            other => panic!("expected unconditional css, found {other:?}"),
+        }
     }
 
     fn css_map_call() -> Expr {
@@ -620,6 +760,63 @@ mod tests {
             }],
             type_args: None,
         })
+    }
+
+    #[test]
+    fn extract_keyframes_from_call_expression() {
+        let metadata = create_metadata();
+        let expr = parse_expression("keyframes({ from: { opacity: 1 }, to: { opacity: 0 } })");
+        let mut build_css = |value: &Expr, meta: &Metadata| {
+            match &meta.context {
+                MetadataContext::Keyframes { keyframe } => {
+                    assert_eq!(keyframe.len(), 8);
+                }
+                other => panic!("expected keyframes context, found {other:?}"),
+            }
+
+            match value {
+                Expr::Array(array) => {
+                    assert_eq!(array.elems.len(), 1);
+                    CssOutput {
+                        css: vec![CssItem::unconditional("0%{opacity:1}to{opacity:0}")],
+                        variables: Vec::new(),
+                    }
+                }
+                other => panic!("unexpected expression {other:?}"),
+            }
+        };
+
+        let output =
+            extract_keyframes_with_builder(&expr, &metadata, "animation: ", ";", &mut build_css);
+
+        assert_keyframe_sheet(&output, "k1m8j3od", "animation: ", ";");
+    }
+
+    #[test]
+    fn extract_keyframes_from_tagged_template() {
+        let metadata = create_metadata();
+        let expr = parse_expression("keyframes`from { opacity: 1; } to { opacity: 0; }`");
+        let mut build_css = |value: &Expr, meta: &Metadata| {
+            match &meta.context {
+                MetadataContext::Keyframes { keyframe } => {
+                    assert_eq!(keyframe.len(), 7);
+                }
+                other => panic!("expected keyframes context, found {other:?}"),
+            }
+
+            match value {
+                Expr::Tpl(_) => CssOutput {
+                    css: vec![CssItem::unconditional("0%{opacity:1}to{opacity:0}")],
+                    variables: Vec::new(),
+                },
+                other => panic!("unexpected expression {other:?}"),
+            }
+        };
+
+        let output =
+            extract_keyframes_with_builder(&expr, &metadata, "animation: ", ";", &mut build_css);
+
+        assert_keyframe_sheet(&output, "kqbs1so", "animation: ", ";");
     }
 
     #[test]
@@ -779,7 +976,7 @@ mod tests {
             BindingSource::Import,
         );
 
-        let css_output = CssOutput { 
+        let css_output = CssOutput {
             css: Vec::new(),
             variables: vec![Variable {
                 name: "--token".into(),

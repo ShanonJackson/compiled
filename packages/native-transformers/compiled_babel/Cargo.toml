@@ -27,8 +27,8 @@ swc_core = { version = "=26.3.4", features = [
   "ecma_utils",
   "ecma_visit"
 ] }
+swc_ecma_codegen = "=13.2.0"
 
 [dev-dependencies]
 insta = "1.39.0"
 swc_ecma_parser = "=14.0.2"
-swc_ecma_codegen = "=13.2.0"
