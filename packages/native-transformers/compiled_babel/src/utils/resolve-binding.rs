@@ -407,6 +407,7 @@ mod tests {
         Metadata, PluginOptions, TransformFile, TransformFileOptions, TransformState,
     };
     use crate::utils_create_result_pair::create_result_pair;
+    use crate::utils_evaluate_expression;
     use crate::utils_types::{
         BindingPath, BindingSource, EvaluateExpression, ImportBindingKind, PartialBindingWithMeta,
     };
@@ -595,6 +596,66 @@ mod tests {
             .expect("binding");
 
         let Expr::Lit(Lit::Str(str_lit)) = result.node.expect("resolved literal") else {
+            panic!("expected string literal");
+        };
+
+        assert_eq!(str_lit.value, "blue");
+    }
+
+    #[test]
+    fn resolves_reexported_import_binding() {
+        let dir = tempdir().expect("temp directory");
+        let entry_path = dir.path().join("entry.tsx");
+        fs::write(&entry_path, "").expect("write entry");
+
+        let colors_path = dir.path().join("colors.ts");
+        fs::write(&colors_path, "export const blue = 'blue';").expect("write colors module");
+
+        let gateway_path = dir.path().join("gateway.ts");
+        fs::write(&gateway_path, "export { blue } from './colors';").expect("write gateway module");
+
+        let cm: Lrc<SourceMap> = Default::default();
+        let file = TransformFile::with_options(
+            cm,
+            Vec::new(),
+            TransformFileOptions {
+                filename: Some(entry_path.to_string_lossy().into_owned()),
+                cwd: Some(dir.path().to_path_buf()),
+                root: Some(dir.path().to_path_buf()),
+                loc_filename: None,
+            },
+        );
+
+        let state = Rc::new(RefCell::new(TransformState::new(
+            file,
+            PluginOptions::default(),
+        )));
+        let meta = Metadata::new(state.clone());
+
+        let binding = PartialBindingWithMeta::new(
+            None,
+            Some(BindingPath::import(
+                Some(DUMMY_SP),
+                "./gateway".into(),
+                ImportBindingKind::Named("blue".into()),
+            )),
+            true,
+            meta.clone(),
+            BindingSource::Import,
+        );
+        meta.insert_parent_binding("blue", binding);
+
+        let result = resolve_binding(
+            "blue",
+            meta,
+            utils_evaluate_expression::evaluate_expression as EvaluateExpression,
+        )
+        .expect("binding");
+
+        let node = result.node.expect("resolved node");
+        let evaluated = utils_evaluate_expression::evaluate_expression(&node, result.meta.clone());
+
+        let Expr::Lit(Lit::Str(str_lit)) = evaluated.value else {
             panic!("expected string literal");
         };
 

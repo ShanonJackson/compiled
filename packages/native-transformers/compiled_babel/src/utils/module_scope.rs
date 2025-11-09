@@ -1,8 +1,8 @@
 use swc_core::common::{Span, Spanned};
 use swc_core::ecma::ast::{
-    ClassDecl, ClassExpr, Decl, DefaultDecl, Expr, FnDecl, FnExpr, ImportDecl, ImportSpecifier,
-    Module, ModuleDecl, ModuleExportName, ModuleItem, ObjectPatProp, Pat, Stmt, VarDecl,
-    VarDeclKind,
+    ClassDecl, ClassExpr, Decl, DefaultDecl, ExportNamedSpecifier, ExportSpecifier, Expr, FnDecl,
+    FnExpr, ImportDecl, ImportSpecifier, Module, ModuleDecl, ModuleExportName, ModuleItem,
+    ObjectPatProp, Pat, Stmt, VarDecl, VarDeclKind,
 };
 
 use crate::types::{Metadata, SharedTransformState};
@@ -30,6 +30,112 @@ fn insert_module_binding(
 ) {
     let binding = PartialBindingWithMeta::new(node, path, constant, metadata.clone(), source);
     metadata.insert_parent_binding(name, binding);
+}
+
+fn module_export_name_to_string(name: &ModuleExportName) -> String {
+    match name {
+        ModuleExportName::Ident(ident) => ident.sym.to_string(),
+        ModuleExportName::Str(value) => value.value.to_string(),
+    }
+}
+
+fn register_export_named_specifier(
+    metadata: &Metadata,
+    source: &str,
+    specifier: &ExportNamedSpecifier,
+) {
+    if specifier.is_type_only {
+        return;
+    }
+
+    let exported = specifier
+        .exported
+        .as_ref()
+        .map(module_export_name_to_string)
+        .unwrap_or_else(|| module_export_name_to_string(&specifier.orig));
+
+    let import_name = module_export_name_to_string(&specifier.orig);
+    let import_kind = if import_name == "default" {
+        ImportBindingKind::Default
+    } else {
+        ImportBindingKind::Named(import_name)
+    };
+
+    let path = BindingPath::import(Some(specifier.span), source.to_string(), import_kind);
+    insert_module_binding(
+        metadata,
+        &exported,
+        None,
+        Some(path),
+        true,
+        BindingSource::Import,
+    );
+}
+
+fn register_export_namespace_specifier(
+    metadata: &Metadata,
+    source: &str,
+    specifier: &swc_core::ecma::ast::ExportNamespaceSpecifier,
+) {
+    let exported = module_export_name_to_string(&specifier.name);
+    let path = BindingPath::import(
+        Some(specifier.span),
+        source.to_string(),
+        ImportBindingKind::Namespace,
+    );
+
+    insert_module_binding(
+        metadata,
+        &exported,
+        None,
+        Some(path),
+        true,
+        BindingSource::Import,
+    );
+}
+
+fn register_export_default_specifier(
+    metadata: &Metadata,
+    source: &str,
+    specifier: &swc_core::ecma::ast::ExportDefaultSpecifier,
+) {
+    let exported = specifier.exported.sym.to_string();
+    let path = BindingPath::import(
+        Some(specifier.exported.span),
+        source.to_string(),
+        ImportBindingKind::Default,
+    );
+
+    insert_module_binding(
+        metadata,
+        &exported,
+        None,
+        Some(path),
+        true,
+        BindingSource::Import,
+    );
+}
+
+fn register_export_named_decl(metadata: &Metadata, decl: &swc_core::ecma::ast::NamedExport) {
+    if let Some(source) = decl.src.as_ref() {
+        let source_value = source.value.to_string();
+
+        for specifier in &decl.specifiers {
+            match specifier {
+                ExportSpecifier::Named(named) => {
+                    register_export_named_specifier(metadata, &source_value, named)
+                }
+                ExportSpecifier::Namespace(namespace) => {
+                    register_export_namespace_specifier(metadata, &source_value, namespace)
+                }
+                ExportSpecifier::Default(default_specifier) => {
+                    register_export_default_specifier(metadata, &source_value, default_specifier)
+                }
+            }
+        }
+
+        return;
+    }
 }
 
 fn register_function_decl(metadata: &Metadata, decl: &FnDecl) {
@@ -263,6 +369,7 @@ fn register_import_decl_for_scope(metadata: &Metadata, import: &ImportDecl) {
 fn register_module_decl_for_scope(metadata: &Metadata, decl: &ModuleDecl) {
     match decl {
         ModuleDecl::Import(import) => register_import_decl_for_scope(metadata, import),
+        ModuleDecl::ExportNamed(named) => register_export_named_decl(metadata, named),
         ModuleDecl::ExportDecl(export_decl) => register_decl_for_scope(metadata, &export_decl.decl),
         ModuleDecl::ExportDefaultDecl(default_decl) => match &default_decl.decl {
             DefaultDecl::Fn(fn_expr) => {
@@ -314,6 +421,109 @@ pub fn populate_module_scope(state: &SharedTransformState, module: &Module) {
         match item {
             ModuleItem::ModuleDecl(decl) => register_module_decl_for_scope(&metadata, decl),
             ModuleItem::Stmt(stmt) => register_stmt_for_scope(&metadata, stmt),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::populate_module_scope;
+    use crate::types::{PluginOptions, TransformFile, TransformState};
+    use crate::utils_types::{BindingPathKind, BindingSource, ImportBindingKind};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use swc_core::common::sync::Lrc;
+    use swc_core::common::{FileName, SourceMap};
+    use swc_core::ecma::ast::Module;
+    use swc_ecma_parser::lexer::Lexer;
+    use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
+
+    fn parse_module(code: &str) -> Module {
+        let cm: Lrc<SourceMap> = Default::default();
+        let fm = cm.new_source_file(FileName::Custom("test.ts".into()).into(), code.into());
+        let lexer = Lexer::new(
+            Syntax::Es(EsSyntax {
+                jsx: true,
+                ..Default::default()
+            }),
+            Default::default(),
+            StringInput::from(&*fm),
+            None,
+        );
+
+        let mut parser = Parser::new_from(lexer);
+        match parser.parse_module() {
+            Ok(module) => module,
+            Err(err) => panic!("failed to parse module: {:?}", err),
+        }
+    }
+
+    fn create_state() -> Rc<RefCell<TransformState>> {
+        let cm: Lrc<SourceMap> = Default::default();
+        let file = TransformFile::new(cm, Vec::new());
+        Rc::new(RefCell::new(TransformState::new(
+            file,
+            PluginOptions::default(),
+        )))
+    }
+
+    #[test]
+    fn registers_reexported_specifiers() {
+        let module = parse_module(
+            "export { blue, default as primary } from './colors';\n\
+             export * as theme from './theme';",
+        );
+
+        let state = create_state();
+        populate_module_scope(&state, &module);
+
+        let blue_binding = {
+            let state_ref = state.borrow();
+            let scope_ref = state_ref.module_scope.borrow();
+            scope_ref.get("blue").cloned().expect("blue binding")
+        };
+        assert_eq!(blue_binding.source, BindingSource::Import);
+        match blue_binding.path.as_ref().expect("binding path").kind {
+            BindingPathKind::Import {
+                ref source,
+                ref kind,
+            } => {
+                assert_eq!(source, "./colors");
+                assert!(matches!(kind, ImportBindingKind::Named(name) if name == "blue"));
+            }
+            _ => panic!("expected import binding"),
+        }
+
+        let primary_binding = {
+            let state_ref = state.borrow();
+            let scope_ref = state_ref.module_scope.borrow();
+            scope_ref.get("primary").cloned().expect("primary binding")
+        };
+        match primary_binding.path.as_ref().expect("binding path").kind {
+            BindingPathKind::Import {
+                ref source,
+                ref kind,
+            } => {
+                assert_eq!(source, "./colors");
+                assert!(matches!(kind, ImportBindingKind::Default));
+            }
+            _ => panic!("expected import binding"),
+        }
+
+        let theme_binding = {
+            let state_ref = state.borrow();
+            let scope_ref = state_ref.module_scope.borrow();
+            scope_ref.get("theme").cloned().expect("theme binding")
+        };
+        match theme_binding.path.as_ref().expect("binding path").kind {
+            BindingPathKind::Import {
+                ref source,
+                ref kind,
+            } => {
+                assert_eq!(source, "./theme");
+                assert!(matches!(kind, ImportBindingKind::Namespace));
+            }
+            _ => panic!("expected import binding"),
         }
     }
 }

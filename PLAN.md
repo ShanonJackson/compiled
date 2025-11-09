@@ -32,6 +32,7 @@
 - **Progress:** Metadata now captures deduplicated style rules when extraction is enabled, mirroring the Babel + strip-runtime workflow for downstream bundlers.
 - **Progress:** Added a compiled util cleanup pass that nulls out `css`/`keyframes` variable initialisers after their styles are extracted, mirroring Babel's deferred path replacement. Expanded the cleanup visitor so any remaining `css`/`keyframes` expressions (including call arguments and collection elements) are rewritten to `null`, matching the Babel replacement semantics.
 - **Progress:** Styled invocations now normalize destructured props within the visitor itself, keeping downstream builders aligned with the Babel plugin without altering unrelated expressions.
+- **Progress:** Module scope population now records re-exported specifiers so cross-module bindings resolve through nested imports, and the binding resolver follows those re-exports when loading dependencies.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
