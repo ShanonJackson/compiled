@@ -34,7 +34,7 @@ fn serialize_rule(rule: &Rule) -> Option<String> {
     let mut output = String::new();
     {
         let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
         if generator.emit(rule).is_err() {
             return None;
         }
