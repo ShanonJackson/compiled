@@ -4,8 +4,10 @@ use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use indexmap::{IndexMap, IndexSet};
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swc_core::common::comments::Comment;
@@ -347,7 +349,7 @@ pub struct TransformState {
     pub sheets: IndexMap<String, Ident>,
     pub style_rules: IndexSet<String>,
     pub sheet_identifier_counter: usize,
-    pub cache: Cache<Value>,
+    pub cache: SharedCache,
     pub css_map: IndexMap<String, Vec<String>>,
     pub ignore_member_expressions: IndexSet<String>,
     pub resolver: Option<ResolvedResolver>,
@@ -357,6 +359,11 @@ pub struct TransformState {
     pub cwd: PathBuf,
     pub root: PathBuf,
 }
+
+static GLOBAL_CACHE: OnceCell<SharedCache> = OnceCell::new();
+
+/// Shared cache handle mirroring the Babel plugin behaviour.
+pub type SharedCache = Arc<Mutex<Cache<Value>>>;
 
 impl TransformState {
     pub fn new(file: TransformFile, opts: PluginOptions) -> Self {
@@ -369,17 +376,31 @@ impl TransformState {
             .as_ref()
             .map(|resolver_option| ResolvedResolver::from_option(resolver_option, &root));
 
-        let cache_enabled = opts
-            .cache
+        let cache_behavior = opts.cache.clone();
+        let cache_enabled = cache_behavior
             .as_ref()
             .map(CacheBehavior::is_enabled)
             .unwrap_or(false);
+        let use_global_cache = matches!(cache_behavior, Some(CacheBehavior::Enabled(true)));
         let max_size = opts.max_size;
-        let mut cache = Cache::new();
-        cache.initialize(CacheOptions {
-            cache: Some(cache_enabled),
-            max_size,
-        });
+
+        let cache_handle = if use_global_cache {
+            GLOBAL_CACHE
+                .get_or_init(|| Arc::new(Mutex::new(Cache::new())))
+                .clone()
+        } else {
+            Arc::new(Mutex::new(Cache::new()))
+        };
+
+        {
+            let mut cache = cache_handle
+                .lock()
+                .expect("global cache lock should not be poisoned");
+            cache.initialize(CacheOptions {
+                cache: Some(cache_enabled),
+                max_size,
+            });
+        }
 
         Self {
             compiled_imports: None,
@@ -396,7 +417,7 @@ impl TransformState {
             sheets: IndexMap::new(),
             style_rules: IndexSet::new(),
             sheet_identifier_counter: 0,
-            cache,
+            cache: cache_handle,
             css_map: IndexMap::new(),
             ignore_member_expressions: IndexSet::new(),
             resolver,
@@ -585,9 +606,14 @@ pub struct Tag {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use swc_core::common::sync::Lrc;
     use swc_core::common::{BytePos, SourceMap};
+
+    static GLOBAL_CACHE_KEY_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static FILE_PASS_CACHE_KEY_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn merges_default_import_sources_with_relative_entries() {
@@ -664,17 +690,103 @@ mod tests {
             ..PluginOptions::default()
         };
 
-        let mut state = TransformState::new(file, options);
+        let state = TransformState::new(file, options);
 
-        let inserted = state
-            .cache
-            .load(Some("namespace"), "cache-key", || Value::from("first"));
+        let inserted = {
+            let mut cache = state.cache.lock().expect("cache lock");
+            cache.load(Some("namespace"), "cache-key", || Value::from("first"))
+        };
         assert_eq!(inserted, Value::from("first"));
 
-        let cached = state
-            .cache
-            .load(Some("namespace"), "cache-key", || Value::from("second"));
+        let cached = {
+            let mut cache = state.cache.lock().expect("cache lock");
+            cache.load(Some("namespace"), "cache-key", || Value::from("second"))
+        };
         assert_eq!(cached, Value::from("first"));
+    }
+
+    #[test]
+    fn reuses_global_cache_when_enabled() {
+        let cm: Lrc<SourceMap> = Default::default();
+        let first_file = TransformFile::new(cm.clone(), Vec::new());
+        let second_file = TransformFile::new(cm, Vec::new());
+
+        let options = PluginOptions {
+            cache: Some(CacheBehavior::Enabled(true)),
+            ..PluginOptions::default()
+        };
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let cache_key = format!(
+            "global-cache-key-{}",
+            GLOBAL_CACHE_KEY_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+
+        let first_state = TransformState::new(first_file, options.clone());
+        {
+            let counter = counter.clone();
+            let mut cache = first_state.cache.lock().expect("cache lock");
+            let value = cache.load(Some("namespace"), &cache_key, || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Value::from("first")
+            });
+            assert_eq!(value, Value::from("first"));
+        }
+
+        let second_state = TransformState::new(second_file, options);
+        {
+            let counter = counter.clone();
+            let mut cache = second_state.cache.lock().expect("cache lock");
+            let value = cache.load(Some("namespace"), &cache_key, || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Value::from("second")
+            });
+            assert_eq!(value, Value::from("first"));
+        }
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn file_pass_cache_isolated_per_state() {
+        let cm: Lrc<SourceMap> = Default::default();
+        let first_file = TransformFile::new(cm.clone(), Vec::new());
+        let second_file = TransformFile::new(cm, Vec::new());
+
+        let options = PluginOptions {
+            cache: Some(CacheBehavior::FilePass("file-pass".into())),
+            ..PluginOptions::default()
+        };
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let cache_key = format!(
+            "file-pass-cache-key-{}",
+            FILE_PASS_CACHE_KEY_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+
+        let first_state = TransformState::new(first_file, options.clone());
+        {
+            let counter = counter.clone();
+            let mut cache = first_state.cache.lock().expect("cache lock");
+            let value = cache.load(Some("namespace"), &cache_key, || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Value::from("first")
+            });
+            assert_eq!(value, Value::from("first"));
+        }
+
+        let second_state = TransformState::new(second_file, options);
+        {
+            let counter = counter.clone();
+            let mut cache = second_state.cache.lock().expect("cache lock");
+            let value = cache.load(Some("namespace"), &cache_key, || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Value::from("second")
+            });
+            assert_eq!(value, Value::from("second"));
+        }
+
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
     #[test]

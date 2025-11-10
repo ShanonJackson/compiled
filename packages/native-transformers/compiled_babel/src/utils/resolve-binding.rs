@@ -150,9 +150,15 @@ fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<CachedModule> {
         let options = state.opts.clone();
         let cwd = state.cwd.clone();
         let root = state.root.clone();
-        let code_value = state.cache.load(Some("read-file"), &resolved, || {
-            Value::String(fs::read_to_string(&resolved).expect("module should read"))
-        });
+        let code_value = {
+            let mut cache = state
+                .cache
+                .lock()
+                .expect("cache lock should not be poisoned");
+            cache.load(Some("read-file"), &resolved, || {
+                Value::String(fs::read_to_string(&resolved).expect("module should read"))
+            })
+        };
         let code = code_value
             .as_str()
             .map(|value| value.to_string())
