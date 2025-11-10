@@ -644,6 +644,23 @@ mod tests {
     }
 
     #[test]
+    fn carries_included_files_into_metadata() {
+        let transform = CompiledBabelTransform::new(PluginOptions::default());
+
+        {
+            let mut state = transform.state.borrow_mut();
+            state.included_files.push("./a.tsx".into());
+            state.included_files.push("./b.tsx".into());
+        }
+
+        let metadata = transform.into_metadata();
+        assert_eq!(
+            metadata.included_files,
+            vec!["./a.tsx".to_string(), "./b.tsx".to_string()]
+        );
+    }
+
+    #[test]
     fn skips_react_import_when_disabled() {
         let source = r#"
             import { css } from '@compiled/react';

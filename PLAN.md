@@ -34,6 +34,7 @@
 - **Progress:** Styled invocations now normalize destructured props within the visitor itself, keeping downstream builders aligned with the Babel plugin without altering unrelated expressions.
 - **Progress:** Module scope population now records re-exported specifiers so cross-module bindings resolve through nested imports, and the binding resolver follows those re-exports when loading dependencies.
 - **Progress:** Program exit now injects the generated-by banner comment and leading noop statement so emitted files mirror the Babel plugin footer semantics.
+- **Progress:** The Node bridge now mirrors Babel's `onIncludedFiles` callback by stripping the function before calling the native transform and replaying it with the returned metadata.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
