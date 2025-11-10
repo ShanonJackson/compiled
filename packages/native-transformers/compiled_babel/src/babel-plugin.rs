@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::env;
 use std::rc::Rc;
 
 use std::path::{Path, PathBuf};
@@ -6,11 +7,12 @@ use std::path::{Path, PathBuf};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use swc_core::common::comments::{Comment, CommentKind};
 use swc_core::common::{Span, Spanned, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     BlockStmt, ClassDecl, Decl, DefaultDecl, EmptyStmt, Expr, FnDecl, Ident, ImportDecl,
     ImportNamedSpecifier, ImportPhase, ImportSpecifier, ImportStarAsSpecifier, Lit, Module,
-    ModuleDecl, ModuleExportName, ModuleItem, Null, Pat, Program, Stmt, Str, VarDecl,
+    ModuleDecl, ModuleExportName, ModuleItem, Null, Pat, Program, Script, Stmt, Str, VarDecl,
     VarDeclarator,
 };
 use swc_core::ecma::visit::{noop_visit_mut_type, VisitMut, VisitMutWith};
@@ -32,6 +34,8 @@ use crate::utils_is_compiled::{
 use crate::utils_module_scope;
 use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::xcss_prop::visit_xcss_prop;
+
+const PACKAGE_NAME: &str = "@compiled/babel-plugin";
 
 /// Primary SWC transform that will eventually mirror `@compiled/babel-plugin`.
 pub struct CompiledBabelTransform {
@@ -84,12 +88,35 @@ mod tests {
     use swc_core::common::sync::Lrc;
     use swc_core::common::{BytePos, FileName, SourceFile, SourceMap, Span};
     use swc_core::ecma::ast::{
-        BlockStmtOrExpr, Decl, Expr, ImportSpecifier, JSXElementName, Lit, ModuleDecl, ModuleItem,
-        Program, Stmt,
+        BlockStmtOrExpr, Decl, Expr, ImportSpecifier, JSXElementName, Lit, Module, ModuleDecl,
+        ModuleItem, Program, Stmt,
     };
     use swc_core::ecma::visit::VisitMutWith;
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
+
+    struct EnvVarGuard(&'static str);
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            std::env::set_var(key, value);
+            EnvVarGuard(key)
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            std::env::remove_var(self.0);
+        }
+    }
+
+    fn module_items_without_noop(module: &Module) -> Vec<&ModuleItem> {
+        module
+            .body
+            .iter()
+            .filter(|item| !matches!(item, ModuleItem::Stmt(Stmt::Empty(_))))
+            .collect()
+    }
 
     fn parse_program(code: &str) -> (Program, Lrc<SourceMap>, Lrc<SourceFile>) {
         let cm: Lrc<SourceMap> = Default::default();
@@ -121,9 +148,16 @@ mod tests {
         let Program::Module(module) = &program else {
             panic!("expected module program");
         };
-        assert_eq!(module.body.len(), 3);
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(forward_ref_import)) = &module.body[0] else {
+        assert!(matches!(
+            module.body.first(),
+            Some(ModuleItem::Stmt(Stmt::Empty(_)))
+        ));
+
+        let items = module_items_without_noop(module);
+        assert_eq!(items.len(), 3);
+
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(forward_ref_import)) = items[0] else {
             panic!("expected forwardRef import");
         };
         assert_eq!(forward_ref_import.src.value.as_ref(), "react");
@@ -133,7 +167,7 @@ mod tests {
         };
         assert_eq!(named.local.sym.as_ref(), "forwardRef");
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(react_import)) = &module.body[1] else {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(react_import)) = items[1] else {
             panic!("expected React namespace import");
         };
         assert_eq!(react_import.src.value.as_ref(), "react");
@@ -143,7 +177,7 @@ mod tests {
             ImportSpecifier::Namespace(_)
         ));
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = &module.body[2] else {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = items[2] else {
             panic!("expected runtime import");
         };
         assert_eq!(runtime_import.src.value.as_ref(), "@compiled/react/runtime");
@@ -172,8 +206,14 @@ mod tests {
             panic!("expected module program");
         };
 
-        assert_eq!(module.body.len(), 1);
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = &module.body[0] else {
+        assert!(matches!(
+            module.body.first(),
+            Some(ModuleItem::Stmt(Stmt::Empty(_)))
+        ));
+
+        let items = module_items_without_noop(module);
+        assert_eq!(items.len(), 1);
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = items[0] else {
             panic!("expected retained import");
         };
         assert_eq!(import.specifiers.len(), 1);
@@ -189,6 +229,42 @@ mod tests {
         assert!(imports.css.is_empty());
         assert!(imports.keyframes.is_empty());
         assert!(imports.css_map.is_empty());
+    }
+
+    #[test]
+    fn inserts_generated_comment_and_noop_statement() {
+        let source = "\
+            import { css } from '@compiled/react';\n\
+            const styles = css({ color: 'red' });\n\
+        ";
+
+        let _guard = EnvVarGuard::set("TEST_PKG_VERSION", "0.0.0");
+
+        let (mut program, _, _) = parse_program(source);
+        let mut transform = CompiledBabelTransform::new(PluginOptions::default());
+        program.visit_mut_with(&mut transform);
+
+        let Program::Module(module) = &program else {
+            panic!("expected module program");
+        };
+
+        match module.body.first() {
+            Some(ModuleItem::Stmt(Stmt::Empty(_))) => {}
+            other => panic!("expected leading empty statement, found {other:?}"),
+        }
+
+        let state = transform.state();
+        let state_ref = state.borrow();
+        let comment = state_ref
+            .file
+            .comments
+            .first()
+            .expect("expected generated comment");
+        assert_eq!(comment.kind, CommentKind::Block);
+        assert_eq!(
+            comment.text.as_ref(),
+            " File generated by @compiled/babel-plugin v0.0.0 "
+        );
     }
 
     #[test]
@@ -227,12 +303,6 @@ mod tests {
             );
         }
 
-        {
-            let state = transform.state();
-            let state_ref = state.borrow();
-            assert_eq!(state_ref.file.comments.len(), 1);
-        }
-
         program.visit_mut_with(&mut transform);
 
         let state = transform.state();
@@ -243,7 +313,13 @@ mod tests {
             .any(|source| source == "@compiled/react"));
         assert!(state_ref.pragma.jsx_import_source);
         assert!(state_ref.compiled_imports.is_some());
-        assert!(state_ref.file.comments.is_empty());
+        assert_eq!(state_ref.file.comments.len(), 1);
+
+        let generated_comment = &state_ref.file.comments[0];
+        assert!(generated_comment
+            .text
+            .contains("generated by @compiled/babel-plugin"));
+        assert!(!generated_comment.text.as_ref().contains("@jsxImportSource"));
     }
 
     #[test]
@@ -283,19 +359,19 @@ mod tests {
             );
         }
 
-        {
-            let state = transform.state();
-            let state_ref = state.borrow();
-            assert_eq!(state_ref.file.comments.len(), 1);
-        }
-
         program.visit_mut_with(&mut transform);
 
         let state = transform.state();
         let state_ref = state.borrow();
         assert!(state_ref.pragma.jsx);
         assert!(state_ref.compiled_imports.is_some());
-        assert!(state_ref.file.comments.is_empty());
+        assert_eq!(state_ref.file.comments.len(), 1);
+
+        let generated_comment = &state_ref.file.comments[0];
+        assert!(generated_comment
+            .text
+            .contains("generated by @compiled/babel-plugin"));
+        assert!(!generated_comment.text.as_ref().contains("@jsx"));
     }
 
     #[test]
@@ -381,9 +457,15 @@ mod tests {
             panic!("expected module program");
         };
 
-        let ModuleItem::Stmt(Stmt::Expr(expr_stmt)) = &module.body[2] else {
-            panic!("expected expression statement");
-        };
+        let expr_stmt = module
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                ModuleItem::Stmt(Stmt::Expr(expr)) => Some(expr),
+                _ => None,
+            })
+            .next()
+            .expect("expected expression statement");
 
         let Expr::Call(call) = &*expr_stmt.expr else {
             panic!("expected call expression");
@@ -411,9 +493,15 @@ mod tests {
             panic!("expected module program");
         };
 
-        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = &module.body[2] else {
-            panic!("expected variable declaration");
-        };
+        let var_decl = module
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) => Some(var),
+                _ => None,
+            })
+            .next()
+            .expect("expected variable declaration");
 
         let Some(init) = var_decl.decls[0].init.as_ref() else {
             panic!("expected initializer");
@@ -463,13 +551,19 @@ mod tests {
             panic!("expected module program");
         };
 
-        assert_eq!(module.body.len(), 3);
+        assert!(matches!(
+            module.body.first(),
+            Some(ModuleItem::Stmt(Stmt::Empty(_)))
+        ));
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(react_import)) = &module.body[0] else {
+        let items = module_items_without_noop(module);
+        assert_eq!(items.len(), 3);
+
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(react_import)) = items[0] else {
             panic!("expected react import");
         };
         assert_eq!(react_import.src.value.as_ref(), "react");
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = &module.body[1] else {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = items[1] else {
             panic!("expected runtime import");
         };
         assert_eq!(runtime_import.src.value.as_ref(), "@compiled/react/runtime");
@@ -484,7 +578,7 @@ mod tests {
             .collect();
         assert_eq!(specifiers, vec!["ax", "ix", "CC", "CS"]);
 
-        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = &module.body[2] else {
+        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = items[2] else {
             panic!("expected variable declaration");
         };
         assert_eq!(var_decl.decls.len(), 1);
@@ -586,9 +680,15 @@ mod tests {
             panic!("expected module program");
         };
 
-        assert_eq!(module.body.len(), 2);
+        assert!(matches!(
+            module.body.first(),
+            Some(ModuleItem::Stmt(Stmt::Empty(_)))
+        ));
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = &module.body[0] else {
+        let items = module_items_without_noop(module);
+        assert_eq!(items.len(), 2);
+
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = items[0] else {
             panic!("expected runtime import");
         };
         assert_eq!(runtime_import.src.value.as_ref(), "@compiled/react/runtime");
@@ -631,29 +731,35 @@ mod tests {
             panic!("expected module program");
         };
 
-        assert_eq!(module.body.len(), 5);
+        assert!(matches!(
+            module.body.first(),
+            Some(ModuleItem::Stmt(Stmt::Empty(_)))
+        ));
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(forward_ref_import)) = &module.body[0] else {
+        let items = module_items_without_noop(module);
+        assert_eq!(items.len(), 5);
+
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(forward_ref_import)) = items[0] else {
             panic!("expected forwardRef import");
         };
         assert_eq!(forward_ref_import.src.value.as_ref(), "react");
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(react_import)) = &module.body[1] else {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(react_import)) = items[1] else {
             panic!("expected react import");
         };
         assert_eq!(react_import.src.value.as_ref(), "react");
 
-        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = &module.body[2] else {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(runtime_import)) = items[2] else {
             panic!("expected runtime import");
         };
         assert_eq!(runtime_import.src.value.as_ref(), "@compiled/react/runtime");
 
-        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = &module.body[3] else {
+        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) = items[3] else {
             panic!("expected styled variable declaration");
         };
         assert_eq!(var_decl.decls.len(), 1);
 
-        let ModuleItem::Stmt(Stmt::If(_)) = &module.body[4] else {
+        let ModuleItem::Stmt(Stmt::If(_)) = items[4] else {
             panic!("expected display name assignment");
         };
     }
@@ -900,16 +1006,84 @@ impl VisitMut for CompiledBabelTransform {
                 if has_styled_import && !module_has_binding(module, "forwardRef") {
                     insert_forward_ref_import(module);
                 }
+
+                self.maybe_insert_generated_comment_for_module(module);
             }
             Program::Script(script) => {
                 self.process_jsx_pragmas();
                 script.visit_mut_children_with(self);
+                self.maybe_insert_generated_comment_for_script(script);
             }
         }
     }
 }
 
 impl CompiledBabelTransform {
+    fn generated_comment_text(&self) -> Option<String> {
+        let (filename, version) = {
+            let state = self.state.borrow();
+
+            if state.compiled_imports.is_none() && !state.uses_xcss {
+                return None;
+            }
+
+            let filename = state
+                .filename
+                .as_deref()
+                .and_then(|value| Path::new(value).file_name())
+                .and_then(|name| name.to_str())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "File".to_string());
+
+            let version = env::var("TEST_PKG_VERSION")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+
+            (filename, version)
+        };
+
+        Some(format!(
+            " {filename} generated by {PACKAGE_NAME} v{version} "
+        ))
+    }
+
+    fn push_generated_comment(&mut self, comment_text: String) {
+        let mut state = self.state.borrow_mut();
+        state.file.comments.insert(
+            0,
+            Comment {
+                kind: CommentKind::Block,
+                span: DUMMY_SP,
+                text: comment_text.into(),
+            },
+        );
+    }
+
+    fn maybe_insert_generated_comment_for_module(&mut self, module: &mut Module) {
+        let Some(comment) = self.generated_comment_text() else {
+            return;
+        };
+
+        module.body.insert(
+            0,
+            ModuleItem::Stmt(Stmt::Empty(EmptyStmt { span: DUMMY_SP })),
+        );
+        self.push_generated_comment(comment);
+    }
+
+    fn maybe_insert_generated_comment_for_script(&mut self, script: &mut Script) {
+        let Some(comment) = self.generated_comment_text() else {
+            return;
+        };
+
+        script
+            .body
+            .insert(0, Stmt::Empty(EmptyStmt { span: DUMMY_SP }));
+        self.push_generated_comment(comment);
+    }
+
     fn remove_jsx_imports(&mut self, module: &mut Module) {
         let mut state = self.state.borrow_mut();
 
