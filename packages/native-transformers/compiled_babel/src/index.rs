@@ -4,7 +4,7 @@ use swc_core::ecma::visit::VisitMutWith;
 use crate::babel_plugin::CompiledBabelTransform;
 #[allow(unused_imports)]
 pub use crate::types::{
-    CacheBehavior, PluginOptions, ResolverOption, StyleRule, TransformMetadata, TransformOutput,
+    CacheBehavior, PluginOptions, ResolverOption, TransformMetadata, TransformOutput,
 };
 
 /// Entry point mirroring `packages/babel-plugin/src/index.ts`.
