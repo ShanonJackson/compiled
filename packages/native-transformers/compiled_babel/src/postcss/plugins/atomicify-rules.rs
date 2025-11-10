@@ -10,6 +10,7 @@ use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, Codeg
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
 use super::super::transform::{Plugin, TransformContext};
+use crate::utils_hash::hash;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AtomicifyRules;
@@ -32,6 +33,7 @@ impl Plugin for AtomicifyRules {
         let options = AtomicifyOptions {
             class_name_compression_map: ctx.options.class_name_compression_map.as_ref(),
             class_hash_prefix: ctx.options.class_hash_prefix.as_deref(),
+            declaration_placeholder: ctx.options.declaration_placeholder.as_deref(),
         };
 
         let mut transformed: Vec<Rule> = Vec::with_capacity(stylesheet.rules.len());
@@ -47,7 +49,7 @@ impl Plugin for AtomicifyRules {
                     }
                 }
                 Rule::QualifiedRule(rule) => {
-                    let replacements = atomicify_qualified_rule(*rule, &options, ctx, "");
+                    let replacements = atomicify_qualified_rule(*rule, &options, ctx, None);
                     for replacement in replacements {
                         transformed.push(Rule::QualifiedRule(Box::new(replacement)));
                     }
@@ -71,15 +73,33 @@ pub fn atomicify_rules() -> AtomicifyRules {
 struct AtomicifyOptions<'a> {
     class_name_compression_map: Option<&'a std::collections::HashMap<String, String>>,
     class_hash_prefix: Option<&'a str>,
+    declaration_placeholder: Option<&'a str>,
+}
+
+fn normalize_selectors(selectors: Vec<String>, options: &AtomicifyOptions<'_>) -> Vec<String> {
+    if let Some(placeholder) = options.declaration_placeholder {
+        selectors
+            .into_iter()
+            .map(|selector| {
+                if selector.trim() == placeholder {
+                    String::new()
+                } else {
+                    selector
+                }
+            })
+            .collect()
+    } else {
+        selectors
+    }
 }
 
 fn atomicify_qualified_rule(
     rule: QualifiedRule,
     options: &AtomicifyOptions<'_>,
     ctx: &mut TransformContext<'_>,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> Vec<QualifiedRule> {
-    let selectors = collect_rule_selectors(&rule);
+    let selectors = normalize_selectors(collect_rule_selectors(&rule), options);
     let mut replacements: Vec<QualifiedRule> = Vec::new();
 
     for component in rule.block.value {
@@ -129,14 +149,15 @@ fn atomicify_at_rule(
                 }
             }
             ComponentValue::QualifiedRule(rule) => {
-                let replacements = atomicify_qualified_rule(*rule, options, ctx, &label);
+                let replacements = atomicify_qualified_rule(*rule, options, ctx, Some(&label));
                 for replacement in replacements {
                     new_children.push(ComponentValue::QualifiedRule(Box::new(replacement)));
                 }
             }
             ComponentValue::Declaration(declaration) => {
                 let declaration = *declaration;
-                let atomic_rule = atomicify_declaration(&declaration, &[], options, ctx, &label);
+                let atomic_rule =
+                    atomicify_declaration(&declaration, &[], options, ctx, Some(&label));
                 new_children.push(ComponentValue::QualifiedRule(Box::new(atomic_rule)));
             }
             _ => {}
@@ -153,7 +174,7 @@ fn atomicify_declaration(
     selectors: &[String],
     options: &AtomicifyOptions<'_>,
     ctx: &mut TransformContext<'_>,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> QualifiedRule {
     let selector_text = build_atomic_selector(declaration, selectors, options, ctx, at_rule_label);
     let mut rule = parse_selector_as_rule(&selector_text);
@@ -166,7 +187,7 @@ fn build_atomic_selector(
     selectors: &[String],
     options: &AtomicifyOptions<'_>,
     ctx: &mut TransformContext<'_>,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> String {
     let base_selectors: Vec<Cow<'_, str>> = if selectors.is_empty() {
         vec![Cow::Borrowed("")]
@@ -200,11 +221,12 @@ fn atomic_class_name(
     declaration: &Declaration,
     options: &AtomicifyOptions<'_>,
     normalized_selector: &str,
-    at_rule_label: &str,
+    at_rule_label: Option<&str>,
 ) -> String {
     let prefix = options.class_hash_prefix.unwrap_or("");
     let prop = declaration_name(&declaration.name);
-    let group_seed = format!("{}{}{}{}", prefix, at_rule_label, normalized_selector, prop);
+    let at_rule = at_rule_label.unwrap_or("undefined");
+    let group_seed = format!("{}{}{}{}", prefix, at_rule, normalized_selector, prop);
     let group_hash = hash(&group_seed);
     let group = group_hash.chars().take(4).collect::<String>();
 
@@ -382,71 +404,6 @@ fn serialize_at_rule_prelude(prelude: &AtRulePrelude) -> String {
             .expect("failed to serialize at-rule prelude");
     }
     output
-}
-
-fn hash(value: &str) -> String {
-    const M: u32 = 0x5bd1e995;
-    const R: u32 = 24;
-
-    let utf16: Vec<u16> = value.encode_utf16().collect();
-    let mut len = utf16.len();
-    let mut h: u32 = 0 ^ (len as u32);
-    let mut index: usize = 0;
-
-    while len >= 4 {
-        let mut k = u32::from(utf16[index] & 0xff)
-            | (u32::from(utf16[index + 1] & 0xff) << 8)
-            | (u32::from(utf16[index + 2] & 0xff) << 16)
-            | (u32::from(utf16[index + 3] & 0xff) << 24);
-
-        k = k.wrapping_mul(M);
-        k ^= k >> R;
-        k = k.wrapping_mul(M);
-
-        h = h.wrapping_mul(M);
-        h ^= k;
-
-        index += 4;
-        len -= 4;
-    }
-
-    if len == 3 {
-        h ^= u32::from(utf16[index + 2] & 0xff) << 16;
-    }
-    if len >= 2 {
-        h ^= u32::from(utf16[index + 1] & 0xff) << 8;
-    }
-    if len >= 1 {
-        h ^= u32::from(utf16[index] & 0xff);
-        h = h.wrapping_mul(M);
-    }
-
-    h ^= h >> 13;
-    h = h.wrapping_mul(M);
-    h ^= h >> 15;
-
-    to_base36(h)
-}
-
-fn to_base36(mut value: u32) -> String {
-    if value == 0 {
-        return "0".to_string();
-    }
-
-    let mut buffer = Vec::new();
-    while value > 0 {
-        let digit = (value % 36) as u8;
-        let ch = if digit < 10 {
-            b'0' + digit
-        } else {
-            b'a' + (digit - 10)
-        };
-        buffer.push(ch);
-        value /= 36;
-    }
-
-    buffer.reverse();
-    String::from_utf8(buffer).expect("base36 conversion produced invalid utf8")
 }
 
 fn is_comment_list(_list: &ListOfComponentValues) -> bool {
