@@ -28,6 +28,7 @@ pub struct TransformCssOptions {
     pub sort_shorthand: Option<bool>,
     pub class_hash_prefix: Option<String>,
     pub flatten_multiple_selectors: Option<bool>,
+    pub declaration_placeholder: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -162,10 +163,23 @@ fn serialize_stylesheet(stylesheet: &Stylesheet) -> Result<String, CssTransformE
 /// Execute the CSS pipeline.
 pub fn transform_css(
     css: &str,
-    options: TransformCssOptions,
+    mut options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
     let preserved_comments = collect_preserved_comments(css, options.optimize_css);
-    let mut stylesheet = parse_stylesheet(css)?;
+    let mut stylesheet = match parse_stylesheet(css) {
+        Ok(sheet) => sheet,
+        Err(original_err) => {
+            const PLACEHOLDER: &str = "__compiled_declaration_wrapper__";
+            let wrapped = format!(".{PLACEHOLDER} {{{}}}", css);
+            match parse_stylesheet(&wrapped) {
+                Ok(sheet) => {
+                    options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
+                    sheet
+                }
+                Err(_) => return Err(original_err),
+            }
+        }
+    };
     let mut ctx = TransformContext::new(&options);
     ctx.set_preserved_comments(preserved_comments);
 
