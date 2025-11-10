@@ -48,18 +48,24 @@ mod utils_compress_class_names_for_runtime;
 mod utils_constants;
 #[path = "utils/create-result-pair.rs"]
 mod utils_create_result_pair;
+#[path = "utils/css.rs"]
+mod utils_css;
 #[path = "utils/css-builders.rs"]
 mod utils_css_builders;
 #[path = "utils/css-map.rs"]
 mod utils_css_map;
 #[path = "utils/evaluate-expression.rs"]
 mod utils_evaluate_expression;
+#[path = "utils/find-open-selectors.rs"]
+mod utils_find_open_selectors;
 #[path = "utils/get-jsx-attribute.rs"]
 mod utils_get_jsx_attribute;
 #[path = "utils/get-runtime-class-name-library.rs"]
 mod utils_get_runtime_class_name_library;
 #[path = "utils/has-numeric-value.rs"]
 mod utils_has_numeric_value;
+#[path = "utils/hash.rs"]
+mod utils_hash;
 #[path = "utils/hoist-sheet.rs"]
 mod utils_hoist_sheet;
 #[path = "utils/is-compiled.rs"]
@@ -68,10 +74,16 @@ mod utils_is_compiled;
 mod utils_is_empty;
 #[path = "utils/is-jsx-function.rs"]
 mod utils_is_jsx_function;
+#[path = "utils/is-prop-valid.rs"]
+mod utils_is_prop_valid;
+#[path = "utils/is-prop-valid-data.rs"]
+mod utils_is_prop_valid_data;
 #[path = "utils/manipulate-template-literal.rs"]
 mod utils_manipulate_template_literal;
 #[path = "utils/__mocks__/cache.rs"]
 mod utils_mocks_cache;
+#[path = "utils/module_scope.rs"]
+mod utils_module_scope;
 #[path = "utils/normalize-props-usage.rs"]
 mod utils_normalize_props_usage;
 #[path = "utils/object-property-to-string.rs"]
@@ -114,7 +126,7 @@ mod utils_traversers;
 mod utils_traversers_get_export;
 #[path = "utils/traversers/object.rs"]
 mod utils_traversers_object;
-#[path = "utils/traversers/set-imported-compiled-imports.rs"]
+#[path = "utils/traversers/set_imported_compiled_imports.rs"]
 mod utils_traversers_set_imported_compiled_imports;
 #[path = "utils/traversers/types.rs"]
 mod utils_traversers_types;
