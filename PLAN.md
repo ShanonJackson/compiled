@@ -24,6 +24,21 @@
 - Integrate the Rust `postcss` pipeline to compute sheets/class names, ensuring selectors, conditionals, and map handling match current behaviour.
 - Swap Babel’s resolver wiring for `oxc_resolver` while keeping the same option surface and exposing sync resolution identical to the JS contract.
 - Preserve side effects such as `includedFiles`, `pathsToCleanup`, pragma-driven React imports, and hoisting semantics exactly as in the Babel implementation.
+- **Progress:** Core transform scaffolding, state management, and major visitors (css prop, styled, classNames, xcss, cssMap) now run natively with parity-focused unit coverage.
+- **Progress:** Expression evaluation, runtime/styled helpers, and CSS map utilities have been ported with cache integration and deterministic metadata emission.
+- **Progress:** Finished the outstanding `build_css` template literal and arrow-function branches, exported the stringification helpers they rely on, added unit coverage mirroring the Babel fixtures, and wired the visitors to use the shared `build_css` entry point.
+- **Progress:** Added production wrappers for the css prop, styled, classNames, xcss, and cssMap visitors so they call the shared `build_css` helper without bespoke builders, matching the Babel invocation surface.
+- **Progress:** The native transform now recognises compiled imports, recording alias metadata and stripping handled specifiers to mirror the Babel entry visitor.
+- **Progress:** Metadata now captures deduplicated style rules when extraction is enabled, mirroring the Babel + strip-runtime workflow for downstream bundlers.
+- **Progress:** Added a compiled util cleanup pass that nulls out `css`/`keyframes` variable initialisers after their styles are extracted, mirroring Babel's deferred path replacement. Expanded the cleanup visitor so any remaining `css`/`keyframes` expressions (including call arguments and collection elements) are rewritten to `null`, matching the Babel replacement semantics, and wired the `paths_to_cleanup` queue so the native transform follows the same deferred replacement flow as the Babel plugin.
+- **Progress:** Styled invocations now normalize destructured props within the visitor itself, keeping downstream builders aligned with the Babel plugin without altering unrelated expressions.
+- **Progress:** Module scope population now records re-exported specifiers so cross-module bindings resolve through nested imports, and the binding resolver follows those re-exports when loading dependencies.
+- **Progress:** Program exit now injects the generated-by banner comment and leading noop statement so emitted files mirror the Babel plugin footer semantics.
+- **Progress:** Preserving leading file comments now mirrors Babel by capturing pre-existing headers before runtime imports/noops are inserted, ensuring license banners stay ahead of the generated banner.
+- **Progress:** Multi-comment preservation now mirrors Babel order so stacked headers remain stable when runtime imports are inserted.
+- **Progress:** The Node bridge now mirrors Babel's `onIncludedFiles` callback by stripping the function before calling the native transform and replaying it with the returned metadata.
+- **Progress:** Cache behaviour now aligns with the Babel plugin, sharing module-resolution results across transforms when `cache: true` while preserving per-file isolation for `'file-pass'` runs.
+- **Progress:** Added a JSX runtime guard that mirrors the Babel plugin by panicking when transformed `jsx` calls appear after Compiled imports, including the original diagnostic messaging.
 
 ## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
