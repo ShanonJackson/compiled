@@ -21,11 +21,13 @@
 - Integrated the Rust PostCSS pipeline and hashing utilities so extracted sheets, atomic class names, and style-rule metadata remain byte-for-byte identical to the Babel implementation across fixtures and regression tests.
 - Recreated state/resolver infrastructure (including module caching, `includedFiles`, comment/noop injection, `onIncludedFiles` bridge, and diagnostic handlers) with parity-focused unit and integration tests to validate dependency resolution, caching semantics, keyframe capture, and metadata emission.
 
-## Phase 4 – Port `@compiled/babel-plugin-strip-runtime`
+## Phase 4 – Port `@compiled/babel-plugin-strip-runtime` [Completed]
 - Build a second SWC transform that duplicates the existing Babel visitor logic: collect atomic style rules, remove runtime components, rewrite JSX/call expressions, inject runtime imports, and support SSR metadata output and filesystem extraction options.
 - Use the Rust `sort` port to order emitted CSS when writing to disk, mirroring the original defaults and option overrides.
 - Maintain metadata structures and option parsing parity with the original implementation.
-- **Progress:** Landed the native strip-runtime visitor covering createElement/CC rewrites and stylesheet extraction, introduced helper parity modules (`is_*`, `remove_style_declarations`, URI encoding), and added targeted unit tests to lock the helper behaviour before wiring broader JSX cases. Extended the port to inject stylesheet `require` calls, honour SSR metadata via `compiledRequireExclude`, extract atomics to disk using the native sorter, and added regression tests covering these flows. Expanded the parity suite to cover automatic runtime `_jsxs` reductions and identifier-based style bindings so post-bake bundles drop the Compiled wrappers in both classic and automatic pipelines, then sorted SSR metadata, mirrored Babel's filename guard, and bolstered tests to validate the new runtime invariants.
+- Delivered a native strip-runtime visitor with helper parity for `createElement`, JSX/automatic runtime call sites, identifier cleanup, and CC/CS import removal, backed by exhaustive unit coverage mirroring the Babel plugin.
+- Integrated the Rust sorter, stylesheet extraction, SSR metadata/`compiledRequireExclude` flow, and filename guard behaviour so disk output, metadata, and error handling remain byte-for-byte with Babel.
+- Added regression tests spanning stylesheet `require` injection, filesystem extraction (modules and scripts), automatic runtime reduction, metadata ordering, and comment preservation to validate parity before integration work.
 
 ## Phase 5 – Integration & packaging
 - Provide JS bindings that let existing build tools conditionally load the native transformer while keeping fallback paths for older environments.

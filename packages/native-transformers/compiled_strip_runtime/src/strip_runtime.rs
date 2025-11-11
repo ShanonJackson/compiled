@@ -567,6 +567,21 @@ mod tests {
         (Program::Module(module), cm, comments)
     }
 
+    fn parse_script(source: &str) -> (Program, Lrc<SourceMap>, SingleThreadedComments) {
+        let cm: Lrc<SourceMap> = Default::default();
+        let fm = cm.new_source_file(FileName::Anon.into(), source.into());
+        let comments = SingleThreadedComments::default();
+        let lexer = Lexer::new(
+            Syntax::Es(Default::default()),
+            Default::default(),
+            StringInput::from(&*fm),
+            Some(&comments),
+        );
+        let mut parser = Parser::new_from(lexer);
+        let script = parser.parse_script().expect("failed to parse script");
+        (Program::Script(script), cm, comments)
+    }
+
     fn print(program: &Program, cm: &Lrc<SourceMap>, comments: &SingleThreadedComments) -> String {
         let mut buf = Vec::new();
         {
@@ -762,6 +777,33 @@ mod tests {
     }
 
     #[test]
+    fn inserts_requires_for_scripts_when_style_sheet_path_present() {
+        let (program, cm, comments) = parse_script(
+            "const { CC } = require('@compiled/react');\n\
+             const _a = '._a{color:red}';\n\
+             const Component = () => React.createElement(CC, null, [_a], React.createElement('div'));",
+        );
+
+        let output = crate::transform(
+            program,
+            TransformConfig {
+                filename: Some("app.js".into()),
+                options: PluginOptions {
+                    style_sheet_path: Some("@compiled/loader.css".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        let printed = print(&output.program, &cm, &comments);
+        let mut lines = printed.lines();
+        let require_line = lines.next().unwrap_or_default();
+        assert!(require_line.starts_with("require(\"@compiled/loader.css?style="));
+        assert!(!printed.contains("const _a"));
+    }
+
+    #[test]
     fn collects_metadata_sorted_when_multiple_rules() {
         let (program, _, _) = parse(
             "import { CC, CS } from '@compiled/react';\n\
@@ -871,6 +913,52 @@ mod tests {
 
         let printed = print(&output.program, &cm, &comments);
         assert!(printed.starts_with("import \"./app.compiled.css\";"));
+
+        let css_path = temp.path().join("dist").join("app.compiled.css");
+        let css = read_to_string(css_path).expect("read css");
+        assert_eq!(css, "._a{color:red}\n._b{font-size:12px}");
+    }
+
+    #[test]
+    fn extracts_styles_to_disk_for_scripts() {
+        let temp = tempdir().expect("tempdir");
+        let src_dir = temp.path().join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src");
+        let filename = src_dir.join("app.js");
+
+        let mut file = File::create(&filename).expect("create file");
+        file.write_all(b"// stub").expect("write file");
+
+        let source_file_name = src_dir.join("app.js");
+
+        let (program, cm, comments) = parse_script(
+            "const { CC } = require('@compiled/react');\n\
+             const _a = '._a{color:red}';\n\
+             const _b = '._b{font-size:12px}';\n\
+             const Component = () => React.createElement(CC, null, [_a, _b], React.createElement('div'));",
+        );
+
+        let output = crate::transform(
+            program,
+            TransformConfig {
+                filename: Some(filename.to_string_lossy().into()),
+                source_file_name: Some(source_file_name.to_string_lossy().into()),
+                cwd: Some(temp.path().to_string_lossy().into()),
+                options: PluginOptions {
+                    extract_styles_to_directory: Some(ExtractStylesToDirectory {
+                        source: "src/".into(),
+                        dest: "dist/".into(),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        let printed = print(&output.program, &cm, &comments);
+        let mut lines = printed.lines();
+        let require_line = lines.next().unwrap_or_default();
+        assert_eq!(require_line, "require(\"./app.compiled.css\");");
 
         let css_path = temp.path().join("dist").join("app.compiled.css");
         let css = read_to_string(css_path).expect("read css");
