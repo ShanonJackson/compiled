@@ -19,7 +19,7 @@ pub fn normalize_css(options: &TransformCssOptions) -> Vec<Box<dyn Plugin>> {
         // Production-only plugins that cssnano would include.
         plugins.push(Box::new(super::ordered_values::ordered_values()));
         plugins.push(Box::new(reduce_initial()));
-        plugins.push(Box::new(CssnanoPlaceholder::new("postcss-convert-values")));
+        plugins.push(Box::new(super::convert_values::convert_values()));
         plugins.push(Box::new(CssnanoPlaceholder::new("postcss-colormin")));
         plugins.push(Box::new(CssnanoPlaceholder::new("postcss-normalize-url")));
         plugins.push(Box::new(CssnanoPlaceholder::new(

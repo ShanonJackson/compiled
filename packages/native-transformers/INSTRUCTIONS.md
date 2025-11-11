@@ -1,6 +1,6 @@
 Instructions.
 Your goal is to implement PLAN.md marking the headings [Completed] when each task is done.
-Correctness is the goal here, but also performance. We're replaciting two existing babel-plugins IDENTICALLY including all files/folders/behaviours AND bugs. Hashes MUST remain the same in output;
+Correctness is the goal here, but also performance. We're replicating two existing babel-plugins IDENTICALLY including all files/folders/behaviours AND bugs. Hashes MUST remain the same in output;
 However cosmetic differences like those introduced from using swc instead of babel are acceptable.
 These plugins will run as native Rust transformers NOT WASM plugins; And the packages/babel-plugin equivilent can emit "style-rules" as a return object to mimic babels 'metadata' of existing plugin.
 

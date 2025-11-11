@@ -1,12 +1,12 @@
 {
-  "name": "@compiled/native-strip-runtime",
-  "version": "0.0.0",
-  "private": true,
-  "main": "index.js",
-  "files": [
-    "index.js"
-  ],
-  "peerDependencies": {
-    "@swc/core": ">=1.3.107"
-  }
+    "name":  "@compiled/native-strip-runtime",
+    "version":  "0.0.0",
+    "private":  true,
+    "main":  "index.js",
+    "files":  [
+                  "index.js"
+              ],
+    "peerDependencies":  {
+                             "@swc/core":  "\u003e=1.3.107"
+                         }
 }

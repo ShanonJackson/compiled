@@ -1490,11 +1490,8 @@ fn insert_forward_ref_import(module: &mut Module) {
         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
             span: DUMMY_SP,
             local: Ident::new("forwardRef".into(), DUMMY_SP, SyntaxContext::empty()),
-            imported: Some(ModuleExportName::Ident(Ident::new(
-                "forwardRef".into(),
-                DUMMY_SP,
-                SyntaxContext::empty(),
-            ))),
+            // Match Babel emission: omit alias when local equals imported
+            imported: None,
             is_type_only: false,
         })],
         src: Box::new(Str {

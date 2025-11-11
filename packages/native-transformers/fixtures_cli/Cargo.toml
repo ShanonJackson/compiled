@@ -1,0 +1,21 @@
+[package]
+name = "fixtures_cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+compiled_babel = { path = "../compiled_babel" }
+compiled_strip_runtime = { path = "../compiled_strip_runtime" }
+serde = { version = "=1.0.197", features = ["derive"] }
+serde_json = "=1.0.128"
+swc_core = { version = "=26.3.4", features = [
+  "ecma_ast",
+  "common",
+  "ecma_parser",
+  "ecma_codegen",
+  "ecma_visit",
+  "ecma_utils"
+] }
+swc_ecma_parser = "=14.0.2"
+swc_ecma_codegen = "=13.2.0"
+

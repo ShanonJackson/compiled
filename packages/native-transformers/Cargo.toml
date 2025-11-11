@@ -1,7 +1,8 @@
 [workspace]
 members = [
   "compiled_babel",
-  "compiled_strip_runtime"
+  "compiled_strip_runtime",
+  "fixtures_cli"
 ]
 resolver = "2"
 

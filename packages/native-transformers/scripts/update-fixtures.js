@@ -38,10 +38,48 @@ const BABEL_OPTIONS = {
   ],
 };
 
+function formatWithPrettierOrReturn(code, parser = 'babel') {
+  try {
+    const prettier = require('prettier');
+    return prettier.format(code, {
+      parser,
+      useTabs: true,
+      tabWidth: 2,
+      singleQuote: false,
+      trailingComma: 'es5',
+      printWidth: 100,
+    });
+  } catch (_err) {
+    return code;
+  }
+}
+
+async function readFixtureConfig(dir) {
+  try {
+    const text = await fsp.readFile(path.join(dir, 'config.json'), 'utf8');
+    return JSON.parse(text);
+  } catch (e) {
+    return {};
+  }
+}
+
 async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
+  const cfg = await readFixtureConfig(fixtureDir);
+  const compiledOptions = {
+    cache: false,
+    optimizeCss: true,
+    importReact: true,
+    extract: typeof cfg.extract === 'boolean' ? cfg.extract : true,
+    ...(cfg.classNameCompressionMap ? { classNameCompressionMap: cfg.classNameCompressionMap } : {}),
+  };
+
   const result = babel.transformSync(inputCode, {
     ...BABEL_OPTIONS,
     filename: inputPath,
+    plugins: [
+      [require.resolve('@compiled/babel-plugin'), compiledOptions],
+      [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
+    ],
   });
 
   if (!result || typeof result.code !== 'string') {
@@ -51,7 +89,7 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   const metadata = (result.metadata && result.metadata.styleRules) || [];
 
   const outputs = {
-    code: result.code,
+    code: formatWithPrettierOrReturn(result.code, 'babel'),
     styleRules: Array.isArray(metadata) ? metadata : [],
   };
 
@@ -59,59 +97,51 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
 }
 
 async function attemptSwcTransform(inputCode, inputPath) {
+  const { existsSync } = require('fs');
+  const { spawnSync } = require('child_process');
+  const bin = path.join(
+    repoRoot,
+    'packages',
+    'native-transformers',
+    'target',
+    'release',
+    process.platform === 'win32' ? 'fixtures_cli.exe' : 'fixtures_cli'
+  );
+
+  if (!existsSync(bin)) {
+    // Try to build the CLI once to avoid JS bridges for SWC
+    const build = spawnSync('cargo', ['build', '-p', 'fixtures_cli', '--release'], {
+      cwd: path.join(repoRoot, 'packages', 'native-transformers'),
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+    if (build.status !== 0) {
+      console.warn(`Skipping SWC transform for ${inputPath}: failed to build fixtures_cli`);
+      return { code: inputCode, styleRules: [] };
+    }
+  }
+
+  let env = { ...process.env };
   try {
-    const swc = require('@swc/core');
-    const compiled = require('../compiled_babel');
-    const stripRuntime = require('../compiled_strip_runtime');
+    const babelPkg = require('@compiled/babel-plugin/package.json');
+    if (babelPkg && typeof babelPkg.version === 'string' && babelPkg.version) {
+      env.TEST_PKG_VERSION = babelPkg.version;
+    }
+  } catch (_) {}
+  const run = spawnSync(bin, [inputPath], { encoding: 'utf8', env });
+  if (run.status !== 0) {
+    console.warn(
+      `Skipping SWC transform for ${inputPath}: fixtures_cli failed with code ${run.status}\n${run.stderr || ''}`
+    );
+    return { code: inputCode, styleRules: [] };
+  }
 
-    const program = await swc.parse(inputCode, {
-      syntax: 'typescript',
-      tsx: true,
-      jsx: true,
-      target: 'es2019',
-      comments: false,
-      script: false,
-      preserveAllComments: false,
-      isModule: true,
-      filename: inputPath,
-    });
-
-    const compiledResult = compiled.transform(program, {
-      filename: inputPath,
-      options: {
-        cache: false,
-        optimizeCss: true,
-        importReact: true,
-        extract: true,
-      },
-    });
-
-    const stripResult = stripRuntime.transform(compiledResult.program, {
-      filename: inputPath,
-      options: {
-        compiledRequireExclude: true,
-      },
-    });
-
-    return {
-      code: stripResult.code,
-      // Prefer strip-runtime metadata when present; otherwise fall back to
-      // metadata produced by the compiled_babel transform. This ensures
-      // fixtures for cases like `css={[...]}]` still capture extracted rules
-      // even when strip-runtime doesn't collect any.
-      styleRules: (() => {
-        const stripRules = (stripResult && stripResult.metadata && stripResult.metadata.styleRules) || [];
-        if (Array.isArray(stripRules) && stripRules.length > 0) return stripRules;
-        const compiledRules = (compiledResult && compiledResult.metadata && compiledResult.metadata.styleRules) || [];
-        return compiledRules;
-      })(),
-    };
-  } catch (error) {
-    console.warn(`Skipping SWC transform for ${inputPath}: ${error.message}`);
-    return {
-      code: inputCode,
-      styleRules: [],
-    };
+  try {
+    const parsed = JSON.parse(run.stdout);
+    return { code: String(parsed.code || ''), styleRules: Array.isArray(parsed.styleRules) ? parsed.styleRules : [] };
+  } catch (e) {
+    console.warn(`Skipping SWC transform for ${inputPath}: failed to parse CLI JSON: ${e.message}`);
+    return { code: inputCode, styleRules: [] };
   }
 }
 
@@ -137,15 +167,21 @@ async function processFixture(name) {
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
   const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath);
-  await writeFileIfChanged(path.join(fixtureDir, 'babel-out.js'), babelOutputs.code);
+  await writeFileIfChanged(
+    path.join(fixtureDir, 'babel-out.js'),
+    formatWithPrettierOrReturn(babelOutputs.code, 'babel')
+  );
   await writeFileIfChanged(
     path.join(fixtureDir, 'babel-style-rules.json'),
     JSON.stringify(babelOutputs.styleRules, null, 2)
   );
-  await writeFileIfChanged(path.join(fixtureDir, 'out.js'), babelOutputs.code);
 
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath);
-  await writeFileIfChanged(path.join(fixtureDir, 'actual.js'), swcOutputs.code);
+  // SWC output is now the canonical out.js
+  await writeFileIfChanged(
+    path.join(fixtureDir, 'out.js'),
+    formatWithPrettierOrReturn(swcOutputs.code, 'babel')
+  );
   const styleRulesToWrite =
     Array.isArray(swcOutputs.styleRules) && swcOutputs.styleRules.length > 0
       ? swcOutputs.styleRules

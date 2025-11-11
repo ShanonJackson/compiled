@@ -28,6 +28,8 @@ pub mod minify_selectors;
 pub mod nested;
 #[path = "normalize-css.rs"]
 pub mod normalize_css;
+#[path = "convert-values.rs"]
+pub mod convert_values;
 #[path = "normalize-current-color.rs"]
 pub mod normalize_current_color;
 #[path = "normalize-whitespace.rs"]

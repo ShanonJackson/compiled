@@ -1,12 +1,26 @@
 'use strict';
 
 const path = require('path');
-const { loadBinding } = require('@swc/core/node');
 
 let binding;
 
 function getBinding() {
   if (!binding) {
+    let loadBinding;
+    try {
+      // Preferred entrypoint when available
+      ({ loadBinding } = require('@swc/core/node'));
+    } catch (e1) {
+      try {
+        // Older builds exposed a lib/node file
+        ({ loadBinding } = require('@swc/core/lib/node'));
+      } catch (e2) {
+        throw new Error(
+          "Unable to load SWC binding loader '@swc/core/node'. For fixtures, prefer using the native CLI (fixtures_cli)."
+        );
+      }
+    }
+
     try {
       binding = loadBinding(path.join(__dirname, 'native'), '@compiled', 'compiled_babel');
     } catch (error) {
@@ -16,7 +30,6 @@ function getBinding() {
       throw error;
     }
   }
-
   return binding;
 }
 

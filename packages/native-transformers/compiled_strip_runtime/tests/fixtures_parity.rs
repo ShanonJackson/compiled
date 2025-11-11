@@ -93,9 +93,10 @@ fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
     let input_code = fs::read_to_string(&input_path)?;
 
     // Ensure Babel baselines exist for manual inspection.
-    let _ = fs::metadata(fixture_dir.join("out.js"))?;
+    let _ = fs::metadata(fixture_dir.join("babel-out.js"))?;
 
-    let mut expected_actual = fs::read_to_string(fixture_dir.join("actual.js"))?;
+    // Canonical output is now SWC in out.js
+    let mut expected_out = fs::read_to_string(fixture_dir.join("out.js"))?;
     let babel_style_rules = read_style_rules(&fixture_dir.join("babel-style-rules.json"))?;
     let mut stored_swc_style_rules = read_style_rules(&fixture_dir.join("swc-style-rules.json"))?;
 
@@ -147,9 +148,9 @@ fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
         fs::write(style_rules_path, format!("{}\n", style_rules_json))?;
         stored_swc_style_rules = strip_output.metadata.style_rules.clone();
 
-        let actual_path = fixture_dir.join("actual.js");
-        fs::write(&actual_path, &generated_code)?;
-        expected_actual = generated_code.clone();
+        let out_path = fixture_dir.join("out.js");
+        fs::write(&out_path, &generated_code)?;
+        expected_out = generated_code.clone();
     }
 
     assert_eq!(
@@ -161,7 +162,7 @@ fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
         "stored swc-style-rules.json is outdated for fixture {name}"
     );
 
-    let mut expected_code = expected_actual;
+    let mut expected_code = expected_out;
     if !expected_code.ends_with('\n') {
         expected_code.push('\n');
     }
