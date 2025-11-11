@@ -6,6 +6,9 @@
   "files": [
     "index.js"
   ],
+  "dependencies": {
+    "@node-rs/helper": "^1.6.0"
+  },
   "peerDependencies": {
     "@swc/core": ">=1.3.107"
   }

@@ -1,0 +1,11 @@
+import { ax, ix } from '@compiled/react/runtime';
+import * as React from 'react';
+
+import { DARK_MODE, MEDIA_QUERY } from './media';
+export const responsiveStyles = null;
+export const responsiveTemplate = null;
+export const MediaExample = () => (
+  <section className={[responsiveStyles, responsiveTemplate].join(' ')}>
+    responsive media queries
+  </section>
+);
