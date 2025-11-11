@@ -1,7 +1,8 @@
 'use strict';
 
 const path = require('path');
-const { loadBinding } = require('@swc/core/node');
+
+const { loadBinding } = require('@node-rs/helper');
 
 let binding;
 
@@ -20,8 +21,37 @@ function getBinding() {
   return binding;
 }
 
-exports.transform = function transform(program, options) {
-  return getBinding().transform(program, options);
+function unique(list) {
+  const result = [];
+
+  for (const value of list) {
+    if (!result.includes(value)) {
+      result.push(value);
+    }
+  }
+
+  return result;
+}
+
+exports.transform = function transform(program, config) {
+  const normalizedConfig = config || {};
+  const { options: rawOptions, ...restConfig } = normalizedConfig;
+  const { onIncludedFiles, ...options } = rawOptions || {};
+
+  const result = getBinding().transform(program, {
+    ...restConfig,
+    options,
+  });
+
+  if (typeof onIncludedFiles === 'function') {
+    const included = result?.metadata?.includedFiles || [];
+
+    if (included.length > 0) {
+      onIncludedFiles(unique(included));
+    }
+  }
+
+  return result;
 };
 
 exports.load = getBinding;

@@ -24,6 +24,30 @@ impl Default for PluginOptions {
     }
 }
 
+/// Configuration passed from the JS binding mirroring the Babel plugin entry.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TransformConfig {
+    pub filename: Option<String>,
+    pub cwd: Option<String>,
+    pub root: Option<String>,
+    #[serde(rename = "sourceFileName")]
+    pub source_file_name: Option<String>,
+    pub options: PluginOptions,
+}
+
+impl Default for TransformConfig {
+    fn default() -> Self {
+        Self {
+            filename: None,
+            cwd: None,
+            root: None,
+            source_file_name: None,
+            options: PluginOptions::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractStylesToDirectory {
@@ -37,8 +61,7 @@ pub struct TransformMetadata {
     pub style_rules: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TransformOutput {
     pub program: Program,
     pub metadata: TransformMetadata,

@@ -1,7 +1,8 @@
 'use strict';
 
 const path = require('path');
-const { loadBinding } = require('@swc/core/node');
+
+const { loadBinding } = require('@node-rs/helper');
 
 let binding;
 

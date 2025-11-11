@@ -1,0 +1,34 @@
+import { ax, ix } from '@compiled/react/runtime';
+import { forwardRef as forwardRef } from 'react';
+import * as React from 'react';
+const colors = {
+  primary: 'tomato',
+  secondary: '#daa520',
+};
+const fadeIn = null;
+export const dynamicText = null;
+export const FancyButton = forwardRef(
+  ({ as: C = 'button', style: __cmpls, ...__cmplp }, __cmplr) => {
+    if (__cmplp.innerRef) {
+      throw new Error("Please use 'ref' instead of 'innerRef'.");
+    }
+    return (
+      <C
+        {...__cmplp}
+        style={__cmpls}
+        ref={__cmplr}
+        className={ax(['_y44v6l02 _189eyh40 _1dqonqa1 _1h6d1iu8 _1llw120f', __cmplp.className])}
+      />
+    );
+  }
+);
+if (process.env.NODE_ENV !== 'production') {
+  FancyButton.displayName = 'FancyButton';
+}
+const themed = {
+  primary: '_syaz1a6z',
+  secondary: '_syaz1iu8',
+};
+const alias = 'secondary';
+export const mappedClass = themed[alias];
+export const WithClassNames = () => <div className={ax(['_syaz1iu8 _1yt4puy2'])}>example</div>;

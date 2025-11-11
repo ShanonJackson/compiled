@@ -43,6 +43,7 @@ module.exports = {
               '**/__perf__/**',
               '**/*.test.tsx?',
               '**/index.js',
+              '**/scripts/**',
               '**/test-utils.ts',
             ],
           },
@@ -61,6 +62,13 @@ module.exports = {
         ],
         'no-debugger': 'error',
         'react/no-unknown-property': ['error', { ignore: ['css'] }],
+      },
+    },
+    {
+      files: ['**/tests/fixtures/**/*.{js,jsx,ts,tsx}'],
+      rules: {
+        'import/no-extraneous-dependencies': 'off',
+        'react/jsx-filename-extension': 'off',
       },
     },
     {
