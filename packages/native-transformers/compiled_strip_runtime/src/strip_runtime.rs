@@ -242,8 +242,18 @@ impl StripRuntimeTransform {
             return;
         }
 
+        let reported = self.config.filename.as_deref().unwrap_or("undefined");
+        if self.config.filename.is_none() || reported.is_empty() {
+            panic!(
+                "@compiled/babel-plugin-strip-runtime expected the filename not to be empty, but actually got '{}'.",
+                reported
+            );
+        }
+
         if self.options().compiled_require_exclude.unwrap_or(false) {
-            self.metadata.style_rules.extend(self.style_rules.clone());
+            let mut sorted_rules = self.style_rules.clone();
+            sorted_rules.sort();
+            self.metadata.style_rules.extend(sorted_rules);
             return;
         }
 
@@ -618,7 +628,13 @@ mod tests {
              const Component = () => _jsxs(CC, { children: [_a, _jsx('div', { children: 'hello world' })] });",
         );
 
-        let output = crate::transform(program, TransformConfig::default());
+        let output = crate::transform(
+            program,
+            TransformConfig {
+                filename: Some("app.tsx".into()),
+                ..Default::default()
+            },
+        );
 
         assert!(output.metadata.style_rules.is_empty());
 
@@ -638,7 +654,13 @@ mod tests {
              const Component = () => /*#__PURE__*/ (0, _jsxRuntime.jsxs)(CC, { children: [_a, (0, _jsxRuntime.jsx)('div', { children: 'hello world' })] });",
         );
 
-        let output = crate::transform(program, TransformConfig::default());
+        let output = crate::transform(
+            program,
+            TransformConfig {
+                filename: Some("app.tsx".into()),
+                ..Default::default()
+            },
+        );
 
         assert!(output.metadata.style_rules.is_empty());
 
@@ -737,6 +759,77 @@ mod tests {
         let printed = print(&output.program, &cm, &comments);
         assert!(!printed.contains("require(\"@compiled/loader.css"));
         assert!(!printed.contains("const _a"));
+    }
+
+    #[test]
+    fn collects_metadata_sorted_when_multiple_rules() {
+        let (program, _, _) = parse(
+            "import { CC, CS } from '@compiled/react';\n\
+             const _b = '._b{font-size:12px}';\n\
+             const _a = '._a{color:red}';\n\
+             const Component = () => React.createElement(CC, null, [_b, _a], React.createElement('div'));",
+        );
+
+        let output = crate::transform(
+            program,
+            TransformConfig {
+                filename: Some("app.tsx".into()),
+                options: PluginOptions {
+                    compiled_require_exclude: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            output.metadata.style_rules,
+            vec![
+                "._a{color:red}".to_string(),
+                "._b{font-size:12px}".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn panics_when_filename_missing() {
+        let (program, _, _) = parse(
+            "import { CC, CS } from '@compiled/react';\n\
+             const _a = '._a{color:red}';\n\
+             const Component = () => React.createElement(CC, null, [_a], React.createElement('div'));",
+        );
+
+        let result = std::panic::catch_unwind(|| {
+            crate::transform(
+                program,
+                TransformConfig {
+                    filename: None,
+                    options: PluginOptions {
+                        compiled_require_exclude: Some(true),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+        });
+
+        assert!(
+            result.is_err(),
+            "expected transform to panic when filename is missing"
+        );
+        if let Err(panic) = result {
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("");
+            assert!(
+                message.contains(
+                    "@compiled/babel-plugin-strip-runtime expected the filename not to be empty, but actually got 'undefined'."
+                ),
+                "unexpected panic message: {message}"
+            );
+        }
     }
 
     #[test]
