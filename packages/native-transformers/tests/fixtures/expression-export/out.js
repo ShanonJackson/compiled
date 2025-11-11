@@ -6,6 +6,8 @@ const offset = 4;
 const colors = ['red', 'blue', 'seagreen'];
 export const dynamicPadding = null;
 export const expressionObject = null;
-export const ExpressionExample = () => <div className={[dynamicPadding, expressionObject].join(' ')}>
+export const ExpressionExample = () => <div className={ax(["_ca0q1f4h _u5f31f4h _n3td1f4h _19bv1f4h _syazudzx _1llw1f4f", "_2rko14y2 _18u0dlk8"])} style={{
+  "--_155apf6": ix(colors[2])
+}}>
     expression output
   </div>;

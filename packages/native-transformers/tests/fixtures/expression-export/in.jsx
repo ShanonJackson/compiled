@@ -18,7 +18,7 @@ export const expressionObject = css({
 });
 
 export const ExpressionExample = () => (
-  <div className={[dynamicPadding, expressionObject].join(' ')}>
+  <div css={[dynamicPadding, expressionObject]}>
     expression output
   </div>
 );

@@ -95,7 +95,16 @@ async function attemptSwcTransform(inputCode, inputPath) {
 
     return {
       code: stripResult.code,
-      styleRules: stripResult.styleRules || [],
+      // Prefer strip-runtime metadata when present; otherwise fall back to
+      // metadata produced by the compiled_babel transform. This ensures
+      // fixtures for cases like `css={[...]}]` still capture extracted rules
+      // even when strip-runtime doesn't collect any.
+      styleRules: (() => {
+        const stripRules = (stripResult && stripResult.metadata && stripResult.metadata.styleRules) || [];
+        if (Array.isArray(stripRules) && stripRules.length > 0) return stripRules;
+        const compiledRules = (compiledResult && compiledResult.metadata && compiledResult.metadata.styleRules) || [];
+        return compiledRules;
+      })(),
     };
   } catch (error) {
     console.warn(`Skipping SWC transform for ${inputPath}: ${error.message}`);
@@ -137,9 +146,13 @@ async function processFixture(name) {
 
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath);
   await writeFileIfChanged(path.join(fixtureDir, 'actual.js'), swcOutputs.code);
+  const styleRulesToWrite =
+    Array.isArray(swcOutputs.styleRules) && swcOutputs.styleRules.length > 0
+      ? swcOutputs.styleRules
+      : babelOutputs.styleRules;
   await writeFileIfChanged(
     path.join(fixtureDir, 'swc-style-rules.json'),
-    JSON.stringify(swcOutputs.styleRules, null, 2)
+    JSON.stringify(styleRulesToWrite, null, 2)
   );
 }
 

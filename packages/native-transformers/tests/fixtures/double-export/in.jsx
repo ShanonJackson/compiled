@@ -19,7 +19,7 @@ export { sharedClass as default };
 
 export const Example = () => (
   <div>
-    <span className={sharedClass}>object styles</span>
-    <span className={hoverHighlight}>template styles</span>
+    <span css={sharedClass}>object styles</span>
+    <span css={hoverHighlight}>template styles</span>
   </div>
 );

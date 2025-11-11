@@ -23,7 +23,7 @@ export const responsiveTemplate = css`
 `;
 
 export const MediaExample = () => (
-  <section className={[responsiveStyles, responsiveTemplate].join(' ')}>
+  <section css={[responsiveStyles, responsiveTemplate]}>
     responsive media queries
   </section>
 );

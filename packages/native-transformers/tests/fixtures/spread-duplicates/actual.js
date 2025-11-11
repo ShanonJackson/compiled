@@ -1,27 +1,38 @@
-;
-import * as React from "react";
-import { ax, ix } from "@compiled/react/runtime";
+import { css } from '@compiled/react';
+
 const base = {
-    fontSize: '16px',
-    color: 'purple',
-    padding: '8px'
+  fontSize: '16px',
+  color: 'purple',
+  padding: '8px',
 };
+
 const overrides = {
-    color: 'purple',
-    padding: '10px',
-    border: '1px solid black'
+  color: 'purple',
+  padding: '10px',
+  border: '1px solid black',
 };
+
 const conditional = {
-    ...(true ? {
-        color: 'teal'
-    } : {}),
-    backgroundColor: 'beige'
+  color: 'teal',
+  backgroundColor: 'beige',
 };
-export const spreadExample = null;
-export const spreadTemplate = null;
-export const SpreadExampleComponent = ()=>(<main className={[
-        spreadExample,
-        spreadTemplate
-    ].join(' ')}>
+
+export const spreadExample = css({
+  display: 'flex',
+  ...base,
+  gap: '12px',
+  ...overrides,
+  ...conditional,
+  color: 'maroon',
+});
+
+export const spreadTemplate = css`
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+`;
+
+export const SpreadExampleComponent = () => (
+  <main css={[spreadExample, spreadTemplate]}>
     spread styles
-  </main>);
+  </main>
+);
