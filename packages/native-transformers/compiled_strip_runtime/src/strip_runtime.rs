@@ -534,6 +534,7 @@ mod tests {
     use crate::types::{ExtractStylesToDirectory, PluginOptions, TransformConfig};
     use std::fs::{read_to_string, File};
     use std::io::Write as _;
+    use swc_core::common::comments::{Comments, SingleThreadedComments};
     use swc_core::common::sync::Lrc;
     use swc_core::common::{FileName, SourceMap};
     use swc_ecma_codegen::{text_writer::JsWriter, Config, Emitter};
@@ -541,29 +542,29 @@ mod tests {
     use swc_ecma_parser::{Parser, StringInput, Syntax};
     use tempfile::tempdir;
 
-    fn parse(source: &str) -> Program {
+    fn parse(source: &str) -> (Program, Lrc<SourceMap>, SingleThreadedComments) {
         let cm: Lrc<SourceMap> = Default::default();
         let fm = cm.new_source_file(FileName::Anon.into(), source.into());
+        let comments = SingleThreadedComments::default();
         let lexer = Lexer::new(
             Syntax::Es(Default::default()),
             Default::default(),
             StringInput::from(&*fm),
-            None,
+            Some(&comments),
         );
         let mut parser = Parser::new_from(lexer);
         let module = parser.parse_module().expect("failed to parse module");
-        Program::Module(module)
+        (Program::Module(module), cm, comments)
     }
 
-    fn print(program: &Program) -> String {
-        let cm: Lrc<SourceMap> = Default::default();
+    fn print(program: &Program, cm: &Lrc<SourceMap>, comments: &SingleThreadedComments) -> String {
         let mut buf = Vec::new();
         {
             let mut emitter = Emitter {
                 cfg: Config::default(),
-                comments: None,
+                comments: Some(comments as &dyn Comments),
                 cm: cm.clone(),
-                wr: JsWriter::new(cm, "\n", &mut buf, None),
+                wr: JsWriter::new(cm.clone(), "\n", &mut buf, None),
             };
             match program {
                 Program::Module(module) => emitter.emit_module(module).unwrap(),
@@ -575,7 +576,7 @@ mod tests {
 
     #[test]
     fn strips_create_element_runtime() {
-        let program = parse(
+        let (program, cm, comments) = parse(
             "import { CC, CS } from '@compiled/react';\n\
              const _a = '._a{color:red}';\n\
              const _b = '._b{font-size:12px}';\n\
@@ -602,7 +603,7 @@ mod tests {
             ]
         );
 
-        let printed = print(&output.program);
+        let printed = print(&output.program, &cm, &comments);
         assert!(!printed.contains("const _a"));
         assert!(!printed.contains("CC"));
         assert!(printed.contains("React.createElement('div')"));
@@ -610,7 +611,7 @@ mod tests {
 
     #[test]
     fn strips_jsxs_runtime_calls() {
-        let program = parse(
+        let (program, cm, comments) = parse(
             "import { CC, CS } from '@compiled/react';\n\
              import { jsxs as _jsxs, jsx as _jsx } from 'react/jsx-runtime';\n\
              const _a = '._a{color:red}';\n\
@@ -621,7 +622,7 @@ mod tests {
 
         assert!(output.metadata.style_rules.is_empty());
 
-        let printed = print(&output.program);
+        let printed = print(&output.program, &cm, &comments);
         assert!(!printed.contains("const _a"));
         assert!(!printed.contains("_jsxs(CC"));
         assert!(!printed.contains("CC"));
@@ -629,8 +630,28 @@ mod tests {
     }
 
     #[test]
+    fn strips_jsxs_sequence_runtime_calls() {
+        let (program, cm, comments) = parse(
+            "import { CC, CS } from '@compiled/react';\n\
+             import * as _jsxRuntime from 'react/jsx-runtime';\n\
+             const _a = '._a{color:red}';\n\
+             const Component = () => /*#__PURE__*/ (0, _jsxRuntime.jsxs)(CC, { children: [_a, (0, _jsxRuntime.jsx)('div', { children: 'hello world' })] });",
+        );
+
+        let output = crate::transform(program, TransformConfig::default());
+
+        assert!(output.metadata.style_rules.is_empty());
+
+        let printed = print(&output.program, &cm, &comments);
+        assert!(!printed.contains("const _a"));
+        assert!(!printed.contains("_jsxRuntime.jsxs(CC"));
+        assert!(!printed.contains("CC"));
+        assert!(printed.contains("_jsxRuntime.jsx)('div'"));
+    }
+
+    #[test]
     fn injects_require_calls_when_style_sheet_path_present() {
-        let program = parse(
+        let (program, cm, comments) = parse(
             "import { CC, CS } from '@compiled/react';\n\
              const _a = '._a{color:red}';\n\
              const _b = '._b{font-size:12px}';\n\
@@ -651,7 +672,7 @@ mod tests {
 
         assert!(output.metadata.style_rules.is_empty());
 
-        let printed = print(&output.program);
+        let printed = print(&output.program, &cm, &comments);
         assert!(printed.contains("require(\"@compiled/loader.css?style=._a%7Bcolor%3Ared%7D\");"));
         assert!(
             printed.contains("require(\"@compiled/loader.css?style=._b%7Bfont-size%3A12px%7D\");")
@@ -660,8 +681,36 @@ mod tests {
     }
 
     #[test]
+    fn preserves_leading_comments_when_inserting_requires() {
+        let (program, cm, comments) = parse(
+            "// @license Example\n\
+             import { CC, CS } from '@compiled/react';\n\
+             const _a = '._a{color:red}';\n\
+             const Component = () => React.createElement(CC, null, [_a], React.createElement('div'));",
+        );
+
+        let output = crate::transform(
+            program,
+            TransformConfig {
+                filename: Some("app.tsx".into()),
+                options: PluginOptions {
+                    style_sheet_path: Some("@compiled/loader.css".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+
+        let printed = print(&output.program, &cm, &comments);
+        let mut lines = printed.lines();
+        assert_eq!(lines.next(), Some("// @license Example"));
+        let require_line = lines.next().unwrap_or_default();
+        assert!(require_line.starts_with("require(\"@compiled/loader.css?style="));
+    }
+
+    #[test]
     fn collects_metadata_when_compiled_require_exclude_enabled() {
-        let program = parse(
+        let (program, cm, comments) = parse(
             "import { CC, CS } from '@compiled/react';\n\
              const _a = '._a{color:red}';\n\
              const Component = () => React.createElement(CC, null, [_a], React.createElement('div'));",
@@ -685,7 +734,7 @@ mod tests {
             vec!["._a{color:red}".to_string()]
         );
 
-        let printed = print(&output.program);
+        let printed = print(&output.program, &cm, &comments);
         assert!(!printed.contains("require(\"@compiled/loader.css"));
         assert!(!printed.contains("const _a"));
     }
@@ -703,7 +752,7 @@ mod tests {
 
         let source_file_name = src_dir.join("app.tsx");
 
-        let program = parse(
+        let (program, cm, comments) = parse(
             "import { CC, CS } from '@compiled/react';\n\
              const _a = '._a{color:red}';\n\
              const _b = '._b{font-size:12px}';\n\
@@ -727,7 +776,7 @@ mod tests {
             },
         );
 
-        let printed = print(&output.program);
+        let printed = print(&output.program, &cm, &comments);
         assert!(printed.starts_with("import \"./app.compiled.css\";"));
 
         let css_path = temp.path().join("dist").join("app.compiled.css");

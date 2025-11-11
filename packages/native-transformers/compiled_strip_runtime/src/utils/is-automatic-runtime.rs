@@ -6,6 +6,7 @@ pub fn is_automatic_runtime(call: &CallExpr, func: &str) -> bool {
     match &call.callee {
         Callee::Expr(expr) => match &**expr {
             Expr::Ident(ident) => is_helper_ident(ident, func),
+            Expr::Paren(paren) => is_paren_helper(paren, func),
             Expr::Seq(seq) => sequence_targets_helper(seq, func),
             _ => false,
         },
@@ -15,6 +16,15 @@ pub fn is_automatic_runtime(call: &CallExpr, func: &str) -> bool {
 
 fn is_helper_ident(ident: &Ident, func: &str) -> bool {
     ident.sym.as_ref() == format!("_{}", func)
+}
+
+fn is_paren_helper(paren: &swc_core::ecma::ast::ParenExpr, func: &str) -> bool {
+    match &*paren.expr {
+        Expr::Ident(ident) => is_helper_ident(ident, func),
+        Expr::Seq(seq) => sequence_targets_helper(seq, func),
+        Expr::Paren(inner) => is_paren_helper(inner, func),
+        _ => false,
+    }
 }
 
 fn sequence_targets_helper(seq: &SeqExpr, func: &str) -> bool {
@@ -85,6 +95,33 @@ mod tests {
 
         let call = call_with_callee(seq);
         assert!(is_automatic_runtime(&call, "jsx"));
+    }
+
+    #[test]
+    fn detects_parenthesized_sequence_expression() {
+        let member = Expr::Member(MemberExpr {
+            span: DUMMY_SP,
+            obj: Box::new(Expr::Ident(ident("_jsxRuntime"))),
+            prop: MemberProp::Ident(ident("jsxs").into()),
+        });
+        let seq = Expr::Seq(SeqExpr {
+            span: DUMMY_SP,
+            exprs: vec![
+                Box::new(Expr::Lit(Lit::Num(Number {
+                    span: DUMMY_SP,
+                    value: 0.0,
+                    raw: None,
+                }))),
+                Box::new(member),
+            ],
+        });
+        let paren = Expr::Paren(swc_core::ecma::ast::ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(seq),
+        });
+
+        let call = call_with_callee(paren);
+        assert!(is_automatic_runtime(&call, "jsxs"));
     }
 
     #[test]
