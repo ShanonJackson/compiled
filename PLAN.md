@@ -29,18 +29,13 @@
 - Integrated the Rust sorter, stylesheet extraction, SSR metadata/`compiledRequireExclude` flow, and filename guard behaviour so disk output, metadata, and error handling remain byte-for-byte with Babel.
 - Added regression tests spanning stylesheet `require` injection, filesystem extraction (modules and scripts), automatic runtime reduction, metadata ordering, and comment preservation to validate parity before integration work.
 
-## Phase 5 – Integration & packaging
-- Provide JS bindings that let existing build tools conditionally load the native transformer while keeping fallback paths for older environments.
-- Ensure generated artifacts stay identical so downstream tooling continues to work without modification.
-- Update build scripts to compile the Rust crates alongside existing packages and publish them under the same npm package names without altering file layout.
-
-## Phase 6 – Verification & regression safety
+## Phase 5 – Verification & regression safety
 - Build a compatibility harness that runs every existing fixture/test through both the Babel implementation and the new SWC transform, diffing ASTs, generated sheets, hashes, and metadata.
 - Add dedicated tests for the Rust `postcss` pipeline comparing class name hashes and sheet text against the JS baseline.
 - Automate integration checks in CI so future changes run both Rust and JS versions to guarantee ongoing equivalence.
-- Established a fixtures update script that produces Babel baselines (`babel-out.js`, `babel-style-rules.json`) alongside the
-  SWC outputs for each case, wiring it into the `@compiled/native-transformers` workspace for iterative parity checks.
+- Established a fixtures update script that produces Babel baselines (`babel-out.js`, `babel-style-rules.json`) alongside the SWC outputs for each case, wiring it into the `@compiled/native-transformers` workspace for iterative parity checks.
+- Added Rust integration tests that execute the native compiled + strip-runtime pipeline against the fixture suite, asserting SWC style rules match Babel baselines and that the stored `actual.js` snapshots stay in sync with the transformer output.
 
-## Phase 7 – Rollout
+## Phase 6 – Rollout
 - Ship the Rust implementations behind an opt-in flag, gather real-world comparisons, then flip the default once parity is proven.
 - Keep the JS sources temporarily for reference/tests until confidence is high, then archive them while preserving the directory structure so hashes referencing file paths remain stable.

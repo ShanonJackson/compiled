@@ -77,12 +77,16 @@ struct AtomicifyOptions<'a> {
 }
 
 fn normalize_selectors(selectors: Vec<String>, options: &AtomicifyOptions<'_>) -> Vec<String> {
-    if let Some(placeholder) = options.declaration_placeholder {
+    let cleaned = if let Some(placeholder) = options.declaration_placeholder {
         selectors
             .into_iter()
             .map(|selector| {
-                if selector.trim() == placeholder {
+                let trimmed = selector.trim();
+
+                if trimmed == placeholder {
                     String::new()
+                } else if trimmed.contains(placeholder) {
+                    trimmed.replace(placeholder, "").trim().to_string()
                 } else {
                     selector
                 }
@@ -90,7 +94,35 @@ fn normalize_selectors(selectors: Vec<String>, options: &AtomicifyOptions<'_>) -
             .collect()
     } else {
         selectors
+    };
+
+    cleaned
+        .into_iter()
+        .map(|selector| {
+            if let Some(stripped) = collapse_ampersand_whitespace(&selector) {
+                stripped
+            } else {
+                selector
+            }
+        })
+        .collect()
+}
+
+fn collapse_ampersand_whitespace(selector: &str) -> Option<String> {
+    let trimmed = selector.trim_start();
+    if !trimmed.starts_with('&') {
+        return None;
     }
+
+    let remainder = trimmed[1..].trim_start();
+    if remainder.starts_with(':') {
+        let mut collapsed = String::with_capacity(1 + remainder.len());
+        collapsed.push('&');
+        collapsed.push_str(remainder);
+        return Some(collapsed);
+    }
+
+    None
 }
 
 fn atomicify_qualified_rule(
@@ -255,8 +287,23 @@ fn normalize_selector(selector: &str) -> String {
         return "&".to_string();
     }
 
+    if trimmed.starts_with('&') {
+        let without_amp = trimmed[1..].trim_start();
+        if without_amp.starts_with(':') {
+            let mut normalized = String::with_capacity(1 + without_amp.len());
+            normalized.push('&');
+            normalized.push_str(without_amp);
+            return normalized;
+        }
+    }
+
     if trimmed.contains('&') {
         trimmed.to_string()
+    } else if trimmed.starts_with(':') {
+        let mut normalized = String::with_capacity(1 + trimmed.len());
+        normalized.push('&');
+        normalized.push_str(trimmed);
+        normalized
     } else {
         format!("& {}", trimmed)
     }

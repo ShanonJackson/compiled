@@ -10,10 +10,10 @@ use regex::Regex;
 use swc_core::common::comments::{Comment, CommentKind};
 use swc_core::common::{Span, Spanned, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
-    BlockStmt, ClassDecl, Decl, DefaultDecl, EmptyStmt, Expr, FnDecl, Ident, ImportDecl,
-    ImportNamedSpecifier, ImportPhase, ImportSpecifier, ImportStarAsSpecifier, Lit, Module,
-    ModuleDecl, ModuleExportName, ModuleItem, Null, Pat, Program, Stmt, Str, VarDecl,
-    VarDeclarator,
+    BindingIdent, BlockStmt, ClassDecl, Decl, DefaultDecl, EmptyStmt, Expr, FnDecl, Ident,
+    ImportDecl, ImportNamedSpecifier, ImportPhase, ImportSpecifier, ImportStarAsSpecifier, Lit,
+    Module, ModuleDecl, ModuleExportName, ModuleItem, Null, Pat, Program, Stmt, Str, VarDecl,
+    VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::visit::{noop_visit_mut_type, VisitMut, VisitMutWith};
 
@@ -40,6 +40,52 @@ use crate::utils_preserve_leading_comments::preserve_leading_comments;
 use crate::xcss_prop::visit_xcss_prop;
 
 const PACKAGE_NAME: &str = "@compiled/babel-plugin";
+
+fn insert_sheet_declarations(module: &mut Module, state: &mut TransformState) {
+    if state.sheets.is_empty() {
+        return;
+    }
+
+    let mut declarations = Vec::with_capacity(state.sheets.len());
+
+    for (sheet, ident) in state.sheets.iter() {
+        let binding = BindingIdent {
+            id: ident.clone(),
+            type_ann: None,
+        };
+
+        let declarator = VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(binding),
+            init: Some(Box::new(Expr::Lit(Lit::Str(Str {
+                span: DUMMY_SP,
+                value: sheet.clone().into(),
+                raw: None,
+            })))),
+            definite: false,
+        };
+
+        let var_decl = VarDecl {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            kind: VarDeclKind::Const,
+            declare: false,
+            decls: vec![declarator],
+        };
+
+        declarations.push(ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(var_decl)))));
+    }
+
+    let insert_index = module
+        .body
+        .iter()
+        .position(|item| !matches!(item, ModuleItem::ModuleDecl(ModuleDecl::Import(_))))
+        .unwrap_or(module.body.len());
+
+    module
+        .body
+        .splice(insert_index..insert_index, declarations.into_iter());
+}
 
 /// Primary SWC transform that will eventually mirror `@compiled/babel-plugin`.
 pub struct CompiledBabelTransform {
@@ -1576,6 +1622,10 @@ impl CompiledBabelTransform {
             if should_append_runtime {
                 preserve_leading_comments(&module.body, &mut state);
                 append_runtime_imports(module, &mut state);
+            }
+
+            if state.opts.extract.unwrap_or(false) {
+                insert_sheet_declarations(module, &mut state);
             }
 
             let has_styled_import = state

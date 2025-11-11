@@ -251,9 +251,9 @@ impl StripRuntimeTransform {
         }
 
         if self.options().compiled_require_exclude.unwrap_or(false) {
-            let mut sorted_rules = self.style_rules.clone();
-            sorted_rules.sort();
-            self.metadata.style_rules.extend(sorted_rules);
+            self.metadata
+                .style_rules
+                .extend(self.style_rules.iter().cloned());
             return;
         }
 
