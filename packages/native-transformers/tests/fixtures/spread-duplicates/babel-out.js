@@ -18,3 +18,7 @@ const conditional = {
   backgroundColor: 'beige'
 };
 export const spreadExample = null;
+export const spreadTemplate = null;
+export const SpreadExampleComponent = () => <main className={[spreadExample, spreadTemplate].join(' ')}>
+    spread styles
+  </main>;

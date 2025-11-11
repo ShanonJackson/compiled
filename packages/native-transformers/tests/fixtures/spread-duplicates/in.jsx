@@ -25,3 +25,14 @@ export const spreadExample = css({
   ...conditional,
   color: 'maroon',
 });
+
+export const spreadTemplate = css`
+  border-radius: 4px;
+  ${true ? 'box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);' : ''}
+`;
+
+export const SpreadExampleComponent = () => (
+  <main className={[spreadExample, spreadTemplate].join(' ')}>
+    spread styles
+  </main>
+);

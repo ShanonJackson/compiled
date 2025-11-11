@@ -11,3 +11,19 @@ export const responsiveStyles = css({
     color: 'white',
   },
 });
+
+export const responsiveTemplate = css`
+  color: midnightblue;
+  ${MEDIA_QUERY} {
+    color: rebeccapurple;
+  }
+  ${DARK_MODE} {
+    color: lavender;
+  }
+`;
+
+export const MediaExample = () => (
+  <section className={[responsiveStyles, responsiveTemplate].join(' ')}>
+    responsive media queries
+  </section>
+);

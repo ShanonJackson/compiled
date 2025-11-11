@@ -11,3 +11,14 @@ export const dynamicPadding = css`
     transform: translateX(${base / 2}px);
   }
 `;
+
+export const expressionObject = css({
+  marginLeft: `${base + offset}px`,
+  borderRadius: `${Math.max(base - 5, 0)}px`,
+});
+
+export const ExpressionExample = () => (
+  <div className={[dynamicPadding, expressionObject].join(' ')}>
+    expression output
+  </div>
+);
