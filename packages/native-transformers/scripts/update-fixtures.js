@@ -166,9 +166,11 @@ async function processFixture(name) {
   const inputPath = path.join(fixtureDir, 'in.jsx');
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
+  // No debug capture in normal runs; keep updater focused on fixture parity
+
   const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath);
   await writeFileIfChanged(
-    path.join(fixtureDir, 'babel-out.js'),
+    path.join(fixtureDir, 'babel-out.jsx'),
     formatWithPrettierOrReturn(babelOutputs.code, 'babel')
   );
   await writeFileIfChanged(
@@ -179,7 +181,7 @@ async function processFixture(name) {
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath);
   // SWC output is now the canonical out.js
   await writeFileIfChanged(
-    path.join(fixtureDir, 'out.js'),
+    path.join(fixtureDir, 'out.jsx'),
     formatWithPrettierOrReturn(swcOutputs.code, 'babel')
   );
   const styleRulesToWrite =
@@ -190,6 +192,28 @@ async function processFixture(name) {
     path.join(fixtureDir, 'swc-style-rules.json'),
     JSON.stringify(styleRulesToWrite, null, 2)
   );
+
+  // Compare parity between Babel and SWC outputs
+  const [babelCode, swcCode] = await Promise.all([
+    fsp.readFile(path.join(fixtureDir, 'babel-out.jsx'), 'utf8'),
+    fsp.readFile(path.join(fixtureDir, 'out.jsx'), 'utf8'),
+  ]);
+  let codeEqual = babelCode === swcCode;
+
+  let rulesEqual = true;
+  try {
+    const [babelRulesText, swcRulesText] = await Promise.all([
+      fsp.readFile(path.join(fixtureDir, 'babel-style-rules.json'), 'utf8'),
+      fsp.readFile(path.join(fixtureDir, 'swc-style-rules.json'), 'utf8'),
+    ]);
+    const babelRules = JSON.parse(babelRulesText || '[]');
+    const swcRules = JSON.parse(swcRulesText || '[]');
+    rulesEqual = JSON.stringify(babelRules) === JSON.stringify(swcRules);
+  } catch (_err) {
+    rulesEqual = false;
+  }
+
+  return { name, codeEqual, rulesEqual };
 }
 
 async function main() {
@@ -198,8 +222,26 @@ async function main() {
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
     .map((entry) => entry.name);
 
+  const results = [];
   for (const fixtureName of fixtures) {
-    await processFixture(fixtureName);
+    const res = await processFixture(fixtureName);
+    results.push(res);
+  }
+
+  const mismatches = results.filter((r) => !r.codeEqual || !r.rulesEqual);
+  if (mismatches.length > 0) {
+    console.error('Fixture parity check failed:');
+    for (const r of mismatches) {
+      if (!r.codeEqual) {
+        console.error(` - ${r.name}: code differs (babel-out.jsx vs out.jsx)`);
+      }
+      if (!r.rulesEqual) {
+        console.error(` - ${r.name}: style rules differ (babel vs swc)`);
+      }
+    }
+    process.exitCode = 1;
+  } else {
+    console.log('All fixtures match: code and style rules are identical.');
   }
 }
 

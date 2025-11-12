@@ -496,15 +496,72 @@ fn combine_selectors(
 
     for parent_selector in &parent_selectors {
         for child_selector in &child_selectors {
-            if child_selector.contains('&') {
-                combined.push(child_selector.replace('&', parent_selector));
+            let trimmed = child_selector.trim();
+
+            // COMPAT: Detect ":pseudo &" using AST, not string heuristics,
+            // and duplicate parent by emitting "&:pseudo &" so later stages
+            // (atomicify) can substitute nesting selectors consistently with Babel.
+            if let Some(pseudo) = first_pseudo_then_nesting(child) {
+                combined.push(format!("&{} &", pseudo));
+                continue;
+            }
+
+            // If child already has a nesting selector, keep it; substitution
+            // happens later in the pipeline.
+            if trimmed.contains('&') {
+                combined.push(trimmed.to_string());
             } else {
-                combined.push(format!("{parent_selector} {}", child_selector.trim()));
+                combined.push(format!("{parent_selector} {}", trimmed));
             }
         }
     }
 
     parse_selectors(&combined)
+}
+
+fn first_pseudo_then_nesting(prelude: &QualifiedRulePrelude) -> Option<String> {
+    use swc_core::css::ast::{ComplexSelector, ComplexSelectorChildren, QualifiedRulePrelude as Q};
+
+    fn inspect_complex(selector: &ComplexSelector) -> Option<String> {
+        let mut saw_pseudo: Option<String> = None;
+        for child in &selector.children {
+            if let ComplexSelectorChildren::CompoundSelector(comp) = child {
+                // If we already saw a pseudo and now see a nesting selector, it's a match.
+                if comp.nesting_selector.is_some() {
+                    if let Some(pseudo) = saw_pseudo {
+                        return Some(pseudo);
+                    }
+                }
+                // Record first pseudo on this path (accept all pseudos)
+                if saw_pseudo.is_none() {
+                    for subclass in &comp.subclass_selectors {
+                        if let swc_core::css::ast::SubclassSelector::PseudoClass(pc) = subclass {
+                            let name = pc.name.value.to_string();
+                            saw_pseudo = Some(format!(":{}", name));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    match prelude {
+        Q::SelectorList(list) => {
+            for complex in &list.children {
+                if let Some(pseudo) = inspect_complex(complex) { return Some(pseudo); }
+            }
+            None
+        }
+        Q::RelativeSelectorList(list) => {
+            for relative in &list.children {
+                if let Some(pseudo) = inspect_complex(&relative.selector) { return Some(pseudo); }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn selectors_to_strings(prelude: &QualifiedRulePrelude) -> Vec<String> {

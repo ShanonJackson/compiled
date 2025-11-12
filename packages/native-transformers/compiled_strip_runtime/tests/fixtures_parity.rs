@@ -93,10 +93,10 @@ fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
     let input_code = fs::read_to_string(&input_path)?;
 
     // Ensure Babel baselines exist for manual inspection.
-    let _ = fs::metadata(fixture_dir.join("babel-out.js"))?;
+    let _ = fs::metadata(fixture_dir.join("babel-out.jsx"))?;
 
-    // Canonical output is now SWC in out.js
-    let mut expected_out = fs::read_to_string(fixture_dir.join("out.js"))?;
+    // Canonical output is now SWC in out.jsx
+    let mut expected_out = fs::read_to_string(fixture_dir.join("out.jsx"))?;
     let babel_style_rules = read_style_rules(&fixture_dir.join("babel-style-rules.json"))?;
     let mut stored_swc_style_rules = read_style_rules(&fixture_dir.join("swc-style-rules.json"))?;
 
@@ -148,7 +148,7 @@ fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
         fs::write(style_rules_path, format!("{}\n", style_rules_json))?;
         stored_swc_style_rules = strip_output.metadata.style_rules.clone();
 
-        let out_path = fixture_dir.join("out.js");
+        let out_path = fixture_dir.join("out.jsx");
         fs::write(&out_path, &generated_code)?;
         expected_out = generated_code.clone();
     }

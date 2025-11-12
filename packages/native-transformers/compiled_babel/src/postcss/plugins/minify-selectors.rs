@@ -2,10 +2,10 @@ use indexmap::IndexSet;
 use swc_atoms::Atom;
 use swc_core::css::ast::{
     AnPlusB, AttributeSelector, AttributeSelectorValue, ComplexSelector, ComplexSelectorChildren,
-    ComponentValue, CompoundSelector, Ident, PseudoClassSelector, PseudoClassSelectorChildren,
-    PseudoElementSelector, QualifiedRule, QualifiedRulePrelude, RelativeSelector,
-    RelativeSelectorList, Rule, SelectorList, SimpleBlock, Stylesheet, SubclassSelector,
-    TypeSelector,
+    ComponentValue, CompoundSelector, Ident, KeyframeBlock, KeyframeSelector, Number, Percentage,
+    PseudoClassSelector, PseudoClassSelectorChildren, PseudoElementSelector, QualifiedRule,
+    QualifiedRulePrelude, RelativeSelector, RelativeSelectorList, Rule, SelectorList, SimpleBlock,
+    Stylesheet, SubclassSelector, TypeSelector,
 };
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 
@@ -90,8 +90,35 @@ fn process_component_values(values: &mut [ComponentValue], sort: bool) {
             ComponentValue::Function(function) => {
                 process_component_values(&mut function.value, sort)
             }
-            ComponentValue::KeyframeBlock(block) => process_simple_block(&mut block.block, sort),
+            ComponentValue::KeyframeBlock(block) => {
+                for selector in &mut block.prelude {
+                    normalize_keyframe_selector(selector);
+                }
+                process_simple_block(&mut block.block, sort)
+            }
             _ => {}
+        }
+    }
+}
+
+fn normalize_keyframe_selector(selector: &mut KeyframeSelector) {
+    match selector {
+        KeyframeSelector::Ident(ident) => {
+            if ident.value.eq_ignore_ascii_case("from") {
+                *selector = KeyframeSelector::Percentage(Percentage {
+                    span: ident.span,
+                    value: Number { span: ident.span, value: 0.0, raw: None },
+                });
+            }
+        }
+        KeyframeSelector::Percentage(percent) => {
+            if (percent.value.value - 100.0).abs() < f64::EPSILON {
+                *selector = KeyframeSelector::Ident(Ident {
+                    span: percent.span,
+                    value: Atom::from("to"),
+                    raw: None,
+                });
+            }
         }
     }
 }

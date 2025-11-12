@@ -1,8 +1,15 @@
 Instructions.
 Your goal is to implement PLAN.md marking the headings [Completed] when each task is done.
+We're replacing two existing babel-plugins with native Rust SWC transformers, packages/babel-plugin and packages/babel-plugin-strip-runtime.
 Correctness is the goal here, but also performance. We're replicating two existing babel-plugins IDENTICALLY including all files/folders/behaviours AND bugs. Hashes MUST remain the same in output;
 However cosmetic differences like those introduced from using swc instead of babel are acceptable.
 These plugins will run as native Rust transformers NOT WASM plugins; And the packages/babel-plugin equivilent can emit "style-rules" as a return object to mimic babels 'metadata' of existing plugin.
+
+Whenever we discover differences beteween the behaviours of the two implementations; It's important we resolve the difference in a way that's faithful to the original, so the end result doesn't
+cause more drift in logic/behaviour. Our job is to translate the original in both implementation AND bugs AND AST to the new copy to be a drop-in replacement.
+
+Any differences should be in the same location as the original when fixed and we leave a comment say like
+// COMPAT: This is because babel-plugin has X behaviour and we need to replicate it here exactly.
 
 
 requirements.md
@@ -20,23 +27,17 @@ requirements.md
 - caching of imports needs to match existing bable-plugin; As this will be performance issue.
 - Performance is a priority; But correctness is our #1 priority as if it's not "the same" (except for cosmetic differences between babel/swc output irrespective of our plugin); Then it's unusuable.
 - Hashes have to remain the same, this isn't a cosmetic difference. In order for them to be the same postcss.rs AND the input structure into the hash MUST BE THE SAME
-- Create a tests/fixtures folder strucutre, in.jsx = test case, out.js = expected, actual.js (write command to generate this, but this is the ACTUAL output of in.jsx through our swc native plugin), babel-out.js which is in.jsx passed through the babel plugin (for strip runtime fixture tests it would be passed through BOTH plugins), babel-style-rules.json (JUST the style rules in a json array emitted from babel extract: true from parcel-transformer), swc-style-rules.json (JUST the style-rules in JSON array emitted from swc).
 - Our fixtures tests will verify out.js (generated from actual.js) matches babel except cosmetically; And will verify style-rules are the same including hashes.
 - The 'transform' function will emit the new AST AND will emit 'style-rules' as a returned data type, basically anything that  is on babel's metadata will be returned as a return value of the transform pass.
 - Errors should be reported with https://rustdoc.swc.rs/swc_common/errors/struct.Handler.html identically to as they are now.
 - Javascript support is NOT required; Again this plugin will run natively via Rust on a SWC AST; Therefore we are never compiling this to WASM.
 
 
-commands.md
-- Fixtures are updated via packages/native-transformers/scripts/update-fixtures.js      (Read the script)
+Testing Plan.md
+- Fixtures are going to be the test strategy for catching regressions between new plugins.
+- tests/fixtures/<test case name>, in.jsx = input code, out.jsx = output code after our plugins, babel-out.jsx output code after babel-plugins, babel-style-rules.json = JUST styleRules from babel, swc-style-rules.json = JUST styleRules from SWC
+- This is the command to update AND run fixtures for latest code: packages/native-transformers/scripts/update-fixtures.js
+- It checks for ANY missmatch in out.jsx compared to babel-out.jsx AND ANY missmatch in style-rules json files.
 
 
-
-cosmetic_differences.md - Differences that originate from swc vs babel NOT our plugin vs original plugin are completely fine. - I.E any of these are not an issue which we classify as 'cosmetic'.
-- import ordering
-- comment positioning.
-- //* PURE // comment markers that SWC adds
-- whitespace/tabbing
-- JSX preserved vs NOT preserved i.e jsx("div" vs <div>
-- Use your judgement to decide what's cosmetic and what's not if you're unsure.
 

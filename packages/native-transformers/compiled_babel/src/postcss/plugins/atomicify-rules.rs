@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use swc_core::common::{input::StringInput, FileName, SourceMap, Spanned};
 use swc_core::css::ast::{
-    AtRule, AtRuleName, AtRulePrelude, ComponentValue, Declaration, DeclarationName,
-    ListOfComponentValues, QualifiedRule, QualifiedRulePrelude, Rule, Stylesheet,
+    AtRule, AtRuleName, AtRulePrelude, ComponentValue, CompoundSelector, Declaration,
+    DeclarationName, ListOfComponentValues, QualifiedRule, QualifiedRulePrelude, Rule, Stylesheet,
 };
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
@@ -321,12 +321,12 @@ fn collect_rule_selectors(rule: &QualifiedRule) -> Vec<String> {
         QualifiedRulePrelude::SelectorList(list) => list
             .children
             .iter()
-            .filter_map(|selector| serialize_node(selector))
+            .map(serialize_complex_selector_with_possible_nesting)
             .collect(),
         QualifiedRulePrelude::RelativeSelectorList(list) => list
             .children
             .iter()
-            .filter_map(|selector| serialize_node(selector))
+            .map(|rel| serialize_complex_selector_with_possible_nesting(&rel.selector))
             .collect(),
         QualifiedRulePrelude::ListOfComponentValues(list) => {
             serialize_component_values(&list.children)
@@ -334,6 +334,48 @@ fn collect_rule_selectors(rule: &QualifiedRule) -> Vec<String> {
                 .collect()
         }
     }
+}
+
+fn serialize_complex_selector_with_possible_nesting(
+    selector: &swc_core::css::ast::ComplexSelector,
+) -> String {
+    // Count nesting selectors: leading and any later occurrence
+    let mut leading_nesting = false;
+    let mut trailing_nesting = false;
+    let mut first = true;
+    for child in &selector.children {
+        if let swc_core::css::ast::ComplexSelectorChildren::CompoundSelector(comp) = child {
+            if comp.nesting_selector.is_some() {
+                if first {
+                    leading_nesting = true;
+                } else {
+                    trailing_nesting = true;
+                }
+            }
+        }
+        first = false;
+    }
+
+    // Base serialization
+    let mut output = String::new();
+    {
+        let writer = BasicCssWriter::new(&mut output, None, Default::default());
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+        let _ = generator.emit(selector);
+    }
+
+    // If we detected a duplication pattern (leading and trailing nesting),
+    // ensure serialized string includes both '&' prefix and suffix.
+    if leading_nesting && trailing_nesting {
+        if output.starts_with(':') {
+            output = format!("&{}", output);
+        }
+        if !output.trim_end().ends_with('&') {
+            output.push_str(" &");
+        }
+    }
+
+    output
 }
 
 fn serialize_node<T>(node: &T) -> Option<String>

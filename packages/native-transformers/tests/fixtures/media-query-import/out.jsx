@@ -6,7 +6,7 @@ export const responsiveStyles = null;
 export const responsiveTemplate = null;
 export const MediaExample = () => (
 	<section
-		className={ax(["_syazr3uz _hjr5u67f _1pnlcc57 _17lw8n31", "_syaz1usb _hjr5qgb6 _1pnl15td"])}
+		className={ax(["_syazr3uz _hjr51x77 _1pnl1gc2 _17lw8n31", "_syaz1lra _hjr52e8d _1pnl1he7"])}
 	>
 		responsive media queries
 	</section>

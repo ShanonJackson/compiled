@@ -1,3 +1,5 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
 use swc_core::css::ast::{Rule, Stylesheet};
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 
@@ -30,6 +32,11 @@ pub fn extract_stylesheets() -> ExtractStyleSheets {
     ExtractStyleSheets
 }
 
+static AT_RULE_SPACE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"@(?:(media|supports|container|document|-moz-document))\(")
+        .expect("valid at-rule spacing regex")
+});
+
 fn serialize_rule(rule: &Rule) -> Option<String> {
     let mut output = String::new();
     {
@@ -40,5 +47,9 @@ fn serialize_rule(rule: &Rule) -> Option<String> {
         }
     }
 
+    // COMPAT: Normalize a single space after @media/@supports/etc before '(' to match Babel
+    output = AT_RULE_SPACE_REGEX
+        .replace_all(&output, |caps: &regex::Captures| format!("@{} (", &caps[1]))
+        .into_owned();
     Some(output)
 }

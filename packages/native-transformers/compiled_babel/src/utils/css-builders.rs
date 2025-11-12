@@ -4,8 +4,8 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
-    ExprOrSpread, Ident, Lit, MemberExpr, ObjectLit, Prop, PropOrSpread, SpreadElement, TaggedTpl,
-    Tpl, TplElement, UnaryExpr, UnaryOp,
+    ExprOrSpread, Ident, Lit, MemberExpr, ObjectLit, Prop, PropName, PropOrSpread, SpreadElement,
+    TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
 };
 use swc_ecma_codegen::text_writer::JsWriter;
 use swc_ecma_codegen::{Config, Emitter, Node};
@@ -55,6 +55,97 @@ fn print_expression(expr: &Expr) -> String {
     }
 
     String::from_utf8(buffer).expect("expression to utf8 string")
+}
+
+fn babel_like_code_for_hash(expr: &Expr) -> String {
+    // Aim to mimic Babel generator output sufficiently for hashing.
+    fn print_object_pretty(obj: &ObjectLit, indent: usize) -> String {
+        let pad_inner = " ".repeat(indent + 2);
+        let mut entries: Vec<String> = Vec::new();
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(p) = prop {
+                if let Prop::KeyValue(kv) = p.as_ref() {
+                    let key = match &kv.key {
+                        PropName::Ident(i) => i.sym.as_ref().to_string(),
+                        PropName::Str(s) => s.value.as_ref().to_string(),
+                        PropName::Num(n) => {
+                            let mut s = n.value.to_string();
+                            if s.ends_with(".0") { s.truncate(s.len()-2); }
+                            s
+                        }
+                        PropName::Computed(c) => print_expr(&c.expr),
+                        PropName::BigInt(bi) => bi.value.to_string(),
+                    };
+                    let value = match &*kv.value {
+                        Expr::Object(inner) => {
+                            let inner_str = print_object_pretty(inner, indent + 2);
+                            format!("{{\n{}\n{}}}", inner_str, pad_inner)
+                        }
+                        other => print_expr(other),
+                    };
+                    entries.push(format!("{}{}: {}", pad_inner, key, value));
+                }
+            }
+        }
+        entries.join(",\n")
+    }
+
+    fn print_expr(e: &Expr) -> String {
+        match e {
+            Expr::Ident(id) => id.sym.as_ref().to_string(),
+            Expr::Lit(Lit::Num(n)) => {
+                let mut s = n.value.to_string();
+                if s.ends_with(".0") {
+                    s.truncate(s.len() - 2);
+                }
+                s
+            }
+            Expr::Object(obj) => format!("{{\n{}\n}}", print_object_pretty(obj, 0)),
+            Expr::Array(arr) => {
+                let mut items: Vec<String> = Vec::new();
+                for el in &arr.elems {
+                    if let Some(el) = el {
+                        items.push(print_expr(&el.expr));
+                    }
+                }
+                format!("[{}]", items.join(", "))
+            }
+            Expr::Call(call) => {
+                let callee = match &call.callee {
+                    Callee::Expr(c) => print_expr(c.as_ref()),
+                    _ => "".to_string(),
+                };
+                let mut args: Vec<String> = Vec::new();
+                for a in &call.args {
+                    args.push(print_expr(&a.expr));
+                }
+                format!("{}({})", callee, args.join(", "))
+            }
+            Expr::TaggedTpl(tagged) => {
+                // Print tag identifier and raw template contents preserving quasis
+                let mut out = String::new();
+                match tagged.tag.as_ref() {
+                    Expr::Ident(id) => out.push_str(id.sym.as_ref()),
+                    other => out.push_str(&print_expr(other)),
+                }
+                out.push('`');
+                let tpl = &tagged.tpl;
+                for (i, quasi) in tpl.quasis.iter().enumerate() {
+                    out.push_str(quasi.raw.as_ref());
+                    if i < tpl.exprs.len() {
+                        out.push_str("${");
+                        out.push_str(&print_expr(&tpl.exprs[i]));
+                        out.push('}');
+                    }
+                }
+                out.push('`');
+                out
+            }
+            _ => print_expression(e),
+        }
+    }
+
+    print_expr(expr)
 }
 
 fn call_arguments_as_array(call: &CallExpr) -> Expr {
@@ -771,7 +862,19 @@ pub fn extract_keyframes_with_builder<F>(
 where
     F: FnMut(&Expr, &Metadata) -> CssOutput,
 {
-    let code = print_expression(expression);
+    // COMPAT: Babel computes the keyframe name by hashing `generate(expression).code`.
+    // Our SWC port originally stringified the expression using swc_ecma_codegen which can
+    // differ subtly (whitespace/formatting) from Babel, leading to different hashes.
+    // To stay faithful to the original, prefer hashing the exact source snippet for the
+    // expression span when available; this most closely mirrors Babel's generator output
+    // for the subset we use (TaggedTemplate and Call with literals), and ensures stable
+    // cross-implementation hashing. If a snippet can't be retrieved, fall back to SWC printing.
+    // Use Babel-like serialization for hashing to match original plugin
+    let mut code = babel_like_code_for_hash(expression);
+    // COMPAT: Normalize newlines
+    if code.contains('\r') {
+        code = code.replace("\r\n", "\n").replace('\r', "");
+    }
     let name = format!("k{}", hash(&code));
     let selector = format!("@keyframes {name}");
 

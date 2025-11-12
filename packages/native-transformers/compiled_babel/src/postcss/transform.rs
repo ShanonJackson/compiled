@@ -194,6 +194,9 @@ pub fn transform_css(
     for plugin in normalize_css(&options) {
         pipeline.push(plugin);
     }
+    // COMPAT: Run minimal color minification before hashing so value-based
+    // class name hashes match Babel (which normalizes colors pre-atomicify).
+    pipeline.push(Box::new(super::plugins::colormin_lite::colormin_lite()));
     pipeline.push(Box::new(expand_shorthands()));
     pipeline.push(Box::new(atomicify_rules()));
 

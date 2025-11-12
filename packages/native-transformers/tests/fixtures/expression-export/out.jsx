@@ -9,11 +9,11 @@ export const expressionObject = null;
 export const ExpressionExample = () => (
 	<div
 		className={ax([
-			"_ca0q1f4h _u5f31f4h _n3td1f4h _19bv1f4h _syazudzx _1llw1f4f",
-			"_2rko14y2 _18u0dlk8",
+			"_ca0q1f4h _u5f31f4h _n3td1f4h _19bv1f4h _syaz1o0q _1llw1f4f",
+			"_2rko8y89 _18u0dlk8",
 		])}
 		style={{
-			"--_155apf6": ix(colors[2]),
+			"--_y28lkp": ix(Math.max(base - 5, 0), "px"),
 		}}
 	>
 		expression output

@@ -2,7 +2,8 @@
 members = [
   "compiled_babel",
   "compiled_strip_runtime",
-  "fixtures_cli"
+  "fixtures_cli",
+  "postcss/crates/postcss"
 ]
 resolver = "2"
 

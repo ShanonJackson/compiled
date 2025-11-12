@@ -3,8 +3,8 @@
 Each fixture includes the following files for regression comparison between the Babel and SWC implementations:
 
 - `in.jsx` – source input provided to both transformers.
-- `babel-out.js` – output produced by `@compiled/babel-plugin` (+ strip-runtime where applicable).
-- `out.js` – output produced by the native SWC transformers (canonical output for tests).
+- `babel-out.jsx` – output produced by `@compiled/babel-plugin` (+ strip-runtime where applicable).
+- `out.jsx` – output produced by the native SWC transformers (canonical output for tests).
 - `babel-style-rules.json` – JSON array of style rules emitted by the Babel extract flow.
 - `swc-style-rules.json` – JSON array of style rules emitted by the native transformer when `extract` is enabled.
 

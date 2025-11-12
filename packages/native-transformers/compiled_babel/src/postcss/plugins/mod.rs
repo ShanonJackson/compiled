@@ -4,6 +4,9 @@
 pub mod at_rules;
 #[path = "atomicify-rules.rs"]
 pub mod atomicify_rules;
+// colormin is not yet enabled; when parity requires it we can add it back.
+// #[path = "colormin.rs"]
+// pub mod colormin;
 #[path = "discard-comments.rs"]
 pub mod discard_comments;
 #[path = "discard-duplicates.rs"]
@@ -28,6 +31,8 @@ pub mod minify_selectors;
 pub mod nested;
 #[path = "normalize-css.rs"]
 pub mod normalize_css;
+#[path = "colormin_lite.rs"]
+pub mod colormin_lite;
 #[path = "convert-values.rs"]
 pub mod convert_values;
 #[path = "normalize-current-color.rs"]

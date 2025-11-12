@@ -28,7 +28,10 @@ pub(crate) fn create_transform_css_options(
     let mut options = TransformCssOptions::default();
     options.optimize_css = state.opts.optimize_css;
     options.increase_specificity = state.opts.increase_specificity;
-    options.sort_at_rules = state.opts.sort_at_rules;
+    // COMPAT: When generating runtime sheets for hoisting into the program,
+    // Babel collects rules in encounter order (pre final at-rule sorting).
+    // Disable at-rule sorting here so metadata.styleRules ordering matches.
+    options.sort_at_rules = Some(false);
     options.sort_shorthand = None;
     options.class_hash_prefix = state.opts.class_hash_prefix.clone();
     options.flatten_multiple_selectors = state.opts.flatten_multiple_selectors;
@@ -67,6 +70,34 @@ fn string_literal(value: String) -> Expr {
         value: Atom::from(value),
         raw: None,
     }))
+}
+
+fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
+    // Find the first '.' that starts a class selector, even if nested in at-rules
+    if let Some(dot) = sheet.find('.') {
+        // class name runs until next '{' or whitespace/comma
+        let rest = &sheet[dot + 1..];
+        let end = rest
+            .find(|c: char| c == '{' || c == ' ' || c == ',' )
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn order_class_names_by_sheet(class_names: &mut [String], sheets: &[String]) {
+    use std::collections::HashMap;
+    let mut order: HashMap<String, usize> = HashMap::new();
+    for (i, sheet) in sheets.iter().enumerate() {
+        if let Some(class_name) = extract_first_class_from_sheet(sheet) {
+            order.entry(class_name).or_insert(i);
+        }
+    }
+
+    class_names.sort_by_key(|name| order.get(name).copied().unwrap_or(usize::MAX));
 }
 
 fn negate_expression(expr: Expr) -> Expr {
@@ -206,8 +237,10 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result =
                 transform_css(&logical.css, options).unwrap_or_else(|err| panic!("{err}"));
-            let compressed_class_names =
+            let mut compressed_class_names =
                 compress_class_names_for_runtime(&css_result.class_names, compression_map.as_ref());
+            // COMPAT: Match Babel ordering by aligning className order with sheet emission order
+            order_class_names_by_sheet(&mut compressed_class_names, &css_result.sheets);
             let class_name_literal = string_literal(compressed_class_names.join(" "));
 
             TransformCssItemResult {
@@ -236,8 +269,10 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let css = get_item_css(item);
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
-            let compressed_class_names =
+            let mut compressed_class_names =
                 compress_class_names_for_runtime(&css_result.class_names, compression_map.as_ref());
+            // COMPAT: Match Babel ordering by aligning className order with sheet emission order
+            order_class_names_by_sheet(&mut compressed_class_names, &css_result.sheets);
             let class_name = compressed_class_names.join(" ");
             let class_expression = if class_name.trim().is_empty() {
                 None

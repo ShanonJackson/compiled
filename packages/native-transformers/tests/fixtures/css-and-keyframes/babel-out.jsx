@@ -3,4 +3,5 @@ import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 const fadeIn = null;
 const styles = null;
+const test = "Hello world";
 export const Component = () => <div className={ax(["_y44v16rn"])}>Hello</div>;

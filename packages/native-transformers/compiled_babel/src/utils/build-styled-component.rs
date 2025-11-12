@@ -437,11 +437,40 @@ fn serialize_css_items(css: &[CssItem]) -> (String, Vec<CssItem>) {
     (unconditional, conditional)
 }
 
+fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
+    if let Some(dot) = sheet.find('.') {
+        let rest = &sheet[dot + 1..];
+        let end = rest
+            .find(|c: char| c == '{' || c == ' ' || c == ',')
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn order_class_names_by_sheet(class_names: &mut [String], sheets: &[String]) {
+    use std::collections::HashMap;
+    let mut order: HashMap<String, usize> = HashMap::new();
+    for (i, sheet) in sheets.iter().enumerate() {
+        if let Some(class_name) = extract_first_class_from_sheet(sheet) {
+            order.entry(class_name).or_insert(i);
+        }
+    }
+
+    class_names.sort_by_key(|name| order.get(name).copied().unwrap_or(usize::MAX));
+}
+
 fn compress_class_names(
     class_names: &[String],
     compression_map: Option<&BTreeMap<String, String>>,
+    sheets: &[String],
 ) -> String {
-    let compressed = compress_class_names_for_runtime(class_names, compression_map);
+    let mut compressed = compress_class_names_for_runtime(class_names, compression_map);
+    // COMPAT: Align class name ordering with emitted sheets like Babel
+    order_class_names_by_sheet(&mut compressed, sheets);
     compressed.join(" ")
 }
 
@@ -493,7 +522,8 @@ pub fn build_styled_component(tag: Tag, css_output: CssOutput, meta: &Metadata) 
     let conditional_output = transform_css_items(&conditional_items, meta);
 
     let class_map_ref = compression_map.as_ref();
-    let unconditional_class_names = compress_class_names(&css_result.class_names, class_map_ref);
+    let unconditional_class_names =
+        compress_class_names(&css_result.class_names, class_map_ref, &css_result.sheets);
 
     let component_name = component_name_from_metadata(meta);
     let helper = get_runtime_class_name_library(meta);
