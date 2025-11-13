@@ -309,6 +309,8 @@ dependencies = [
  "once_cell",
  "oxc-browserslist",
  "oxc_resolver",
+ "percent-encoding",
+ "postcss",
  "regex",
  "serde",
  "serde_json",
@@ -317,6 +319,7 @@ dependencies = [
  "swc_ecma_codegen",
  "swc_ecma_parser",
  "tempfile",
+ "url",
 ]
 
 [[package]]

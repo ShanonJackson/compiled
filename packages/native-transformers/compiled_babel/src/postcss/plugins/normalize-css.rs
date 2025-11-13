@@ -17,7 +17,8 @@ pub fn normalize_css(options: &TransformCssOptions) -> Vec<Box<dyn Plugin>> {
 
     if options.optimize_css.unwrap_or(true) {
         // Production-only plugins that cssnano would include.
-        plugins.push(Box::new(super::ordered_values::ordered_values()));
+        // Legacy ordered-values plugin is disabled in favor of the engine port
+        plugins.push(Box::new(CssnanoPlaceholder::new("postcss-ordered-values")));
         plugins.push(Box::new(reduce_initial()));
         plugins.push(Box::new(super::convert_values::convert_values()));
         plugins.push(Box::new(CssnanoPlaceholder::new("postcss-colormin")));

@@ -24,4 +24,7 @@ Regenerate Fixtures
 Notes
 - JS bridges in `compiled_babel/index.js` and `compiled_strip_runtime/index.js` are not required for fixtures; they remain for optional SWC loader parity and will attempt `@swc/core/node` when used directly.
 - If your environment fails linking due to LTO, you can set `RUSTFLAGS="-Clto=no"` for builds.
-
+  - Some environments set `RUSTFLAGS` globally (e.g. enabling LTO). If you see `lto cannot be used for proc-macro crate type`, run with `RUSTFLAGS=-Clto=no`.
+  - Convenience scripts:
+    - Windows PowerShell: `packages/native-transformers/scripts/cargo-check-postcss-no-lto.ps1`
+    - Bash: `packages/native-transformers/scripts/cargo-check-postcss-no-lto.sh`

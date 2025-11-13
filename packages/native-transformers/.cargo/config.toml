@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-Clto=no"]
+
+[env]
+RUSTFLAGS = { value = "-Clto=no", force = true }

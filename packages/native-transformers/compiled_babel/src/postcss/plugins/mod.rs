@@ -31,6 +31,8 @@ pub mod minify_selectors;
 pub mod nested;
 #[path = "normalize-css.rs"]
 pub mod normalize_css;
+#[path = "normalize_css_engine/mod.rs"]
+pub mod normalize_css_engine;
 #[path = "colormin_lite.rs"]
 pub mod colormin_lite;
 #[path = "convert-values.rs"]
@@ -39,8 +41,8 @@ pub mod convert_values;
 pub mod normalize_current_color;
 #[path = "normalize-whitespace.rs"]
 pub mod normalize_whitespace;
-#[path = "ordered-values.rs"]
-pub mod ordered_values;
+// #[path = "ordered-values.rs"]
+// pub mod ordered_values;
 #[path = "parent-orphaned-pseudos.rs"]
 pub mod parent_orphaned_pseudos;
 #[path = "reduce-initial/mod.rs"]

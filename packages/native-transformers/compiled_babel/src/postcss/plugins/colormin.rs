@@ -63,25 +63,17 @@ fn minimize_declarations(values: &mut Vec<ComponentValue>) {
 }
 
 fn minimize_declaration(decl: &mut Declaration) {
-    if decl.value.is_empty() {
-        return;
-    }
-
-    // Try to serialize the value into a string and check if it's a single Ident color
-    if decl.value.len() == 1 {
-        if let ComponentValue::PreservedToken(tok) = &decl.value[0] {
+    if decl.value.is_empty() { return; }
+    // Walk tokens and replace color idents with shorter hex where beneficial
+    for comp in decl.value.iter_mut() {
+        if let ComponentValue::PreservedToken(tok) = comp {
             if let Token::Ident { value, .. } = &tok.token {
-                // Attempt parsing ident as color
                 let name = value.to_string();
                 if let Ok(color) = Color::parse(&name) {
                     let hex = color_to_short_hex(&color);
-                    // Choose the shorter representation; on tie, prefer ident
                     if hex.len() < name.len() {
-                        decl.value = vec![ComponentValue::Ident(Ident {
-                            span: decl.span,
-                            value: Atom::from(hex.as_str()),
-                            raw: None,
-                        })];
+                        // Replace token with Ident node to ensure proper serialization
+                        *comp = ComponentValue::Ident(Ident { span: decl.span, value: Atom::from(hex.as_str()), raw: None });
                     }
                 }
             }
@@ -98,4 +90,3 @@ fn color_to_short_hex(color: &Color) -> String {
     }
     format!("#{:02x}{:02x}{:02x}", r, g, b)
 }
-

@@ -6,11 +6,11 @@
   "._1l201r31:focus ._1l201r31{outline-color:currentColor}",
   "._cwctglyw:focus ._cwctglyw{outline-style:none}",
   "._d7ut1o36:focus ._d7ut1o36{outline-width:medium}",
+  "@keyframes k17e8rkr{0%{opacity:0}to{opacity:1}}",
+  "._y44v65d0{animation:k17e8rkr 2s linear}",
+  "._aetr1vm8:after{content:\"!\"}",
   "._1wybdlk8{font-size:14px}",
   "@media (min-width:600px){._72bc18cn:hover{content:\"hover\"}._1qiwr3uz:hover{background-color:#000}}",
   "._syazxbvz{color:#1e90ff}",
-  "._syaz14zx{color:crimson}",
-  "@keyframes k17e8rkr{0%{opacity:0}to{opacity:1}}",
-  "._y44v65d0{animation:k17e8rkr 2s linear}",
-  "._aetr1vm8:after{content:\"!\"}"
+  "._syaz14zx{color:crimson}"
 ]

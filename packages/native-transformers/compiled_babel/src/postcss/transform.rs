@@ -7,6 +7,9 @@ use swc_core::css::ast::Stylesheet;
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
+#[cfg(feature = "postcss_engine")]
+use super::postcss_pipeline::transform_css_via_postcss;
+
 use super::plugins::discard_comments::collect_preserved_comments;
 use super::plugins::{
     atomicify_rules::atomicify_rules, discard_duplicates::discard_duplicates,
@@ -43,7 +46,7 @@ pub struct CssTransformError {
 }
 
 impl CssTransformError {
-    fn from_message(message: impl Into<String>) -> Self {
+    pub(crate) fn from_message(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -165,6 +168,11 @@ pub fn transform_css(
     css: &str,
     mut options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
+    #[cfg(feature = "postcss_engine")]
+    if std::env::var("COMPILED_USE_POSTCSS").is_ok() {
+        return transform_css_via_postcss(css, options);
+    }
+
     let preserved_comments = collect_preserved_comments(css, options.optimize_css);
     let mut stylesheet = match parse_stylesheet(css) {
         Ok(sheet) => sheet,

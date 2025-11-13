@@ -127,9 +127,8 @@ fn normalize_declaration(declaration: &mut Declaration, cache: &mut ValueCache) 
 
     if let Some(output) = result {
         cache.insert(original_value.clone(), output.clone());
-        if current_serialized != output {
-            declaration.value = parse_value_to_components(&output);
-        }
+        // Always set parsed components from the normalized output to preserve explicit spaces
+        declaration.value = parse_value_to_components(&output);
     } else {
         cache.insert(original_value.clone(), original_value.clone());
         if current_serialized != original_value {

@@ -3,7 +3,17 @@ members = [
   "compiled_babel",
   "compiled_strip_runtime",
   "fixtures_cli",
-  "postcss/crates/postcss"
+  "postcss"
 ]
 resolver = "2"
+
+[profile.dev]
+lto = false
+
+[profile.test]
+lto = false
+
+[profile.release]
+lto = false
+
 

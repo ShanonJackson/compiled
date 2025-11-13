@@ -1,15 +1,13 @@
 Instructions.
-Your goal is to implement PLAN.md marking the headings [Completed] when each task is done.
 We're replacing two existing babel-plugins with native Rust SWC transformers, packages/babel-plugin and packages/babel-plugin-strip-runtime.
-Correctness is the goal here, but also performance. We're replicating two existing babel-plugins IDENTICALLY including all files/folders/behaviours AND bugs. Hashes MUST remain the same in output;
-However cosmetic differences like those introduced from using swc instead of babel are acceptable.
-These plugins will run as native Rust transformers NOT WASM plugins; And the packages/babel-plugin equivilent can emit "style-rules" as a return object to mimic babels 'metadata' of existing plugin.
+Correctness is the goal here, which is defined as a 1:1 faithful identical port from js to rust including all behaviours, bugs and hash equality.
+To achieve this we've replicated 'hopefully' the entire file/folder structure of the originals in Rust, AND re-implemented 'postcss' AND all it's plugins entirely in Rust for the versions of the libraries that the originals were using.
+It's 'possible' that small differences may be found in our ports of these (postcss port, babel-plugin port or babel-plugin-strip-runtime port) however whenever we find these differences we need to resolve them in a way that makes the output identical to the original babel-plugins.
+However, the WAY we resolve them is important, when we find a difference we first need to check the 'input' to see the exact point in the packages/babel-plugin that input becomes wrong;
+That's where we need to fix the issue, because our goal is to have a 1:1 replica including all bugs, if we just start fixing issues bespokely we will diverge and we've failed.
+Whenever we can't achieve a 1:1 replica (i.e because Babel has an API that SWC doesn't have) then you need to raise that and suggest a way forwards. I.E We had clear comment: // COMPAT: Babel does x we need to replicate that here with Y
 
-Whenever we discover differences beteween the behaviours of the two implementations; It's important we resolve the difference in a way that's faithful to the original, so the end result doesn't
-cause more drift in logic/behaviour. Our job is to translate the original in both implementation AND bugs AND AST to the new copy to be a drop-in replacement.
-
-Any differences should be in the same location as the original when fixed and we leave a comment say like
-// COMPAT: This is because babel-plugin has X behaviour and we need to replicate it here exactly.
+Our work is almost done, we're in the process of verifying correctness and just finished our postcss pipeline.
 
 
 requirements.md

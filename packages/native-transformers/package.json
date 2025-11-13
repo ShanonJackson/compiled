@@ -1,7 +1,7 @@
 {
   "name": "@compiled/native-transformers",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "workspaces": [
     "compiled_babel",
     "compiled_strip_runtime"

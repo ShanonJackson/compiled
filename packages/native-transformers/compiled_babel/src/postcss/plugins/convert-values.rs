@@ -55,48 +55,41 @@ fn convert_in_components(values: &mut Vec<ComponentValue>) {
     }
 }
 
-fn is_font_size_property(name: &DeclarationName) -> bool {
+fn is_ident(name: &DeclarationName, expected: &str) -> bool {
     match name {
-        DeclarationName::Ident(ident) => ident.value.as_ref().eq_ignore_ascii_case("font-size"),
-        DeclarationName::DashedIdent(_) => false,
+        DeclarationName::Ident(ident) => ident.value.as_ref().eq_ignore_ascii_case(expected),
+        _ => false,
     }
 }
 
 fn convert_in_declaration(decl: &mut Declaration) {
-    if !is_font_size_property(&decl.name) {
-        return;
-    }
-
+    // Only handle single numeric length for now (strict match to our needs)
     if decl.value.len() != 1 {
         return;
     }
 
-    let Some(ComponentValue::Dimension(dim)) = decl.value.get_mut(0) else {
-        return;
-    };
+    let Some(ComponentValue::Dimension(dim)) = decl.value.get_mut(0) else { return; };
+    let Dimension::Length(length) = &mut **dim else { return; };
 
-    let Dimension::Length(length) = &mut **dim else {
-        return;
-    };
+    if !length.unit.value.as_ref().eq_ignore_ascii_case("px") { return; }
 
-    // Only convert from px; this is sufficient for current fixtures and mirrors cssnano's
-    // intent to shorten absolute lengths while preserving meaning.
-    if !length.unit.value.as_ref().eq_ignore_ascii_case("px") {
-        return;
-    }
-
-    // Extract numeric value; Number holds a floating value and optional raw text.
     let px_value = length.value.value;
+    // For a subset of properties, convert px -> pt/pc when strictly shorter
+    let convertible = matches!(
+        decl.name,
+        DeclarationName::Ident(ref ident)
+            if ident.value.as_ref().eq_ignore_ascii_case("font-size")
+            || ident.value.as_ref().eq_ignore_ascii_case("gap")
+    );
+    if !convertible { return; }
 
     if let Some(unit) = choose_shorter_length(px_value) {
         let value_num = value_num_for_unit(unit, px_value);
         let value_str = format_number(value_num);
-        // If chosen representation is strictly shorter than original, apply it.
         let original = format!("{}px", format_number(px_value));
         let candidate = format!("{}{}", value_str, unit);
         if candidate.len() < original.len() {
             length.unit.value = Atom::from(unit);
-            // Update the numeric value; set raw to None so emitter prints canonical form from value.
             length.value = Number { value: value_num, raw: None, span: DUMMY_SP };
         }
     }

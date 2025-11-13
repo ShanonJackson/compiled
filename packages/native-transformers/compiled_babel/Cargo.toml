@@ -8,7 +8,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 oxc_resolver = "11.13.1"
-oxc_browserslist = { package = "oxc-browserslist", version = "2.1.2" }
 serde = { version = "=1.0.197", features = ["derive"] }
 serde_json = "=1.0.128"
 indexmap = "=2.6.0"
@@ -29,6 +28,15 @@ swc_core = { version = "=26.3.4", features = [
 ] }
 swc_ecma_codegen = "=13.2.0"
 swc_ecma_parser = "=14.0.2"
+url = "2.5.7"
+percent-encoding = "2.3.1"
+postcss = { path = "../postcss", optional = true }
+oxc_browserslist = { package = "oxc-browserslist", version = "2.1.2" }
+
+[features]
+default = []
+# Experimental: use the vendored PostCSS engine for development.
+postcss_engine = ["postcss"]
 
 [dev-dependencies]
 insta = "1.39.0"
