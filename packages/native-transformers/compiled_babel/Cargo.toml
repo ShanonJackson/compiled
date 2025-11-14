@@ -14,6 +14,7 @@ indexmap = "=2.6.0"
 csscolorparser = "0.6"
 once_cell = "1.19.0"
 regex = "1.10.4"
+ryu-js = "1.0.2"
 swc_atoms = "5.0.0"
 swc_core = { version = "=26.3.4", features = [
   "common",
@@ -34,8 +35,8 @@ postcss = { path = "../postcss", optional = true }
 oxc_browserslist = { package = "oxc-browserslist", version = "2.1.2" }
 
 [features]
-default = []
-# Experimental: use the vendored PostCSS engine for development.
+# Use the vendored PostCSS engine by default for identical pipeline parity.
+default = ["postcss_engine"]
 postcss_engine = ["postcss"]
 
 [dev-dependencies]

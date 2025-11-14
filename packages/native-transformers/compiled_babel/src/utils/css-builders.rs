@@ -7,6 +7,7 @@ use swc_core::ecma::ast::{
     ExprOrSpread, Ident, Lit, MemberExpr, ObjectLit, Prop, PropName, PropOrSpread, SpreadElement,
     TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
 };
+use swc_core::ecma::ast::MemberProp;
 use swc_ecma_codegen::text_writer::JsWriter;
 use swc_ecma_codegen::{Config, Emitter, Node};
 
@@ -58,7 +59,25 @@ fn print_expression(expr: &Expr) -> String {
 }
 
 fn babel_like_code_for_hash(expr: &Expr) -> String {
-    // Aim to mimic Babel generator output sufficiently for hashing.
+    // Aim to mirror Babel generator output for the expression shapes that
+    // appear in keyframes hashing. This serializer purposefully does not fall
+    // back to SWC codegen to avoid drift from Babel formatting.
+
+    fn escape_string(value: &str) -> String {
+        let mut out = String::with_capacity(value.len() + 8);
+        for ch in value.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                _ => out.push(ch),
+            }
+        }
+        out
+    }
+
     fn print_object_pretty(obj: &ObjectLit, indent: usize) -> String {
         let pad_inner = " ".repeat(indent + 2);
         let mut entries: Vec<String> = Vec::new();
@@ -100,6 +119,12 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
                 }
                 s
             }
+            Expr::Lit(Lit::Str(s)) => format!("\"{}\"", escape_string(s.value.as_ref())),
+            Expr::Lit(Lit::Bool(b)) => {
+                if b.value { "true".to_string() } else { "false".to_string() }
+            }
+            Expr::Lit(Lit::Null(_)) => "null".to_string(),
+            Expr::Lit(Lit::BigInt(bi)) => format!("{}n", bi.value),
             Expr::Object(obj) => format!("{{\n{}\n}}", print_object_pretty(obj, 0)),
             Expr::Array(arr) => {
                 let mut items: Vec<String> = Vec::new();
@@ -141,7 +166,89 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
                 out.push('`');
                 out
             }
-            _ => print_expression(e),
+            Expr::Tpl(tpl) => {
+                let mut out = String::new();
+                out.push('`');
+                for (i, quasi) in tpl.quasis.iter().enumerate() {
+                    out.push_str(quasi.raw.as_ref());
+                    if i < tpl.exprs.len() {
+                        out.push_str("${");
+                        out.push_str(&print_expr(&tpl.exprs[i]));
+                        out.push('}');
+                    }
+                }
+                out.push('`');
+                out
+            }
+            Expr::Member(member) => {
+                let obj = print_expr(&member.obj);
+                match &member.prop {
+                    MemberProp::Ident(prop) => format!("{}.{}", obj, prop.sym.as_ref()),
+                    MemberProp::Computed(c) => format!("{}[{}]", obj, print_expr(&c.expr)),
+                    MemberProp::PrivateName(_) => panic!(
+                        "unsupported private name in member expression for keyframes hash"
+                    ),
+                }
+            }
+            Expr::Paren(p) => format!("({})", print_expr(&p.expr)),
+            Expr::Unary(un) => {
+                let op = match un.op {
+                    UnaryOp::Minus => "-",
+                    UnaryOp::Plus => "+",
+                    UnaryOp::Bang => "!",
+                    UnaryOp::Tilde => "~",
+                    UnaryOp::TypeOf => "typeof ",
+                    UnaryOp::Void => "void ",
+                    UnaryOp::Delete => "delete ",
+                };
+                format!("{}{}", op, print_expr(&un.arg))
+            }
+            Expr::Bin(bin) => {
+                // Basic binary printing with spaces around operator.
+                let op = match bin.op {
+                    BinaryOp::EqEq => "==",
+                    BinaryOp::NotEq => "!=",
+                    BinaryOp::EqEqEq => "===",
+                    BinaryOp::NotEqEq => "!==",
+                    BinaryOp::Lt => "<",
+                    BinaryOp::LtEq => "<=",
+                    BinaryOp::Gt => ">",
+                    BinaryOp::GtEq => ">=",
+                    BinaryOp::LShift => "<<",
+                    BinaryOp::RShift => ">>",
+                    BinaryOp::ZeroFillRShift => ">>>",
+                    BinaryOp::Add => "+",
+                    BinaryOp::Sub => "-",
+                    BinaryOp::Mul => "*",
+                    BinaryOp::Div => "/",
+                    BinaryOp::Mod => "%",
+                    BinaryOp::BitOr => "|",
+                    BinaryOp::BitXor => "^",
+                    BinaryOp::BitAnd => "&",
+                    BinaryOp::LogicalOr => "||",
+                    BinaryOp::LogicalAnd => "&&",
+                    BinaryOp::In => "in",
+                    BinaryOp::InstanceOf => "instanceof",
+                    BinaryOp::Exp => "**",
+                    BinaryOp::NullishCoalescing => "??",
+                };
+                format!(
+                    "{} {} {}",
+                    print_expr(&bin.left),
+                    op,
+                    print_expr(&bin.right)
+                )
+            }
+            Expr::Cond(cond) => format!(
+                "{} ? {} : {}",
+                print_expr(&cond.test),
+                print_expr(&cond.cons),
+                print_expr(&cond.alt)
+            ),
+            other => panic!(
+                "unsupported expression in keyframes hash serialization: {:?}",
+                other
+            ),
         }
     }
 

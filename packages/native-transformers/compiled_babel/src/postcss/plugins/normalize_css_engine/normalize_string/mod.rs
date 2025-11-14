@@ -75,6 +75,17 @@ fn change_wrapping_quotes(node_quote: &mut char, nodes: &mut Vec<(String,&'stati
 }
 
 fn normalize_value(value: &str, preferred_quote: char) -> String {
+    // Fast path: skip when there are no quotes, escapes or newlines
+    if !value.contains('\'') && !value.contains('"') && !value.contains('\\') && !value.contains('\n') {
+        return value.to_string();
+    }
+    // Optional guard via env to avoid pathological allocations on very large inputs
+    if let Ok(max_str) = std::env::var("COMPILED_STRING_NORM_MAXLEN") {
+        if let Ok(max) = max_str.parse::<usize>() {
+            if value.len() > max { return value.to_string(); }
+        }
+    }
+
     let mut parsed = vp::parse(value);
     vp::walk(&mut parsed.nodes[..], &mut |n| {
         match n {
@@ -95,23 +106,31 @@ fn normalize_value(value: &str, preferred_quote: char) -> String {
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
+    let preferred_quote = '"';
     pc::plugin("postcss-normalize-string")
-        .prepare(|_result| {
-            let preferred_quote = '"';
-            let cache = std::sync::Mutex::new(std::collections::HashMap::<String,String>::new());
-            pc::PreparedCallbacks::default().once_exit(move |css, _| {
-                css.walk(|node| {
-                    match node {
-                        pc::NodeLike::Rule(r) => { let sel = r.selector(); let key = format!("S|{}", sel); if let Some(v)=cache.lock().unwrap().get(&key).cloned(){ r.set_selector(v); } else { let nv = normalize_value(&sel, preferred_quote); cache.lock().unwrap().insert(key.clone(), nv.clone()); r.set_selector(nv); } }
-                        pc::NodeLike::Decl(d) => { let v = d.value(); let key = format!("V|{}", v); if let Some(n)=cache.lock().unwrap().get(&key).cloned(){ d.set_value(n); } else { let nv = normalize_value(&v, preferred_quote); cache.lock().unwrap().insert(key.clone(), nv.clone()); d.set_value(nv); } }
-                        pc::NodeLike::AtRule(a) => { let p = a.params(); let key = format!("P|{}", p); if let Some(n)=cache.lock().unwrap().get(&key).cloned(){ a.set_params(n); } else { let nv = normalize_value(&p, preferred_quote); cache.lock().unwrap().insert(key.clone(), nv.clone()); a.set_params(nv); } }
-                        _ => {}
-                    }
-                    true
-                });
-                Ok(())
-            })
+        .rule(move |rule, _| {
+            let sel = rule.selector();
+            if sel.contains('\'') || sel.contains('"') || sel.contains('\\') || sel.contains('\n') {
+                let nv = normalize_value(&sel, preferred_quote);
+                if nv != sel { rule.set_selector(nv); }
+            }
+            Ok(())
+        })
+        .at_rule(move |at, _| {
+            let p = at.params();
+            if p.contains('\'') || p.contains('"') || p.contains('\\') || p.contains('\n') {
+                let nv = normalize_value(&p, preferred_quote);
+                if nv != p { at.set_params(nv); }
+            }
+            Ok(())
+        })
+        .decl(move |decl, _| {
+            let v = decl.value();
+            if v.contains('\'') || v.contains('"') || v.contains('\\') || v.contains('\n') {
+                let nv = normalize_value(&v, preferred_quote);
+                if nv != v { decl.set_value(nv); }
+            }
+            Ok(())
         })
         .build()
 }
-

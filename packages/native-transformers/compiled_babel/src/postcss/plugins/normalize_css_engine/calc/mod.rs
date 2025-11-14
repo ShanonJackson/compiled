@@ -2,7 +2,6 @@ use postcss as pc;
 use crate::postcss::value_parser as vp;
 
 #[derive(Clone, Debug, PartialEq)]
-#[derive(Clone, Debug, PartialEq)]
 enum Node {
     Value { num: f64, unit: Option<String> },
     Op { op: char, left: Box<Node>, right: Box<Node> },
@@ -172,23 +171,23 @@ fn reduce_with_precision(node: &Node, precision: usize) -> Option<Node> {
                     }
                 }
                 // Distribute scalar over addition/subtraction: (a +/- b) * c, c * (a +/- b)
-                ('*', Node::Op { op: lop, left: ll, right: lr }, Node::Value { num: rn, unit: ru }) if *lop == '+' || *lop == '-' => {
+                ('*', Node::Op { op: lop, left: ll, right: lr }, Node::Value { num: rn, unit: ru }) if lop == '+' || lop == '-' => {
                     // (ll op lr) * rn => (ll*rn) op (lr*rn)
                     let left_mul = reduce_with_precision(&Node::Op { op: '*', left: ll.clone(), right: Box::new(Node::Value { num: rn, unit: ru.clone() }) }, precision)?;
                     let right_mul = reduce_with_precision(&Node::Op { op: '*', left: lr.clone(), right: Box::new(Node::Value { num: rn, unit: ru.clone() }) }, precision)?;
-                    Some(Node::Op { op: *lop, left: Box::new(left_mul), right: Box::new(right_mul) })
+                    Some(Node::Op { op: lop, left: Box::new(left_mul), right: Box::new(right_mul) })
                 }
-                ('*', Node::Value { num: ln, unit: lu }, Node::Op { op: rop, left: rl, right: rr }) if *rop == '+' || *rop == '-' => {
+                ('*', Node::Value { num: ln, unit: lu }, Node::Op { op: rop, left: rl, right: rr }) if rop == '+' || rop == '-' => {
                     let left_mul = reduce_with_precision(&Node::Op { op: '*', left: Box::new(Node::Value { num: ln, unit: lu.clone() }), right: rl.clone() }, precision)?;
                     let right_mul = reduce_with_precision(&Node::Op { op: '*', left: Box::new(Node::Value { num: ln, unit: lu.clone() }), right: rr.clone() }, precision)?;
-                    Some(Node::Op { op: *rop, left: Box::new(left_mul), right: Box::new(right_mul) })
+                    Some(Node::Op { op: rop, left: Box::new(left_mul), right: Box::new(right_mul) })
                 }
                 // Distribute division over addition/subtraction when dividing by scalar: (a +/- b) / n
-                ('/', Node::Op { op: lop, left: ll, right: lr }, Node::Value { num: rn, unit: ru }) if (*lop == '+' || *lop == '-') && ru.is_none() => {
+                ('/', Node::Op { op: lop, left: ll, right: lr }, Node::Value { num: rn, unit: ru }) if (lop == '+' || lop == '-') && ru.is_none() => {
                     if rn == 0.0 { return None; }
                     let left_div = reduce_with_precision(&Node::Op { op: '/', left: ll.clone(), right: Box::new(Node::Value { num: rn, unit: None }) }, precision)?;
                     let right_div = reduce_with_precision(&Node::Op { op: '/', left: lr.clone(), right: Box::new(Node::Value { num: rn, unit: None }) }, precision)?;
-                    Some(Node::Op { op: *lop, left: Box::new(left_div), right: Box::new(right_div) })
+                    Some(Node::Op { op: lop, left: Box::new(left_div), right: Box::new(right_div) })
                 }
                 // Multiplication by zero yields zero (unitless) when safe
                 ('*', Node::Value { num: ln, unit: _ }, Node::Value { num: rn, unit: _ }) if ln == 0.0 || rn == 0.0 => {
@@ -244,41 +243,43 @@ fn stringify_ast(node: &Node, precision: usize) -> String {
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
+    let opt = Options::default();
     pc::plugin("postcss-calc")
-        .prepare(|_result| {
-            let opt = Options::default();
-            pc::PreparedCallbacks::default().once_exit(move |css, _| {
-                css.walk_decls(|decl, _| {
-                    let value = decl.value(); if value.is_empty() { return true; }
-                    let mut parsed = vp::parse(&value);
-                    let mut changed = false;
-                    vp::walk(&mut parsed.nodes[..], &mut |n| {
-                        if let vp::Node::Function { value: name, nodes, .. } = n {
-                            let name_l = name.to_ascii_lowercase();
-                            let is_calc = name_l == "calc" || name_l == "-webkit-calc" || name_l == "-moz-calc";
-                            if is_calc {
-                                let inner = vp::stringify(nodes);
-                                if let Some(new_val) = try_reduce_calc(&inner, &opt) {
-                                    *n = vp::Node::Word { value: new_val };
-                                    changed = true;
-                                } else {
-                                    // Canonicalize expression spacing and parentheses and rewrap
-                                    if let Some(ast) = parse_calc_expression(&inner) {
-                                        let expr = stringify_ast(&ast, opt.precision);
-                                        let wrapped = format!("{}({})", name, expr);
-                                        *n = vp::Node::Word { value: wrapped };
-                                        changed = true;
-                                    }
-                                }
+        .once_exit(move |css, _| {
+            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+                let value = decl.value(); if value.is_empty() { return; }
+                let mut parsed = vp::parse(&value);
+                let mut changed = false;
+                vp::walk(&mut parsed.nodes[..], &mut |n| {
+                    if let vp::Node::Function { value: name, nodes, .. } = n {
+                        let name_l = name.to_ascii_lowercase();
+                        let is_calc = name_l == "calc" || name_l == "-webkit-calc" || name_l == "-moz-calc";
+                        if is_calc {
+                            let inner = vp::stringify(nodes);
+                            if let Some(new_val) = try_reduce_calc(&inner, &opt) {
+                                *n = vp::Node::Word { value: new_val };
+                                changed = true;
+                            } else if let Some(ast) = parse_calc_expression(&inner) {
+                                let expr = stringify_ast(&ast, opt.precision);
+                                let wrapped = format!("{}({})", name, expr);
+                                *n = vp::Node::Word { value: wrapped };
+                                changed = true;
                             }
                         }
-                        true
-                    }, false);
-                    if changed { decl.set_value(vp::stringify(&parsed.nodes)); }
+                    }
                     true
-                });
-                Ok(())
-            })
+                }, false);
+                if changed { decl.set_value(vp::stringify(&parsed.nodes)); }
+            };
+            match css {
+                pc::ast::nodes::RootLike::Root(root) => {
+                    root.walk_decls(|node, _| { if let Some(decl)=postcss::ast::nodes::as_declaration(&node){ process_decl(decl);} true });
+                }
+                pc::ast::nodes::RootLike::Document(doc) => {
+                    doc.walk_decls(|node, _| { if let Some(decl)=postcss::ast::nodes::as_declaration(&node){ process_decl(decl);} true });
+                }
+            }
+            Ok(())
         })
         .build()
 }

@@ -1,5 +1,7 @@
 Instructions.
 We're replacing two existing babel-plugins with native Rust SWC transformers, packages/babel-plugin and packages/babel-plugin-strip-runtime.
+packages/native-transformers/compiled_babel Is designed to be a SWC drop-in replacement for packages/babel-plugin [verified same (hopefully)]
+packages/native-transformers/compiled_strip_runtime is designed to be SWC drop-in replacement packages/babel-plugin-strip-runtime [verified same (hopefully)]
 Correctness is the goal here, which is defined as a 1:1 faithful identical port from js to rust including all behaviours, bugs and hash equality.
 To achieve this we've replicated 'hopefully' the entire file/folder structure of the originals in Rust, AND re-implemented 'postcss' AND all it's plugins entirely in Rust for the versions of the libraries that the originals were using.
 It's 'possible' that small differences may be found in our ports of these (postcss port, babel-plugin port or babel-plugin-strip-runtime port) however whenever we find these differences we need to resolve them in a way that makes the output identical to the original babel-plugins.
@@ -7,7 +9,15 @@ However, the WAY we resolve them is important, when we find a difference we firs
 That's where we need to fix the issue, because our goal is to have a 1:1 replica including all bugs, if we just start fixing issues bespokely we will diverge and we've failed.
 Whenever we can't achieve a 1:1 replica (i.e because Babel has an API that SWC doesn't have) then you need to raise that and suggest a way forwards. I.E We had clear comment: // COMPAT: Babel does x we need to replicate that here with Y
 
-Our work is almost done, we're in the process of verifying correctness and just finished our postcss pipeline.
+Our work is almost done, we're in the process of verifying correctness and just finished our postcss pipeline. All the original JS sources are here:
+packages/postcss-plugin-sources for the versions of the plugins that the original babel-plugin was using, use those to create 1:1 replicas, including all bugs, quirks and features.
+any deviation will deviate hashes and break fixtures.
+
+Again to be very clear, All code and libraries in the original are translated 1:1 to Rust, including all bugs and quirks; We are NEVER 'patching'
+behaviours in bespoke places, if you ever need to deviate behaviour you MUST raise that as an issue and we will discuss how to handle it.
+
+When this work is finished every input file will produce identical output files through babel or through swc. In all cases. Every single time.
+If you ever need the original JS source code of anything to compare, just ask me and i'll provide it. If everything is correctly ported 1:1 then the Sum of everything is a 1:1 replica.
 
 
 requirements.md

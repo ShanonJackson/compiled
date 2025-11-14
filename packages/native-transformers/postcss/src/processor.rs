@@ -718,6 +718,45 @@ fn walk_plugin_node(
         }
         NodeKind::Declaration => {
             let decl = Declaration::from_node(node.clone());
+            // Debug: trace declaration visitation for all plugins when enabled
+            if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
+                let plugin_name = result
+                    .last_plugin
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or("<unknown-plugin>");
+                // Try to capture a minimal parent context label
+                let parent_label = {
+                    if let Some(parent) = node.borrow().parent() {
+                        match parent.borrow().kind() {
+                            NodeKind::Rule => {
+                                let r = Rule::from_node(parent.clone());
+                                format!("rule: {}", r.selector())
+                            }
+                            NodeKind::AtRule => {
+                                let a = AtRule::from_node(parent.clone());
+                                let name = a.name();
+                                let params = a.params();
+                                if params.is_empty() {
+                                    format!("@{}", name)
+                                } else {
+                                    format!("@{} {}", name, params)
+                                }
+                            }
+                            other => format!("{:?}", other),
+                        }
+                    } else {
+                        "<no-parent>".to_string()
+                    }
+                };
+                eprintln!(
+                    "[postcss.decl @{}] {}='{}' [{}]",
+                    plugin_name,
+                    decl.prop(),
+                    decl.value(),
+                    parent_label
+                );
+            }
             let prop = decl.prop();
             let normalized_prop = prop.to_lowercase();
             plugin.visit_declaration(&decl, result)?;
@@ -1058,9 +1097,19 @@ impl LazyResult {
         self.plugins = prepared_plugins;
 
         for plugin in &self.plugins {
+            let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
+            if tracing {
+                eprintln!("[postcss] plugin {}: run", plugin.name());
+            }
             result.set_last_plugin(Some(plugin.name().to_string()));
             plugin.run(&mut result)?;
+            if tracing {
+                eprintln!("[postcss] plugin {}: walk", plugin.name());
+            }
             apply_plugin_visitors(plugin.as_ref(), &mut result)?;
+            if tracing {
+                eprintln!("[postcss] plugin {}: done", plugin.name());
+            }
         }
 
         self.processed = true;
@@ -1895,6 +1944,9 @@ impl Plugin for BuiltPlugin {
 
 pub fn plugin(name: impl Into<String>) -> PluginBuilder {
     let name_string = name.into();
+    if std::env::var("COMPILED_SKIP_POSTCSS_DEPRECATION").is_ok() {
+        return PluginBuilder::new(name_string);
+    }
     let warning = format!(
         "{}: postcss.plugin was deprecated. Migration guide:\nhttps://evilmartians.com/chronicles/postcss-8-plugin-migration",
         name_string
@@ -1913,3 +1965,5 @@ pub fn plugin(name: impl Into<String>) -> PluginBuilder {
 
     PluginBuilder::new(name_string)
 }
+
+

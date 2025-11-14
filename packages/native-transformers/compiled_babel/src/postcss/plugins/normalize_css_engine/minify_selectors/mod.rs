@@ -58,17 +58,41 @@ fn convert_pseudo_element_to_class(pseudo: &PseudoElementSelector) -> Option<Pse
 
 fn handle_nth_replacements(selector: &mut PseudoClassSelector, lower: &str) -> bool {
     if let Some(children) = &mut selector.children {
-        if matches!(lower, "nth-child"|"nth-of-type"|"nth-last-child"|"nth-last-of-type") {
+        if matches!(lower, "nth-child" | "nth-of-type" | "nth-last-child" | "nth-last-of-type") {
             if let Some(first) = children.first_mut() {
-                if let PseudoClassSelectorChildren::AnPlusB(an) = first {
-                    // a simple one case: 1 -> first/last
-                    if an.a == 0 && an.b == 1 {
-                        for (src, dst) in PSEUDO_REPLACEMENTS { if lower == *src { selector.name.value.value = Atom::from(*dst); selector.name.value.raw=None; return true; } }
+                if let PseudoClassSelectorChildren::AnPlusB(an_plus_b) = first {
+                    match an_plus_b {
+                        // even -> 2n
+                        AnPlusB::Ident(ident) => {
+                            if ident.value.eq_ignore_ascii_case("even") {
+                                ident.value = Atom::from("2n");
+                                ident.raw = None;
+                            }
+                        }
+                        AnPlusB::AnPlusBNotation(notation) => {
+                            let a = notation.a.unwrap_or(0);
+                            let b = notation.b.unwrap_or(0);
+
+                            // a simple one case: 1 -> first/last
+                            if a == 0 && b == 1 {
+                                for (src, dst) in PSEUDO_REPLACEMENTS {
+                                    if lower == *src {
+                                        selector.name.value = Atom::from(*dst);
+                                        selector.name.raw = None;
+                                        selector.children = None;
+                                        return true;
+                                    }
+                                }
+                            }
+
+                            // 2n+1 -> odd
+                            if a == 2 && b == 1 {
+                                let ident = Ident { span: notation.span, value: Atom::from("odd"), raw: None };
+                                *an_plus_b = AnPlusB::Ident(ident);
+                                return true;
+                            }
+                        }
                     }
-                    // even -> 2n
-                    if an.a == 2 && an.b == 0 { an.raw = None; }
-                    // 2n+1 -> odd
-                    if an.a == 2 && an.b == 1 { selector.children = Some(vec![PseudoClassSelectorChildren::Ident(Ident{span: an.span, value: Atom::from("odd"), raw: None})]); return true; }
                 }
             }
         }
@@ -76,7 +100,7 @@ fn handle_nth_replacements(selector: &mut PseudoClassSelector, lower: &str) -> b
     false
 }
 
-fn process_pseudo_element_selector(selector: &mut PseudoElementSelector) { selector.name.value.raw=None; }
+fn process_pseudo_element_selector(selector: &mut PseudoElementSelector) { selector.name.raw = None; }
 
 fn process_pseudo_class_selector(selector: &mut PseudoClassSelector) {
     let name = selector.name.value.to_string();
@@ -126,7 +150,14 @@ fn process_subclass_selector(subclass: &mut SubclassSelector) {
 fn process_combinator(_c: &mut Combinator) {}
 
 fn process_compound_selector(compound: &mut CompoundSelector, is_simple: bool) {
-    if let Some(ty) = &mut compound.type_selector { match ty { TypeSelector::TagName(tag) => process_tag_selector(tag, is_simple), TypeSelector::Universal(_) => { if should_remove_universal(compound) { compound.type_selector=None; } } } }
+    if let Some(ty) = &mut compound.type_selector {
+        match &mut **ty {
+            TypeSelector::TagName(tag) => process_tag_selector(tag, is_simple),
+            TypeSelector::Universal(_) => {
+                if should_remove_universal(compound) { compound.type_selector = None; }
+            }
+        }
+    }
     for subclass in &mut compound.subclass_selectors { process_subclass_selector(subclass); }
 }
 
@@ -135,16 +166,16 @@ fn process_complex_selector(selector: &mut ComplexSelector) {
     for child in &mut selector.children { match child { ComplexSelectorChildren::CompoundSelector(comp)=>{ let is_simple = child_count==1; process_compound_selector(comp, is_simple); }, ComplexSelectorChildren::Combinator(c)=>{ process_combinator(c); } } }
 }
 
-fn sort_complex_selectors(selectors: &mut Vec<ComplexSelector>) { selectors.sort_by(|a,b| format_selector(a).cmp(&format_selector(b))); }
+fn sort_complex_selectors(selectors: &mut Vec<ComplexSelector>) { selectors.sort_by(|a,b| format_complex(a).cmp(&format_complex(b))); }
 fn sort_relative_selectors(selectors: &mut Vec<RelativeSelector>) { selectors.sort_by(|a,b| format_relative(a).cmp(&format_relative(b))); }
 
-fn dedupe_complex_selectors(selectors: &mut Vec<ComplexSelector>) { let mut seen=std::collections::HashSet::new(); selectors.retain(|s| seen.insert(format_selector(s))); }
+fn dedupe_complex_selectors(selectors: &mut Vec<ComplexSelector>) { let mut seen=std::collections::HashSet::new(); selectors.retain(|s| seen.insert(format_complex(s))); }
 fn dedupe_relative_selectors(selectors: &mut Vec<RelativeSelector>) { let mut seen=std::collections::HashSet::new(); selectors.retain(|s| seen.insert(format_relative(s))); }
-fn dedupe_forgiving_selectors(selectors: &mut Vec<ForgivingComplexSelector>) { let mut seen=std::collections::HashSet::new(); selectors.retain(|s| if let ForgivingComplexSelector::ComplexSelector(sel)=s { seen.insert(format_selector(sel)) } else { true }); }
+fn dedupe_forgiving_selectors(selectors: &mut Vec<ForgivingComplexSelector>) { let mut seen=std::collections::HashSet::new(); selectors.retain(|s| if let ForgivingComplexSelector::ComplexSelector(sel)=s { seen.insert(format_complex(sel)) } else { true }); }
 fn dedupe_forgiving_relative_selectors(selectors: &mut Vec<ForgivingRelativeSelector>) { let mut seen=std::collections::HashSet::new(); selectors.retain(|s| if let ForgivingRelativeSelector::RelativeSelector(sel)=s { seen.insert(format_relative(sel)) } else { true }); }
 
-fn format_selector<T>(sel: &T) -> String where for<'w> CodeGenerator<BasicCssWriter<'w, &'w mut String>>: Emit<T> { let mut s=String::new(); { let wr = BasicCssWriter::new(&mut s, None, Default::default()); let mut gen = CodeGenerator::new(wr, CodegenConfig{ minify: false }); gen.emit(sel).ok(); } s }
-fn format_relative(sel: &RelativeSelector) -> String { format_selector(sel) }
+fn format_complex(sel: &ComplexSelector) -> String { let mut s=String::new(); { let wr = BasicCssWriter::new(&mut s, None, Default::default()); let mut gen = CodeGenerator::new(wr, CodegenConfig{ minify: false }); gen.emit(sel).ok(); } s }
+fn format_relative(sel: &RelativeSelector) -> String { let mut s=String::new(); { let wr = BasicCssWriter::new(&mut s, None, Default::default()); let mut gen = CodeGenerator::new(wr, CodegenConfig{ minify: false }); gen.emit(sel).ok(); } s }
 
 fn process_selector_list(list: &mut SelectorList) { for complex in &mut list.children { process_complex_selector(complex); } dedupe_complex_selectors(&mut list.children); sort_complex_selectors(&mut list.children); }
 fn process_relative_selector_list(list: &mut RelativeSelectorList) { for rel in &mut list.children { if let Some(c)=&mut rel.combinator { process_combinator(c); } process_complex_selector(&mut rel.selector); } dedupe_relative_selectors(&mut list.children); sort_relative_selectors(&mut list.children); }
@@ -153,9 +184,14 @@ fn minify_selector_string(selector: &str) -> Option<String> {
     // Build a tiny stylesheet to leverage SWC to parse just the selector prelude
     let css_input = format!("{}{{}}", selector);
     let cm: SourceMap = Default::default();
-    let fm = cm.new_source_file(FileName::Custom("sel.css".into()), css_input);
+    let fm = cm.new_source_file(FileName::Custom("sel.css".into()).into(), css_input);
     let mut errors = vec![];
-    let mut ss = parse_string_input(&fm, ParserConfig::default(), &mut errors).ok()?;
+    let mut ss = parse_string_input::<Stylesheet>(
+        StringInput::from(&*fm),
+        None,
+        ParserConfig::default(),
+        &mut errors,
+    ).ok()?;
     if !errors.is_empty() { return None; }
     // Expect one qualified rule
     if let Some(Rule::QualifiedRule(rule)) = ss.rules.get_mut(0) {
@@ -179,20 +215,40 @@ fn minify_selector_string(selector: &str) -> Option<String> {
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
+    let cache = std::sync::Mutex::new(std::collections::HashMap::<String, String>::new());
     pc::plugin("postcss-minify-selectors")
-        .prepare(|_result| {
-            let cache = std::sync::Mutex::new(std::collections::HashMap::<String,String>::new());
-            pc::PreparedCallbacks::default().once_exit(move |css, _| {
-                css.walk_rules(|rule, _| {
-                    let selector = if rule.raws_selector_value_equals_selector() { rule.raws_selector_raw() } else { rule.selector() };
-                    if selector.ends_with(':') { return true; }
-                    if let Some(v) = cache.lock().unwrap().get(&selector).cloned() { rule.set_selector(v); return true; }
-                    if let Some(optimized) = minify_selector_string(&selector) { cache.lock().unwrap().insert(selector.clone(), optimized.clone()); rule.set_selector(optimized); }
-                    true
-                });
-                Ok(())
-            })
+        .once_exit(move |css, _| {
+            match css {
+                pc::ast::nodes::RootLike::Root(root) => {
+                    root.walk_rules(|node, _| {
+                        if let Some(rule) = postcss::ast::nodes::as_rule(&node) {
+                            let selector = rule.selector();
+                            if selector.ends_with(':') { return true; }
+                            if let Some(v) = cache.lock().unwrap().get(&selector).cloned() { rule.set_selector(v); return true; }
+                            if let Some(optimized) = minify_selector_string(&selector) {
+                                cache.lock().unwrap().insert(selector.clone(), optimized.clone());
+                                rule.set_selector(optimized);
+                            }
+                        }
+                        true
+                    });
+                }
+                pc::ast::nodes::RootLike::Document(doc) => {
+                    doc.walk_rules(|node, _| {
+                        if let Some(rule) = postcss::ast::nodes::as_rule(&node) {
+                            let selector = rule.selector();
+                            if selector.ends_with(':') { return true; }
+                            if let Some(v) = cache.lock().unwrap().get(&selector).cloned() { rule.set_selector(v); return true; }
+                            if let Some(optimized) = minify_selector_string(&selector) {
+                                cache.lock().unwrap().insert(selector.clone(), optimized.clone());
+                                rule.set_selector(optimized);
+                            }
+                        }
+                        true
+                    });
+                }
+            }
+            Ok(())
         })
         .build()
 }
-

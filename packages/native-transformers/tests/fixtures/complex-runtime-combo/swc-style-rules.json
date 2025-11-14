@@ -1,16 +1,13 @@
 [
-  "._ca0qftgi{padding-top:8px}",
-  "._u5f3ftgi{padding-right:8px}",
-  "._n3tdftgi{padding-bottom:8px}",
-  "._19bvftgi{padding-left:8px}",
-  "._1l201r31:focus ._1l201r31{outline-color:currentColor}",
-  "._cwctglyw:focus ._cwctglyw{outline-style:none}",
-  "._d7ut1o36:focus ._d7ut1o36{outline-width:medium}",
-  "@keyframes k17e8rkr{0%{opacity:0}to{opacity:1}}",
-  "._y44v65d0{animation:k17e8rkr 2s linear}",
-  "._aetr1vm8:after{content:\"!\"}",
-  "._1wybdlk8{font-size:14px}",
-  "@media (min-width:600px){._72bc18cn:hover{content:\"hover\"}._1qiwr3uz:hover{background-color:#000}}",
-  "._syazxbvz{color:#1e90ff}",
-  "._syaz14zx{color:crimson}"
+  "._gq7jftgi{padding:8px}",
+  ":focus ._f1qkglyw{outline:none}",
+  "._1knudlk8{font-size:14px}",
+  "@media (min-width: 600px){._1rr818cn:hover{content:\"hover\"}}",
+  "@media (min-width: 600px){._m4k5r3uz:hover{background-color:#000}}",
+  "._9ad0xbvz{color:#1e90ff}",
+  "._9ad014zx{color:crimson}",
+  "._yrq0idpf \\30 \\%{opacity:0}",
+  "._1exukb7n to{opacity:1}",
+  "._bexg65d0{animation:k17e8rkr 2s linear}",
+  "._1qji1vm8 :after{content:\"!\"}"
 ]

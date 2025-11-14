@@ -30,29 +30,31 @@ fn normalize_single_range(range: &str) -> String {
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
+    let is_legacy = false;
+    let re = Regex::new(r"(?i)u\+[0-9a-f?]+(?:-[0-9a-f?]+)?").unwrap();
     pc::plugin("postcss-normalize-unicode")
-        .prepare(|_result| {
-            // Resolve browserslist to determine legacy bug: lower-case u prefix bug in old IE/Edge.
-            // We default to modern (no bug) when not configured.
-            let is_legacy = false;
-            let re = Regex::new(r"(?i)u\+[0-9a-f?]+(?:-[0-9a-f?]+)?").unwrap();
-            pc::PreparedCallbacks::default().once_exit(move |css, _| {
-                css.walk_decls(|decl, _| {
-                    if decl.prop().eq_ignore_ascii_case("unicode-range") {
-                        let value = decl.value();
-                        if value.is_empty() { return true; }
-                        let newv = re.replace_all(&value, |caps: &regex::Captures| {
-                            let mut out = normalize_single_range(&caps[0]);
-                            if is_legacy { out = Regex::new(r"^u(?=\+)").unwrap().replace(&out, "U").to_string(); }
-                            out
-                        }).to_string();
-                        if newv != value { decl.set_value(newv); }
-                    }
-                    true
-                });
-                Ok(())
-            })
+        .once_exit(move |css, _| {
+            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+                if decl.prop().eq_ignore_ascii_case("unicode-range") {
+                    let value = decl.value();
+                    if value.is_empty() { return; }
+                    let newv = re.replace_all(&value, |caps: &regex::Captures| {
+                        let mut out = normalize_single_range(&caps[0]);
+                        if is_legacy { out = Regex::new(r"^u(?=\+)").unwrap().replace(&out, "U").to_string(); }
+                        out
+                    }).to_string();
+                    if newv != value { decl.set_value(newv); }
+                }
+            };
+            match css {
+                pc::ast::nodes::RootLike::Root(root) => {
+                    root.walk_decls(|node, _| { if let Some(decl)=postcss::ast::nodes::as_declaration(&node){ process_decl(decl);} true });
+                }
+                pc::ast::nodes::RootLike::Document(doc) => {
+                    doc.walk_decls(|node, _| { if let Some(decl)=postcss::ast::nodes::as_declaration(&node){ process_decl(decl);} true });
+                }
+            }
+            Ok(())
         })
         .build()
 }
-

@@ -160,7 +160,7 @@ pub struct Result {
     map: Option<String>,
     pub warnings: Vec<Warning>,
     pub messages: Vec<Message>,
-    last_plugin: Option<String>,
+    pub last_plugin: Option<String>,
     stringifier: Arc<dyn CustomStringifier>,
 }
 
@@ -318,3 +318,4 @@ impl fmt::Debug for Result {
             .finish()
     }
 }
+

@@ -15,7 +15,7 @@ Core setup
 - [x] Add workspace member in `packages/native-transformers/Cargo.toml`
 - [x] LTO mitigation for local builds (`.cargo/config.toml`, profiles, scripts)
 - [x] Feature‑gated engine in `compiled_babel` (`postcss_engine`)
-- [x] Runtime toggle via `COMPILED_USE_POSTCSS=1`
+- [x] PostCSS engine is the default pipeline when building with the `postcss_engine` feature; no env flag required.
 
 Engine pipeline scaffolding
 - [x] Build processor with ordered plugins mirroring JS pipeline
@@ -68,7 +68,7 @@ Parity plugins (to port or emulate)
 
 ## How to build and try
 - PowerShell: `cd packages/native-transformers; $env:RUSTFLAGS='-Clto=no'; cargo build -p compiled_babel --features postcss_engine`
-- Run with: `COMPILED_USE_POSTCSS=1` to route the transformer through the PostCSS engine.
+- The transformer routes through the PostCSS engine by default (feature-enabled). No environment toggle is necessary.
 - Fixture script: `node packages/native-transformers/scripts/update-fixtures.js`
 
 ## Notes

@@ -1,4 +1,5 @@
 use postcss as pc;
+use postcss::ast::NodeAccess;
 use crate::postcss::value_parser as vp;
 use percent_encoding::percent_decode_str;
 use regex::Regex;
@@ -205,7 +206,15 @@ fn normalize_url_impl(url_string_in: &str, opts: &NormalizeOptions) -> Result<St
     if opts.strip_authentication { url_obj.set_username("").ok(); url_obj.set_password(None).ok(); }
 
     if opts.strip_hash { url_obj.set_fragment(None); }
-    else if opts.strip_text_fragment { if let Some(f) = url_obj.fragment() { let new = Regex::new(r"(?i)#?:~:text.*?$").unwrap().replace(&format!("#{}", f), ""); url_obj.set_fragment(if new.is_empty() { None } else { Some(&new[1..]) }); } }
+    else if opts.strip_text_fragment {
+        if let Some(f) = url_obj.fragment() {
+            let target = format!("#{}", f);
+            let replaced = Regex::new(r"(?i)#?:~:text.*?$").unwrap().replace(&target, "");
+            let new = replaced.to_string();
+            let frag = if new.is_empty() { None } else { Some(&new[1..]) };
+            url_obj.set_fragment(frag);
+        }
+    }
 
     // Remove duplicate slashes not preceded by a protocol (applies only to pathname)
     if !url_obj.path().is_empty() {
@@ -314,90 +323,174 @@ pub fn plugin() -> pc::BuiltPlugin {
             let multiline = Regex::new(r"\\[\r\n]").unwrap();
             let escape_chars = Regex::new(r#"([\s\(\)"'])"#).unwrap();
 
-            css.walk(|node| {
-                match node {
-                    pc::NodeLike::Decl(decl) => {
-                        let mut parsed = vp::parse(&decl.value());
-                        let mut nodes = parsed.nodes.clone();
-                        vp::walk(&mut nodes[..], &mut |n| {
-                            match n {
-                                vp::Node::Function { value, nodes: inner, before, after, .. } => {
-                                    if value.to_lowercase() != "url" { return true; }
-                                    *before = String::new(); *after = String::new();
-                                    if inner.is_empty() { return true; }
-                                    let first = &mut inner[0];
-                                    match first {
-                                        vp::Node::String { value: s, quote, .. } => {
-                                            let mut v = s.trim().to_string();
-                                            v = multiline.replace_all(&v, "").to_string();
-                                            if v.is_empty() {
-                                                *quote = '\0'; // empty quote
-                                                return true;
-                                            }
-                                            if Regex::new(r"(?i)^data:(.*)?,").unwrap().is_match(&v) {
-                                                return true;
-                                            }
-                                            if !Regex::new(r"(?i)^.+-extension:/").unwrap().is_match(&v) {
-                                                v = convert(&v, &opts);
-                                            }
-                                            if escape_chars.is_match(&v) {
-                                                let escaped = escape_chars.replace_all(&v, r"\$1").to_string();
-                                                if escaped.len() < s.len() + 2 {
-                                                    *n = vp::Node::Word { value: escaped };
-                                                } else {
-                                                    *s = v;
-                                                }
-                                            } else {
-                                                *n = vp::Node::Word { value: v };
-                                            }
-                                        }
-                                        vp::Node::Word { value } => {
-                                            let mut v = value.trim().to_string();
-                                            v = multiline.replace_all(&v, "").to_string();
-                                            if v.is_empty() { return true; }
-                                            if Regex::new(r"(?i)^data:(.*)?,").unwrap().is_match(&v) { return true; }
-                                            if !Regex::new(r"(?i)^.+-extension:/").unwrap().is_match(&v) {
-                                                v = convert(&v, &opts);
-                                            }
-                                            *value = v;
-                                        }
-                                        _ => {}
-                                    }
-                                    true
-                                }
-                                _ => true,
-                            }
-                        }, false);
-                        parsed.nodes = nodes;
-                        decl.set_value(vp::stringify(&parsed.nodes));
-                    }
-                    pc::NodeLike::AtRule(at) => {
-                        if at.name().to_lowercase() == "namespace" {
-                            let mut params = vp::parse(&at.params());
-                            let mut nodes = params.nodes.clone();
+            match css {
+                pc::ast::nodes::RootLike::Root(root) => {
+                    root.walk_decls(|node, _| {
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                            let mut parsed = vp::parse(&decl.value());
+                            let mut nodes = parsed.nodes.clone();
                             vp::walk(&mut nodes[..], &mut |n| {
                                 match n {
                                     vp::Node::Function { value, nodes: inner, before, after, .. } => {
-                                        if value.to_lowercase() != "url" || inner.is_empty() { return true; }
-                                        *before = String::new();
-                                        let mut quote = '"';
-                                        if let vp::Node::String { quote: q, .. } = inner[0].clone() { quote = q; }
-                                        if let vp::Node::String { value: s, quote: q, .. } = &mut inner[0] { *q = quote; *s = s.trim().to_string(); }
-                                        *after = String::new();
+                                        if value.to_lowercase() != "url" { return true; }
+                                        *before = String::new(); *after = String::new();
+                                        if inner.is_empty() { return true; }
+                                        let first = &mut inner[0];
+                                        match first {
+                                            vp::Node::String { value: s, quote, .. } => {
+                                                let mut v = s.trim().to_string();
+                                                v = multiline.replace_all(&v, "").to_string();
+                                                if v.is_empty() { *quote = '\0'; return true; }
+                                                if Regex::new(r"(?i)^data:(.*)?,").unwrap().is_match(&v) { return true; }
+                                                if !Regex::new(r"(?i)^.+-extension:/").unwrap().is_match(&v) { v = convert(&v, &opts); }
+                                                if escape_chars.is_match(&v) {
+                                                    let escaped = escape_chars.replace_all(&v, r"\$1").to_string();
+                                                    if escaped.len() < s.len() + 2 { *n = vp::Node::Word { value: escaped }; } else { *s = v; }
+                                                } else { *n = vp::Node::Word { value: v }; }
+                                            }
+                                            vp::Node::Word { value } => {
+                                                let mut v = value.trim().to_string();
+                                                v = multiline.replace_all(&v, "").to_string();
+                                                if v.is_empty() { return true; }
+                                                if Regex::new(r"(?i)^data:(.*)?,").unwrap().is_match(&v) { return true; }
+                                                if !Regex::new(r"(?i)^.+-extension:/").unwrap().is_match(&v) { v = convert(&v, &opts); }
+                                                *value = v;
+                                            }
+                                            _ => {}
+                                        }
                                         true
                                     }
-                                    vp::Node::String { value: s, .. } => { *s = s.trim().to_string(); true }
                                     _ => true,
                                 }
                             }, false);
-                            params.nodes = nodes;
-                            at.set_params(vp::stringify(&params.nodes));
+                            parsed.nodes = nodes;
+                            decl.set_value(vp::stringify(&parsed.nodes));
                         }
-                    }
-                    _ => {}
+                        true
+                    });
+
+                    root.walk_at_rules(|node, _| {
+                        let (is_namespace, params_str) = {
+                            let borrowed = node.borrow();
+                            match &borrowed.data {
+                                postcss::ast::NodeData::AtRule(data) => (data.name.eq_ignore_ascii_case("namespace"), data.params.clone()),
+                                _ => (false, String::new()),
+                            }
+                        };
+                        if !is_namespace { return true; }
+
+                        let mut params = vp::parse(&params_str);
+                        let mut nodes = params.nodes.clone();
+                        vp::walk(&mut nodes[..], &mut |n| {
+                            match n {
+                                vp::Node::Function { value, nodes: inner, before, after, .. } => {
+                                    if value.to_lowercase() != "url" || inner.is_empty() { return true; }
+                                    *before = String::new();
+                                    let mut quote = '"';
+                                    if let vp::Node::String { quote: q, .. } = inner[0].clone() { quote = q; }
+                                    if let vp::Node::String { value: s, quote: q, .. } = &mut inner[0] { *q = quote; *s = s.trim().to_string(); }
+                                    *after = String::new();
+                                    true
+                                }
+                                vp::Node::String { value: s, .. } => { *s = s.trim().to_string(); true }
+                                _ => true,
+                            }
+                        }, false);
+                        params.nodes = nodes;
+                        let new_params = vp::stringify(&params.nodes);
+                        {
+                            let mut borrowed = node.borrow_mut();
+                            if let postcss::ast::NodeData::AtRule(data) = &mut borrowed.data {
+                                data.params = new_params;
+                            }
+                        }
+                        true
+                    });
                 }
-                true
-            });
+                pc::ast::nodes::RootLike::Document(doc) => {
+                    doc.walk_decls(|node, _| {
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                            let mut parsed = vp::parse(&decl.value());
+                            let mut nodes = parsed.nodes.clone();
+                            vp::walk(&mut nodes[..], &mut |n| {
+                                match n {
+                                    vp::Node::Function { value, nodes: inner, before, after, .. } => {
+                                        if value.to_lowercase() != "url" { return true; }
+                                        *before = String::new(); *after = String::new();
+                                        if inner.is_empty() { return true; }
+                                        let first = &mut inner[0];
+                                        match first {
+                                            vp::Node::String { value: s, quote, .. } => {
+                                                let mut v = s.trim().to_string();
+                                                v = multiline.replace_all(&v, "").to_string();
+                                                if v.is_empty() { *quote = '\0'; return true; }
+                                                if Regex::new(r"(?i)^data:(.*)?,").unwrap().is_match(&v) { return true; }
+                                                if !Regex::new(r"(?i)^.+-extension:/").unwrap().is_match(&v) { v = convert(&v, &opts); }
+                                                if escape_chars.is_match(&v) {
+                                                    let escaped = escape_chars.replace_all(&v, r"\$1").to_string();
+                                                    if escaped.len() < s.len() + 2 { *n = vp::Node::Word { value: escaped }; } else { *s = v; }
+                                                } else { *n = vp::Node::Word { value: v }; }
+                                            }
+                                            vp::Node::Word { value } => {
+                                                let mut v = value.trim().to_string();
+                                                v = multiline.replace_all(&v, "").to_string();
+                                                if v.is_empty() { return true; }
+                                                if Regex::new(r"(?i)^data:(.*)?,").unwrap().is_match(&v) { return true; }
+                                                if !Regex::new(r"(?i)^.+-extension:/").unwrap().is_match(&v) { v = convert(&v, &opts); }
+                                                *value = v;
+                                            }
+                                            _ => {}
+                                        }
+                                        true
+                                    }
+                                    _ => true,
+                                }
+                            }, false);
+                            parsed.nodes = nodes;
+                            decl.set_value(vp::stringify(&parsed.nodes));
+                        }
+                        true
+                    });
+
+                    doc.walk_at_rules(|node, _| {
+                        let (is_namespace, params_str) = {
+                            let borrowed = node.borrow();
+                            match &borrowed.data {
+                                postcss::ast::NodeData::AtRule(data) => (data.name.eq_ignore_ascii_case("namespace"), data.params.clone()),
+                                _ => (false, String::new()),
+                            }
+                        };
+                        if !is_namespace { return true; }
+
+                        let mut params = vp::parse(&params_str);
+                        let mut nodes = params.nodes.clone();
+                        vp::walk(&mut nodes[..], &mut |n| {
+                            match n {
+                                vp::Node::Function { value, nodes: inner, before, after, .. } => {
+                                    if value.to_lowercase() != "url" || inner.is_empty() { return true; }
+                                    *before = String::new();
+                                    let mut quote = '"';
+                                    if let vp::Node::String { quote: q, .. } = inner[0].clone() { quote = q; }
+                                    if let vp::Node::String { value: s, quote: q, .. } = &mut inner[0] { *q = quote; *s = s.trim().to_string(); }
+                                    *after = String::new();
+                                    true
+                                }
+                                vp::Node::String { value: s, .. } => { *s = s.trim().to_string(); true }
+                                _ => true,
+                            }
+                        }, false);
+                        params.nodes = nodes;
+                        let new_params = vp::stringify(&params.nodes);
+                        {
+                            let mut borrowed = node.borrow_mut();
+                            if let postcss::ast::NodeData::AtRule(data) = &mut borrowed.data {
+                                data.params = new_params;
+                            }
+                        }
+                        true
+                    });
+                }
+            }
             Ok(())
         })
         .build()

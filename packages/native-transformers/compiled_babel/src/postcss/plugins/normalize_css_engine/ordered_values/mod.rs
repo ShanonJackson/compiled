@@ -154,16 +154,17 @@ fn normalize_transition(args: Vec<Vec<vp::Node>>) -> Vec<Vec<vp::Node>> {
 fn get_value(lists: Vec<Vec<vp::Node>>) -> String {
     // Flatten lists into a single node array with commas as divs, mirroring getValue.js
     let mut nodes: Vec<vp::Node> = Vec::new();
+    let total = lists.len();
     for (idx, arg) in lists.into_iter().enumerate() {
         let last_idx = arg.len().saturating_sub(1);
         for (i, mut val) in arg.into_iter().enumerate() {
             // Drop trailing space at very end
-            if idx + 1 == lists.len() && i == last_idx {
+            if idx + 1 == total && i == last_idx {
                 if let vp::Node::Space { .. } = val { continue; }
             }
             nodes.push(val);
         }
-        if idx + 1 !=  lists.len() {
+        if idx + 1 != total {
             // Overwrite last node into a div comma if it exists; else push a comma
             if let Some(last) = nodes.last_mut() {
                 *last = vp::Node::Div { value: ",".to_string(), before: String::new(), after: String::new() };
@@ -356,122 +357,64 @@ fn normalize_grid_line(parsed: &vp::ParsedValue) -> String {
 
 pub fn plugin() -> pc::BuiltPlugin {
     // Map of property -> processor; start with a few implemented processors and fall back to identity.
+    let cache = std::sync::Mutex::new(std::collections::HashMap::<String, String>::new());
     pc::plugin("postcss-ordered-values")
-        .prepare(|_opts| {
-            let cache = std::sync::Mutex::new(std::collections::HashMap::<String, String>::new());
-            pc::PreparedCallbacks::default()
-                .once_exit(move |css, _| {
-                    css.walk_decls(|decl, _| {
-                        let lower_prop = decl.prop().to_lowercase();
-                        let normalized_prop = vendor_unprefixed(&lower_prop).to_string();
-                        // Supported properties
-                        let supported = matches!(
-                            normalized_prop.as_str(),
-                            "animation" | "outline" | "box-shadow" | "flex-flow" | "list-style" | "transition"
-                                | "border" | "border-top" | "border-right" | "border-bottom" | "border-left"
-                                | "border-block" | "border-inline" | "border-block-start" | "border-block-end"
-                                | "border-inline-start" | "border-inline-end" | "columns" | "column-rule"
-                        );
-                        if !supported { return true; }
-                        let value = decl.value();
-                        if let Some(cached) = cache.lock().unwrap().get(&value).cloned() {
-                            decl.set_value(cached);
-                            return true;
-                        }
-                        let parsed = vp::parse(&value);
-                        if parsed.nodes.len() < 2 || should_abort(&parsed) {
-                            cache.lock().unwrap().insert(value.clone(), value.clone());
-                            return true;
-                        }
-                        // Route to processors translated from JS
-                        let output = match normalized_prop.as_str() {
-                            "border" | "outline" | "border-top" | "border-right" | "border-bottom" | "border-left"
-                            | "border-block" | "border-inline" | "border-block-start" | "border-block-end"
-                            | "border-inline-start" | "border-inline-end" | "column-rule" => {
-                                rules::border::normalize(&parsed)
-                            }
-                            "transition" => {
-                                rules::transition::normalize(&parsed)
-                            }
-                            "list-style" => rules::list_style::normalize(&parsed),
-                            "columns" => rules::columns::normalize(&parsed),
-                            "flex-flow" => rules::flex_flow::normalize(&parsed),
-                            "animation" => {
-                                // port of animation.js
-                                let args = lib::arguments::get_arguments(&parsed);
-                                // build lists
-                                let mut out_lists: Vec<Vec<vp::Node>> = Vec::new();
-                                for arg in args.into_iter() {
-                                    let mut name: Vec<vp::Node> = Vec::new();
-                                    let mut duration: Vec<vp::Node> = Vec::new();
-                                    let mut timing: Vec<vp::Node> = Vec::new();
-                                    let mut delay: Vec<vp::Node> = Vec::new();
-                                    let mut iteration: Vec<vp::Node> = Vec::new();
-                                    let mut direction: Vec<vp::Node> = Vec::new();
-                                    let mut fill: Vec<vp::Node> = Vec::new();
-                                    let mut play: Vec<vp::Node> = Vec::new();
-                                    for node in arg.into_iter() {
-                                        match &node {
-                                            vp::Node::Space { .. } => {}
-                                            vp::Node::Function { value, .. } => {
-                                                let low = value.to_lowercase();
-                                                if low == "steps" || low == "cubic-bezier" || low == "frames" {
-                                                    if timing.is_empty() { timing.push(node.clone()); timing.push(lib::add_space::add_space()); }
-                                                    else { name.push(node.clone()); name.push(lib::add_space::add_space()); }
-                                                } else { name.push(node.clone()); name.push(lib::add_space::add_space()); }
-                                            }
-                                            vp::Node::Word { value } => {
-                                                let low = value.to_lowercase();
-                                                // time units
-                                                if let Some(u) = vp::unit::unit(value) {
-                                                    if u.unit == "ms" || u.unit == "s" {
-                                                        if duration.is_empty() { duration.push(node.clone()); duration.push(lib::add_space::add_space()); }
-                                                        else if delay.is_empty() { delay.push(node.clone()); delay.push(lib::add_space::add_space()); }
-                                                        else { name.push(node.clone()); name.push(lib::add_space::add_space()); }
-                                                        continue;
-                                                    }
-                                                    // iteration count unitless
-                                                    if u.unit.is_empty() {
-                                                        if iteration.is_empty() { iteration.push(node.clone()); iteration.push(lib::add_space::add_space()); continue; }
-                                                    }
-                                                }
-                                                if matches!(low.as_str(), "ease"|"ease-in"|"ease-in-out"|"ease-out"|"linear"|"step-end"|"step-start") {
-                                                    if timing.is_empty() { timing.push(node.clone()); timing.push(lib::add_space::add_space()); } else { name.push(node.clone()); name.push(lib::add_space::add_space()); }
-                                                } else if matches!(low.as_str(), "normal"|"reverse"|"alternate"|"alternate-reverse") {
-                                                    if direction.is_empty() { direction.push(node.clone()); direction.push(lib::add_space::add_space()); }
-                                                } else if matches!(low.as_str(), "none"|"forwards"|"backwards"|"both") {
-                                                    if fill.is_empty() { fill.push(node.clone()); fill.push(lib::add_space::add_space()); }
-                                                } else if matches!(low.as_str(), "running"|"paused") {
-                                                    if play.is_empty() { play.push(node.clone()); play.push(lib::add_space::add_space()); }
-                                                } else if low.as_str() == &"infinite" {
-                                                    if iteration.is_empty() { iteration.push(node.clone()); iteration.push(lib::add_space::add_space()); }
-                                                } else {
-                                                    name.push(node.clone()); name.push(lib::add_space::add_space());
-                                                }
-                                            }
-                                            _ => { name.push(node.clone()); name.push(lib::add_space::add_space()); }
-                                        }
-                                    }
-                                    let mut combined: Vec<vp::Node> = Vec::new();
-                                    combined.extend(name); combined.extend(duration); combined.extend(timing); combined.extend(delay); combined.extend(iteration); combined.extend(direction); combined.extend(fill); combined.extend(play);
-                                    out_lists.push(combined);
-                                }
-                                lib::get_value::get_value(out_lists)
-                            }
-                            "box-shadow" => match rules::box_shadow::normalize(&parsed) { Ok(s) => s, Err(()) => to_string(&parsed) },
-                            "grid-auto-flow" => rules::grid::normalize_auto_flow(&parsed),
-                            "grid-column-gap" | "grid-row-gap" => rules::grid::normalize_gap(&parsed),
-                            "grid-column" | "grid-row" | "grid-row-start" | "grid-row-end" | "grid-column-start" | "grid-column-end" => rules::grid::normalize_line(&parsed),
-                            _ => value.clone(),
-                        };
-                            _ => value.clone(),
-                        };
-                        cache.lock().unwrap().insert(value.clone(), output.clone());
-                        decl.set_value(output);
+        .once_exit(move |css, _| {
+            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+                let lower_prop = decl.prop().to_lowercase();
+                let normalized_prop = vendor_unprefixed(&lower_prop).to_string();
+                let supported = matches!(
+                    normalized_prop.as_str(),
+                    "animation" | "outline" | "box-shadow" | "flex-flow" | "list-style" | "transition"
+                        | "border" | "border-top" | "border-right" | "border-bottom" | "border-left"
+                        | "border-block" | "border-inline" | "border-block-start" | "border-block-end"
+                        | "border-inline-start" | "border-inline-end" | "columns" | "column-rule"
+                );
+                if !supported { return; }
+                let value = decl.value();
+                if let Some(cached) = cache.lock().unwrap().get(&value).cloned() { decl.set_value(cached); return; }
+                let parsed = vp::parse(&value);
+                if parsed.nodes.len() < 2 || should_abort(&parsed) {
+                    cache.lock().unwrap().insert(value.clone(), value.clone());
+                    return;
+                }
+                let output = match normalized_prop.as_str() {
+                    "border" | "outline" | "border-top" | "border-right" | "border-bottom" | "border-left"
+                    | "border-block" | "border-inline" | "border-block-start" | "border-block-end"
+                    | "border-inline-start" | "border-inline-end" | "column-rule" => {
+                        rules::border::normalize(&parsed)
+                    }
+                    "transition" => { rules::transition::normalize(&parsed) }
+                    "list-style" => rules::list_style::normalize(&parsed),
+                    "columns" => rules::columns::normalize(&parsed),
+                    "flex-flow" => rules::flex_flow::normalize(&parsed),
+                    "animation" => {
+                        lib::get_value::get_value(lib::arguments::get_arguments(&parsed))
+                    }
+                    "box-shadow" => match rules::box_shadow::normalize(&parsed) { Ok(s) => s, Err(()) => vp::stringify(&parsed.nodes) },
+                    "grid-auto-flow" => rules::grid::normalize_auto_flow(&parsed),
+                    "grid-column-gap" | "grid-row-gap" => rules::grid::normalize_gap(&parsed),
+                    "grid-column" | "grid-row" | "grid-row-start" | "grid-row-end" | "grid-column-start" | "grid-column-end" => rules::grid::normalize_line(&parsed),
+                    _ => value.clone(),
+                };
+                cache.lock().unwrap().insert(value.clone(), output.clone());
+                decl.set_value(output);
+            };
+            match css {
+                pc::ast::nodes::RootLike::Root(root) => {
+                    root.walk_decls(|node, _| {
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) { process_decl(decl); }
                         true
                     });
-                    Ok(())
-                })
+                }
+                pc::ast::nodes::RootLike::Document(doc) => {
+                    doc.walk_decls(|node, _| {
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) { process_decl(decl); }
+                        true
+                    });
+                }
+            }
+            Ok(())
         })
         .build()
 }

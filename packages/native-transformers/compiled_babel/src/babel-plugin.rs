@@ -114,8 +114,14 @@ impl CompiledBabelTransform {
             metadata.included_files = state.included_files.clone();
         }
 
-        if metadata.style_rules.is_empty() && !state.style_rules.is_empty() {
-            metadata.style_rules = state.style_rules.iter().cloned().collect();
+        if metadata.style_rules.is_empty() {
+            if !state.style_rules.is_empty() {
+                metadata.style_rules = state.style_rules.iter().cloned().collect();
+            } else if !state.sheets.is_empty() {
+                // Fallback: when the explicit style_rules set has not been populated,
+                // derive style rules from the hoisted sheets map (preserves insertion order).
+                metadata.style_rules = state.sheets.keys().cloned().collect();
+            }
         }
 
         metadata

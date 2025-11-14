@@ -164,15 +164,10 @@ fn serialize_stylesheet(stylesheet: &Stylesheet) -> Result<String, CssTransformE
 }
 
 /// Execute the CSS pipeline.
-pub fn transform_css(
+pub(crate) fn transform_css_via_swc_pipeline(
     css: &str,
     mut options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
-    #[cfg(feature = "postcss_engine")]
-    if std::env::var("COMPILED_USE_POSTCSS").is_ok() {
-        return transform_css_via_postcss(css, options);
-    }
-
     let preserved_comments = collect_preserved_comments(css, options.optimize_css);
     let mut stylesheet = match parse_stylesheet(css) {
         Ok(sheet) => sheet,
@@ -260,6 +255,22 @@ pub fn transform_css(
     }
 
     Ok(ctx.finish())
+}
+
+/// Execute the CSS pipeline.
+pub fn transform_css(
+    css: &str,
+    options: TransformCssOptions,
+) -> Result<TransformCssResult, CssTransformError> {
+    // Default to the PostCSS engine-backed pipeline when available.
+    #[cfg(feature = "postcss_engine")]
+    {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss begin"); }
+        let r = transform_css_via_postcss(css, options);
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss end"); }
+        return r;
+    }
+    transform_css_via_swc_pipeline(css, options)
 }
 
 /// Legacy Babel plugin name used in error reporting.

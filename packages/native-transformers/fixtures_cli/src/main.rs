@@ -67,6 +67,7 @@ fn header_comment_for(path: &str) -> String {
 }
 
 fn main() {
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] entry"); }
     let mut args = env::args().skip(1);
     let input_path = args.next().expect("usage: fixtures_cli <input_path>");
 
@@ -86,7 +87,9 @@ fn main() {
     }
 
     let cm: swc_core::common::sync::Lrc<SourceMap> = Default::default();
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] parse begin"); }
     let program = parse_program(&cm, &input_path, &input_code);
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] parse done"); }
 
     let compiled_opts = CompiledOptions {
         cache: Some(compiled_babel::CacheBehavior::Enabled(false)),
@@ -101,7 +104,9 @@ fn main() {
         Vec::new(),
         TransformFileOptions { filename: Some(input_path.clone()), ..Default::default() },
     );
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] compiled begin"); }
     let out1 = compiled_transform(program, tf, compiled_opts);
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] compiled done"); }
 
     // Pass through strip-runtime
     let strip_cfg = StripConfig {
@@ -112,7 +117,9 @@ fn main() {
         },
         ..Default::default()
     };
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] strip begin"); }
     let out2 = strip_transform(out1.program, strip_cfg);
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] strip done"); }
 
     // Prefer strip-runtime style rules if available, else compiled
     let style_rules = if !out2.metadata.style_rules.is_empty() {
@@ -128,5 +135,6 @@ fn main() {
     }
 
     let result = CliOutput { code, style_rules };
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[cli] output ready"); }
     println!("{}", serde_json::to_string(&result).unwrap());
 }

@@ -45,7 +45,7 @@ pub fn normalize(parsed: &vp::ParsedValue) -> String {
                         if fill.is_empty() { fill.push(node.clone()); fill.push(add_space()); }
                     } else if matches!(low.as_str(), "running"|"paused") {
                         if play.is_empty() { play.push(node.clone()); play.push(add_space()); }
-                    } else if low.as_str() == &"infinite" {
+                    } else if low.as_str() == "infinite" {
                         if iteration.is_empty() { iteration.push(node.clone()); iteration.push(add_space()); }
                     } else {
                         name.push(node.clone()); name.push(add_space());
@@ -60,4 +60,3 @@ pub fn normalize(parsed: &vp::ParsedValue) -> String {
     }
     get_value(out_lists)
 }
-

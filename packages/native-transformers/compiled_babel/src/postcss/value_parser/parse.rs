@@ -12,6 +12,37 @@ pub fn parse(input: &str) -> ParsedValue {
 
     while pos < max {
         let code = bytes[pos];
+        // standalone parenthesis group "(...)" without a preceding ident -> treat as function with empty name
+        if code == b'(' {
+            let mut depth: usize = 1;
+            let mut i = pos + 1;
+            while i < max && depth > 0 {
+                let c = bytes[i];
+                if c == b'(' { depth += 1; }
+                else if c == b')' { depth -= 1; if depth == 0 { break; } }
+                i += 1;
+            }
+            let inner_start = pos + 1;
+            let inner_end = if i < max { i } else { max.saturating_sub(1) };
+            let inner = if inner_start <= inner_end {
+                String::from_utf8(bytes[inner_start..inner_end].to_vec()).unwrap_or_default()
+            } else { String::new() };
+            let parsed_inner = parse(&inner);
+            stack.last_mut().unwrap().push(Node::Function {
+                value: String::new(),
+                nodes: parsed_inner.nodes,
+                before: String::new(),
+                after: String::new(),
+                unclosed: i >= max,
+            });
+            pos = if i < max { i + 1 } else { max };
+            continue;
+        }
+        if code == b')' {
+            // Unbalanced ')': advance to avoid infinite loop
+            pos += 1;
+            continue;
+        }
         // whitespace (<= 32)
         if code <= 32 {
             let start = pos;
@@ -114,9 +145,15 @@ pub fn parse(input: &str) -> ParsedValue {
             if c <= 32 || c == b',' || c == b':' || c == b'/' || c == b'(' || c == b')' || c == b'\'' || c == b'"' { break; }
             end += 1;
         }
-        let word = String::from_utf8(bytes[start..end].to_vec()).unwrap_or_default();
-        stack.last_mut().unwrap().push(Node::Word { value: word });
-        pos = end;
+        if end == start {
+            // Safety: advance by one to avoid infinite loop on unexpected punctuation
+            pos += 1;
+            continue;
+        } else {
+            let word = String::from_utf8(bytes[start..end].to_vec()).unwrap_or_default();
+            stack.last_mut().unwrap().push(Node::Word { value: word });
+            pos = end;
+        }
     }
 
     tokens = stack.pop().unwrap_or_default();
@@ -130,4 +167,3 @@ fn is_ident_start(c: u8) -> bool {
 fn is_ident_continue(c: u8) -> bool {
     is_ident_start(c) || (c >= b'0' && c <= b'9')
 }
-

@@ -1,89 +1,156 @@
 use postcss as pc;
+use postcss::ast::NodeAccess;
 use crate::postcss::value_parser as vp;
 
-fn gcd(mut a: i64, mut b: i64) -> i64 { while b != 0 { let t = b; b = a % b; a = t; } a.abs() }
-fn aspect_ratio(a: i64, b: i64) -> (i64, i64) { let d = gcd(a, b); (a / d, b / d) }
+fn gcd(mut a: i64, mut b: i64) -> i64 {
+    while b != 0 { let t = b; b = a % b; a = t; }
+    a.abs()
+}
+
+fn aspect_ratio(a: i64, b: i64) -> (i64, i64) {
+    let d = gcd(a, b);
+    (a / d, b / d)
+}
 
 fn split_arg(arg: &[vp::Node]) -> String { vp::stringify(arg) }
 
-fn remove_node(node: &mut vp::Node) {
-    // Set to empty word to mirror JS removeNode
-    *node = vp::Node::Word { value: String::new() };
-}
-
-fn sort_and_dedupe(items: Vec<String>) -> String {
-    let mut set: std::collections::BTreeSet<String> = items.into_iter().collect();
-    let mut out = Vec::new(); for s in set.drain_filter(|_| false) { out.push(s) } // drain_filter noop to consume
-    // BTreeSet iteration order; rebuild
-    let set2: std::collections::BTreeSet<String> = out.into_iter().collect();
-    set2.into_iter().collect::<Vec<_>>().join("")
-}
-
 pub fn plugin() -> pc::BuiltPlugin {
-    // Without browserslist, default legacy=false (no IE10/11 all bug); integrate later if needed
+    // Default: no IE10/11 "all" bug handling (legacy=false). Browserslist gating can be added later.
     let legacy = false;
+
     pc::plugin("postcss-minify-params")
-        .once_exit(move |css, _| {
-            css.walk_at_rules(|rule, _| {
-                let name = rule.name().to_lowercase();
-                if !["media","supports"].contains(&name.as_str()) { return true; }
-                let params_str = rule.params(); if params_str.is_empty() { return true; }
-                let mut params = vp::parse(&params_str);
-                // Mutate nodes
-                let mut nodes = params.nodes.clone();
-                // Walk with bubble true (post-order) to mimic js walk(true)
-                vp::walk(&mut nodes[..], &mut |node| {
+        // Operate directly on @rules to avoid full-tree once_exit traversal (prevents stalls).
+        .at_rule_filter("*", move |at, _| {
+            let name = at.name().to_lowercase();
+            if name != "media" && name != "supports" { return Ok(()); }
+
+            let params_str = at.params();
+            if params_str.is_empty() { return Ok(()); }
+            let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
+            if tracing {
+                eprintln!("[minify-params] enter @{} len={}", name, params_str.len());
+            }
+            // Cheap pre-scan: if no tokens that we care about exist, skip work
+            let has_tokens = params_str.contains('(')
+                || params_str.contains(':')
+                || params_str.contains('/')
+                || params_str.contains(',')
+                || (name == "media" && params_str.to_ascii_lowercase().contains("all"));
+            if !has_tokens {
+                if tracing { eprintln!("[minify-params] skip (no-tokens) @{}", name); }
+                return Ok(());
+            }
+            // Optional guard via env to avoid pathological allocations on very large params
+            if let Ok(max_str) = std::env::var("COMPILED_MINIFY_PARAMS_MAXLEN") {
+                if let Ok(max) = max_str.parse::<usize>() {
+                    if params_str.len() > max {
+                        if tracing { eprintln!("[minify-params] skip (len>{}) @{}", max, name); }
+                        return Ok(());
+                    }
+                }
+            }
+
+            // Parse and normalize parameter AST in-place via manual traversal to avoid walker overhead.
+            let mut parsed = vp::parse(&params_str);
+            if tracing { eprintln!("[minify-params] parsed @{}", name); }
+
+            fn normalize_nodes(nodes: &mut [vp::Node]) {
+                for node in nodes.iter_mut() {
                     match node {
-                        vp::Node::Div { before, after, .. } => { *before = String::new(); *after = String::new(); }
+                        vp::Node::Div { before, after, .. } => { before.clear(); after.clear(); }
+                        vp::Node::Space { value } => { *value = " ".to_string(); }
                         vp::Node::Function { nodes: inner, before, after, value, .. } => {
-                            *before = String::new();
-                            // Custom properties: if first node is word starting with -- and nodes[2] undefined => after=' '
+                            before.clear();
+                            // Custom properties spacing: keep a single trailing space for single-arg custom props
                             if let Some(first) = inner.get(0) {
                                 if let vp::Node::Word { value: v0 } = first {
-                                    if v0.starts_with("--") && inner.get(2).is_none() { *after = " ".to_string(); } else { *after = String::new(); }
-                                } else { *after = String::new(); }
-                            } else { *after = String::new(); }
-                            // aspect-ratio normalization: node.nodes[4] exists and func name contains '-aspect-ratio' at index 3
-                            if inner.get(4).is_some() && value.to_lowercase().contains("aspect-ratio") {
-                                let n2 = inner.get_mut(2);
-                                let n4 = inner.get_mut(4);
-                                if let (Some(vp::Node::Word { value: a_str }), Some(vp::Node::Word { value: b_str })) = (n2, n4) {
-                                    if let (Ok(a), Ok(b)) = (a_str.parse::<i64>(), b_str.parse::<i64>()) {
-                                        let (ra, rb) = aspect_ratio(a, b);
-                                        *a_str = ra.to_string(); *b_str = rb.to_string();
+                                    if v0.starts_with("--") && inner.get(2).is_none() { *after = " ".to_string(); } else { after.clear(); }
+                                } else { after.clear(); }
+                            } else { after.clear(); }
+                            // Aspect-ratio: only when first inner node has "-aspect-ratio" at index 3 and there are numbers at [2] and [4]
+                            if inner.len() > 4 {
+                                let first_is_aspect = match inner.get(0) {
+                                    Some(vp::Node::Word { value: v }) => v.to_ascii_lowercase().find("-aspect-ratio") == Some(3),
+                                    _ => false,
+                                };
+                                if first_is_aspect {
+                                    let (left, right) = inner.split_at_mut(4);
+                                    let n2 = left.get_mut(2);
+                                    let n4 = right.get_mut(0);
+                                    if let (Some(vp::Node::Word { value: a_str }), Some(vp::Node::Word { value: b_str })) = (n2, n4) {
+                                        if let (Ok(a), Ok(b)) = (a_str.parse::<i64>(), b_str.parse::<i64>()) {
+                                            let (ra, rb) = aspect_ratio(a, b);
+                                            *a_str = ra.to_string(); *b_str = rb.to_string();
+                                        }
                                     }
                                 }
                             }
+                            normalize_nodes(inner);
                         }
-                        vp::Node::Space { value } => { *value = " ".to_string(); }
-                        vp::Node::Word { value } => {
-                            let prev_word = params.nodes.get(usize::saturating_sub(0,2)); // not meaningful; we will check with index later
-                            let vlow = value.to_lowercase();
-                            if vlow == "all" && name == "media" {
-                                // We need to detect if there is a previous word; approximate by scanning neighbors later.
-                                // For now, if not legacy or there is a next 'and', remove 'all' and adjacent 'and' pieces.
-                                if !legacy { value.clear(); }
-                            }
-                        }
+                        _ => {}
                     }
-                    true
-                }, true);
+                }
+            }
 
-                // assign mutated nodes back
-                params.nodes = nodes;
-                // Build arguments list and sort+dedupe
-                let args = crate::postcss::plugins::normalize_css_engine::ordered_values::lib::arguments::get_arguments(&params);
+            normalize_nodes(&mut parsed.nodes);
+            if tracing { eprintln!("[minify-params] normalized nodes @{}", name); }
+
+            // Handle @media all removal at top-level exactly like JS plugin
+            if name == "media" {
+                // find any 'all' at start: pattern [Word(all)] optionally followed by Space, Word(and), Space
+                let mut i = 0usize;
+                while i < parsed.nodes.len() {
+                    let is_all = match parsed.nodes.get(i) {
+                        Some(vp::Node::Word { value }) => value.eq_ignore_ascii_case("all"),
+                        _ => false,
+                    };
+                    // prevWord defined if i>=2 and parsed.nodes[i-2] is Word
+                    let prev_word_exists = if i >= 2 { matches!(parsed.nodes.get(i-2), Some(vp::Node::Word { .. })) } else { false };
+                    if is_all && !prev_word_exists {
+                        let next_exists = parsed.nodes.get(i+2).is_some();
+                        let next_is_and = match parsed.nodes.get(i+2) {
+                            Some(vp::Node::Word { value }) => value.eq_ignore_ascii_case("and"),
+                            _ => false,
+                        };
+                        if !legacy || next_exists {
+                            if let Some(vp::Node::Word { value }) = parsed.nodes.get_mut(i) { value.clear(); }
+                        }
+                        if next_is_and {
+                            if let Some(node) = parsed.nodes.get_mut(i+2) { *node = vp::Node::Word { value: String::new() }; }
+                            if let Some(node) = parsed.nodes.get_mut(i+1) { *node = vp::Node::Word { value: String::new() }; }
+                            if let Some(node) = parsed.nodes.get_mut(i+3) { *node = vp::Node::Word { value: String::new() }; }
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                if tracing { eprintln!("[minify-params] after media all @{}", name); }
+            }
+
+            // Split by commas, then sort and dedupe for deterministic output
+            let args = crate::postcss::plugins::normalize_css_engine::ordered_values::lib::arguments::get_arguments(&parsed);
+            if tracing { eprintln!("[minify-params] get_arguments -> {} args @{}", args.len(), name); }
+            let joined = {
                 let splits: Vec<String> = args.into_iter().map(|a| split_arg(&a)).collect();
-                let sorted = {
-                    let mut set: std::collections::BTreeSet<String> = splits.into_iter().collect();
-                    set.into_iter().collect::<Vec<_>>().join("")
-                };
-                rule.set_params(sorted);
-                if rule.params().is_empty() { rule.set_raws_after_name(String::new()); }
-                true
-            });
+                let set: std::collections::BTreeSet<String> = splits.into_iter().collect();
+                set.into_iter().collect::<Vec<_>>().join(",")
+            };
+            if tracing { eprintln!("[minify-params] joined len={} @{}", joined.len(), name); }
+
+            // Write back. The stringifier inserts one space after name when params are non-empty.
+            at.set_params(joined.clone());
+
+            if joined.is_empty() {
+                // Ensure no stray space after at-rule name for empty params
+                let node_ref = at.to_node();
+                {
+                    let mut n = node_ref.borrow_mut();
+                    n.raws.set_text("afterName", "");
+                }
+            }
+            if tracing { eprintln!("[minify-params] exit   @{}", name); }
+
             Ok(())
         })
         .build()
 }
-

@@ -3,21 +3,19 @@ use postcss as pc;
 use regex::Regex;
 
 // Submodules mirroring JS plugin file structure for clarity and parity.
-pub mod minify_selectors { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::minify_selectors_plugin() } }
-pub mod minify_params { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::minify_params_plugin() } }
-pub mod ordered_values { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::ordered_values_plugin() } }
-pub mod convert_values { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::convert_values_plugin() } }
-pub mod colormin { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::colormin_plugin() } }
-pub mod reduce_initial { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::reduce_initial_plugin() } }
-pub mod discard_comments { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::discard_comments_plugin() } }
-pub mod normalize_url { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::normalize_url_plugin() } }
-pub mod normalize_unicode { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::normalize_unicode_plugin() } }
-pub mod normalize_string { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::normalize_string_plugin() } }
-pub mod normalize_positions { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::normalize_positions_plugin() } }
-pub mod normalize_timing_functions { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::normalize_timing_functions_plugin() } }
-pub mod minify_gradients { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::minify_gradients_plugin() } }
-pub mod calc { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::calc_plugin() } }
-pub mod normalize_current_color { #[cfg(feature = "postcss_engine")] use postcss as pc; #[cfg(feature = "postcss_engine")] pub fn plugin() -> pc::BuiltPlugin { super::normalize_current_color_plugin() } }
+pub mod minify_selectors;
+pub mod minify_params;
+pub mod ordered_values;
+pub mod convert_values;
+pub mod colormin;
+pub mod reduce_initial;
+pub mod normalize_url;
+pub mod normalize_unicode;
+pub mod normalize_string;
+pub mod normalize_positions;
+pub mod normalize_timing_functions;
+pub mod minify_gradients;
+pub mod calc;
 
 #[cfg(feature = "postcss_engine")]
 fn is_whitespace(ch: char) -> bool {
@@ -239,12 +237,10 @@ fn minify_params_whitespace(input: &str) -> String {
 }
 
 #[cfg(feature = "postcss_engine")]
-pub fn minify_selectors_plugin() -> pc::BuiltPlugin { super::normalize_css_engine::minify_selectors::plugin() }
+pub fn minify_selectors_plugin() -> pc::BuiltPlugin { self::minify_selectors::plugin() }
 
 #[cfg(feature = "postcss_engine")]
-pub fn minify_params_plugin() -> pc::BuiltPlugin {
-    super::normalize_css_engine::minify_params::plugin()
-}
+pub fn minify_params_plugin() -> pc::BuiltPlugin { self::minify_params::plugin() }
 
 #[cfg(feature = "postcss_engine")]
 pub fn ordered_values_plugin() -> pc::BuiltPlugin {
@@ -252,7 +248,7 @@ pub fn ordered_values_plugin() -> pc::BuiltPlugin {
     #[allow(unused_mut)]
     let mut use_new = true;
     if use_new {
-        return super::normalize_css_engine::ordered_values::plugin();
+        return self::ordered_values::plugin();
     }
     use postcss::list::{space, comma};
     fn minimize_box_shorthand(value: &str) -> String {
@@ -608,9 +604,7 @@ pub fn ordered_values_plugin() -> pc::BuiltPlugin {
 }
 
 #[cfg(feature = "postcss_engine")]
-pub fn convert_values_plugin() -> pc::BuiltPlugin {
-    super::normalize_css_engine::convert_values::plugin()
-}
+pub fn convert_values_plugin() -> pc::BuiltPlugin { self::convert_values::plugin() }
 
 #[cfg(feature = "postcss_engine")]
 pub fn colormin_plugin() -> pc::BuiltPlugin {
@@ -839,12 +833,10 @@ pub fn discard_comments_plugin() -> pc::BuiltPlugin {
 }
 
 #[cfg(feature = "postcss_engine")]
-pub fn normalize_url_plugin() -> pc::BuiltPlugin { super::normalize_css_engine::normalize_url::plugin() }
+pub fn normalize_url_plugin() -> pc::BuiltPlugin { self::normalize_url::plugin() }
 
 #[cfg(feature = "postcss_engine")]
-pub fn normalize_string_plugin() -> pc::BuiltPlugin {
-    super::normalize_css_engine::normalize_string::plugin()
-}
+pub fn normalize_string_plugin() -> pc::BuiltPlugin { self::normalize_string::plugin() }
 
 #[cfg(feature = "postcss_engine")]
 pub fn normalize_unicode_plugin() -> pc::BuiltPlugin {
@@ -894,14 +886,10 @@ pub fn normalize_unicode_plugin() -> pc::BuiltPlugin {
 }
 
 #[cfg(feature = "postcss_engine")]
-pub fn normalize_positions_plugin() -> pc::BuiltPlugin {
-    super::normalize_css_engine::normalize_positions::plugin()
-}
+pub fn normalize_positions_plugin() -> pc::BuiltPlugin { self::normalize_positions::plugin() }
 
 #[cfg(feature = "postcss_engine")]
-pub fn normalize_timing_functions_plugin() -> pc::BuiltPlugin {
-    super::normalize_css_engine::normalize_timing_functions::plugin()
-}
+pub fn normalize_timing_functions_plugin() -> pc::BuiltPlugin { self::normalize_timing_functions::plugin() }
 
 #[cfg(feature = "postcss_engine")]
 pub fn minify_gradients_plugin() -> pc::BuiltPlugin {
@@ -979,7 +967,7 @@ pub fn normalize_current_color_plugin() -> pc::BuiltPlugin {
 
 
 #[cfg(feature = "postcss_engine")]
-pub fn calc_plugin() -> pc::BuiltPlugin { super::normalize_css_engine::calc::plugin() }
+pub fn calc_plugin() -> pc::BuiltPlugin { self::calc::plugin() }
 
 
 

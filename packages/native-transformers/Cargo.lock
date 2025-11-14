@@ -312,6 +312,7 @@ dependencies = [
  "percent-encoding",
  "postcss",
  "regex",
+ "ryu-js",
  "serde",
  "serde_json",
  "swc_atoms",

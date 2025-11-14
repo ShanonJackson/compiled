@@ -1,4 +1,6 @@
 use postcss as pc;
+use crate::postcss::plugins::normalize_css_engine::ordered_values::lib::arguments::get_arguments;
+use std::str::FromStr;
 use crate::postcss::value_parser as vp;
 use regex::Regex;
 
@@ -43,14 +45,25 @@ pub fn plugin() -> pc::BuiltPlugin {
                 if let vp::Node::Function { value: fname, nodes, .. } = n {
                     let name = fname.to_ascii_lowercase();
                     if matches!(name.as_str(), "linear-gradient"|"repeating-linear-gradient"|"-webkit-linear-gradient"|"-webkit-repeating-linear-gradient") {
-                        let mut args = get_arguments(nodes);
+                        let mut args = get_arguments(&vp::ParsedValue { nodes: nodes.clone() });
                         if let Some(first_tokens) = args.get_mut(0) {
                             if !first_tokens.is_empty() {
                                 if let vp::Node::Word { value: ref mut first } = first_tokens[0] {
                                     if first.to_ascii_lowercase() == "to" && first_tokens.len() == 3 {
                                         // slice(2)
                                         nodes.drain(0..2);
-                                        if let Some(vp::Node::Word { value: ref mut side }) = nodes.get_mut(0) { let map = |s: &str| match s {"top"=>"0deg","right"=>"90deg","bottom"=>"180deg","left"=>"270deg", _=> s}; let lv = side.to_ascii_lowercase(); *side = map(&lv).to_string(); changed = true; }
+                                        if let Some(vp::Node::Word { value: ref mut side }) = nodes.get_mut(0) {
+                                            let lv = side.to_ascii_lowercase();
+                                            let mapped = match lv.as_str() {
+                                                "top" => "0deg".to_string(),
+                                                "right" => "90deg".to_string(),
+                                                "bottom" => "180deg".to_string(),
+                                                "left" => "270deg".to_string(),
+                                                _ => lv.clone(),
+                                            };
+                                            *side = mapped;
+                                            changed = true;
+                                        }
                                     }
                                 }
                             }
@@ -63,8 +76,15 @@ pub fn plugin() -> pc::BuiltPlugin {
                                     let side = if let vp::Node::Word { value: s } = &nodes[2] { s.to_ascii_lowercase() } else { String::new() };
                                     nodes.drain(0..2);
                                     if let Some(vp::Node::Word { value: ref mut v0 }) = nodes.get_mut(0) {
-                                        let mapped = match side.as_str() { "top"=>"0deg","right"=>"90deg","bottom"=>"180deg","left"=>"270deg", _=>&side };
-                                        *v0 = mapped.to_string(); changed = true;
+                                        let mapped = match side.as_str() {
+                                            "top" => "0deg".to_string(),
+                                            "right" => "90deg".to_string(),
+                                            "bottom" => "180deg".to_string(),
+                                            "left" => "270deg".to_string(),
+                                            _ => side.clone(),
+                                        };
+                                        *v0 = mapped;
+                                        changed = true;
                                     }
                                 }
                             }
@@ -93,7 +113,21 @@ pub fn plugin() -> pc::BuiltPlugin {
                             }
                             last_stop = this_stop;
                             if is_final {
-                                if let vp::Node::Word { value } = &mut nodes[stop_i] { if value == "100%" { if let vp::Node::Word { value: v1 } = &mut nodes[mid_i] { *v1 = String::new(); } *value = String::new(); changed = true; } }
+                                if mid_i != stop_i {
+                                    let (i1, i2) = if mid_i < stop_i { (mid_i, stop_i) } else { (stop_i, mid_i) };
+                                    let (left, right) = nodes.split_at_mut(i2);
+                                    let left_node = &mut left[i1];
+                                    let right_node = &mut right[0];
+                                    // Map back which is which
+                                    let (mid_node, stop_node) = if mid_i < stop_i { (left_node, right_node) } else { (right_node, left_node) };
+                                    if let vp::Node::Word { value: stop_val } = stop_node {
+                                        if stop_val == "100%" {
+                                            if let vp::Node::Word { value: mid_val } = mid_node { *mid_val = String::new(); }
+                                            *stop_val = String::new();
+                                            changed = true;
+                                        }
+                                    }
+                                }
                             }
                         }
                     } else if matches!(name.as_str(), "radial-gradient"|"repeating-radial-gradient") {

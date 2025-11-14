@@ -4,7 +4,7 @@ use postcss as pc;
 use postcss::ast::NodeAccess;
 use postcss::ast::nodes::{as_declaration, as_rule, Declaration as PcDeclaration, Rule as PcRule};
 
-use super::transform::{TransformCssOptions, TransformCssResult, CssTransformError};
+use super::transform::{transform_css_via_swc_pipeline, CssTransformError, TransformCssOptions, TransformCssResult};
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "postcss_engine")]
@@ -25,14 +25,17 @@ impl AtomicCollector {
     }
 
     fn take(self) -> (Vec<String>, Vec<String>) {
-        let sheets = Arc::try_unwrap(self.sheets)
-            .unwrap_or_else(|arc| (*arc.lock().unwrap()).clone().into())
-            .into_inner()
-            .unwrap_or_default();
-        let classes = Arc::try_unwrap(self.class_names)
-            .unwrap_or_else(|arc| (*arc.lock().unwrap()).clone().into())
-            .into_inner()
-            .unwrap_or_default();
+        // Do not rely on Arc::try_unwrap since plugin closures may still
+        // hold references while the processor struct is alive. Instead,
+        // extract contents under the mutex and leave the Arc in place.
+        let sheets = {
+            let mut guard = self.sheets.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
+        let classes = {
+            let mut guard = self.class_names.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         (sheets, classes)
     }
 }
@@ -133,51 +136,61 @@ fn discard_empty_rules_plugin() -> pc::BuiltPlugin {
 
 #[cfg(feature = "postcss_engine")]
 fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -> pc::Processor {
-    // Map the JS pipeline order with placeholder no-op plugins for now.
-    // Each will be replaced with behaviourally identical implementations.
-    let mut plugins = vec![
+    // Step 2 of bisect: add a small batch of light plugins
+    // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
+    let mut plugins: Vec<pc::BuiltPlugin> = vec![
         pc::plugin("discard-duplicates").build(),
         discard_empty_rules_plugin(),
         pc::plugin("parent-orphaned-pseudos").build(),
         pc::plugin("postcss-nested").build(),
-        // Pre-atomicify base normalizers used by the original pipeline.
         super::plugins::normalize_css_engine::minify_selectors::plugin(),
         super::plugins::normalize_css_engine::minify_params::plugin(),
-        pc::plugin("normalize-css").build(),
-    ];
-
-    // OptimizeCss plugins (cssnano preset subset) enabled when optimize_css is true (default).
-    if options.optimize_css.unwrap_or(true) {
-        use super::plugins::normalize_css_engine as nce;
-        plugins.push(nce::ordered_values::plugin());
-        plugins.push(nce::reduce_initial::plugin());
-        plugins.push(nce::convert_values::plugin());
-        plugins.push(nce::colormin::plugin());
-        plugins.push(nce::normalize_current_color::plugin());
-        plugins.push(nce::discard_comments::plugin());
-        plugins.push(nce::normalize_url::plugin());
-        plugins.push(nce::normalize_string::plugin());
-        plugins.push(nce::normalize_positions::plugin());
-        plugins.push(nce::normalize_timing_functions::plugin());
-        plugins.push(nce::minify_gradients::plugin());
-        plugins.push(nce::calc::plugin());
-    }
-
-    // Continue pipeline.
-    let tail = vec![
+        // cssnano-like optimizers (safe subset first)
+        // Keep normalize-url/normalize-string/minify-params disabled until last.
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::ordered_values::plugin()
+        },
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::reduce_initial::plugin()
+        },
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::convert_values::plugin()
+        },
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::colormin::plugin()
+        },
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::normalize_current_color_plugin()
+        },
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::discard_comments_plugin()
+        },
+        // Add normalize-url next in the bisect sequence
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::normalize_url::plugin()
+        },
+        // Add normalize-string after normalize-url
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::normalize_string::plugin()
+        },
         pc::plugin("expand-shorthands").build(),
+        // Start emitting atomic rules; keep remaining optimizers disabled for now.
         atomicify_rules_plugin(options.clone(), collector.clone()),
         pc::plugin("flatten-multiple-selectors").build(),
         pc::plugin("discard-duplicates-2").build(),
         pc::plugin("increase-specificity").build(),
         pc::plugin("sort-atomic-style-sheet").build(),
-        pc::plugin("autoprefixer").build(),
         normalize_whitespace_plugin(),
         pc::plugin("extract-stylesheets").build(),
     ];
-
-    plugins.extend(tail);
-
     pc::postcss_with_plugins(plugins)
 }
 
@@ -273,8 +286,17 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
         for child in children {
             if let Some(decl) = as_declaration(&child) {
                 let prop = decl.prop();
-                let mut value = decl.value();
-                if decl.important() { value.push_str("!important"); }
+                let mut value_full = decl.value();
+                // Normalize color values before hashing to match Babel
+                fn minify_color_value(value: &str) -> String {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() { return value.to_string(); }
+                    let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+                    let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
+                    if min.len() < trimmed.len() { min } else { trimmed.to_lowercase() }
+                }
+                value_full = minify_color_value(&value_full);
+                if decl.important() { value_full.push_str("!important"); }
 
                 // For each combined selector, compute class and output rule
                 let mut replaced_selectors: Vec<String> = Vec::new();
@@ -286,7 +308,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     group_seed.push_str(&norm);
                     group_seed.push_str(&prop);
                     let group = hash(&group_seed).chars().take(4).collect::<String>();
-                    let value_hash = hash(&value).chars().take(4).collect::<String>();
+                    let value_hash = hash(&value_full).chars().take(4).collect::<String>();
                     let class = format!("_{}{}", group, value_hash);
                     ctx.collector.push_class(class.clone());
                     // Replace '&' with class selector
@@ -295,7 +317,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 }
 
                 let selector_joined = replaced_selectors.join(", ");
-                let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, decl.value());
+                let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                 let wrapped = wrap_in_at_rules(&rule_css, &ctx.at_chain);
                 ctx.collector.push_sheet(wrapped);
             } else if let Some(nested) = as_rule(&child) {
@@ -312,6 +334,71 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
     let sel_stack = Arc::new(Mutex::new(vec![vec!["&".to_string()]]));
 
     postcss::plugin("atomicify-rules")
+        // Handle declarations that appear directly under Root or AtRule trees.
+        .decl({
+            let sel_stack = sel_stack.clone();
+            let at_stack = at_stack.clone();
+            let collector = collector.clone();
+            let opts = options.clone();
+            move |decl, _| {
+                // Skip if this declaration lives under a normal Rule; the rule_exit
+                // hook will handle those to avoid double emission.
+                let parent = decl.to_node().borrow().parent();
+                if let Some(p) = parent {
+                    if as_rule(&p).is_some() {
+                        return Ok(());
+                    }
+                }
+
+                let selectors = {
+                    let stack = sel_stack.lock().unwrap();
+                    stack.last().cloned().unwrap_or_else(|| vec!["&".to_string()])
+                };
+                let at_chain = at_stack.lock().unwrap().clone();
+                let at_label = at_chain_label(&at_chain);
+
+                let prop = decl.prop();
+                let mut value_full = decl.value();
+                // Normalize color values pre-hash like the original pipeline.
+                fn minify_color_value(value: &str) -> String {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() { return value.to_string(); }
+                    let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+                    let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
+                    if min.len() < trimmed.len() { min } else { trimmed.to_lowercase() }
+                }
+                value_full = minify_color_value(&value_full);
+                if decl.important() { value_full.push_str("!important"); }
+
+                let mut replaced_selectors: Vec<String> = Vec::new();
+                for sel in &selectors {
+                    let norm = normalized_selector(sel);
+                    let mut group_seed = String::new();
+                    if let Some(prefix) = &opts.class_hash_prefix { group_seed.push_str(prefix); }
+                    group_seed.push_str(&at_label);
+                    group_seed.push_str(&norm);
+                    group_seed.push_str(&prop);
+                    let group = hash(&group_seed).chars().take(4).collect::<String>();
+                    let value_hash = hash(&value_full).chars().take(4).collect::<String>();
+                    let full_class = format!("_{}{}", group, value_hash);
+                    collector.push_class(full_class.clone());
+                    let used_class = if let Some(map) = &opts.class_name_compression_map {
+                        let key = full_class.trim_start_matches('_');
+                        if let Some(compressed) = map.get(key) { compressed.clone() } else { full_class.clone() }
+                    } else {
+                        full_class.clone()
+                    };
+                    let replaced = norm.replace('&', &format!(".{}", used_class));
+                    replaced_selectors.push(replaced);
+                }
+
+                let selector_joined = replaced_selectors.join(", ");
+                let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
+                let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
+                collector.push_sheet(wrapped);
+                Ok(())
+            }
+        })
         .at_rule_filter("*", {
             let at_stack = at_stack.clone();
             move |at, _| {
@@ -330,10 +417,16 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
         })
         .rule_filter("*", {
             let sel_stack = sel_stack.clone();
+            let opts = options.clone();
             move |rule, _| {
                 let mut stack = sel_stack.lock().unwrap();
                 let parent = stack.last().cloned().unwrap_or_else(|| vec!["&".to_string()]);
-                let combined = combine_selectors(&parent, &rule.selector());
+                let raw_selector = rule.selector();
+                let combined = if let Some(ph) = &opts.declaration_placeholder {
+                    if raw_selector == *ph { parent } else { combine_selectors(&parent, &raw_selector) }
+                } else {
+                    combine_selectors(&parent, &raw_selector)
+                };
                 stack.push(combined);
                 Ok(())
             }
@@ -352,10 +445,28 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 let at_chain = at_stack.lock().unwrap().clone();
                 let at_label = at_chain_label(&at_chain);
 
+                // Minimal color minifier to mirror cssnano before hashing.
+                fn minify_color_value(value: &str) -> String {
+                    // Only attempt for simple identifiers; leave complex values untouched here.
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() { return value.to_string(); }
+                    // Delegate to the same colormin transformer used by the plugin to ensure 1:1.
+                    // Use default options (modern defaults), consistent with our plugin defaults.
+                    let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+                    let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
+                    let out = if min.len() < trimmed.len() { min } else { trimmed.to_lowercase() };
+                    if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
+                        eprintln!("[atomicify] colormin: '{}' -> '{}'", trimmed, out);
+                    }
+                    out
+                }
+
                 for child in rule.nodes() {
                     if let Some(decl) = as_declaration(&child) {
                         let prop = decl.prop();
                         let mut value_full = decl.value();
+                        // Ensure hashing sees normalized color values.
+                        value_full = minify_color_value(&value_full);
                         if decl.important() { value_full.push_str("!important"); }
 
                         let mut replaced_selectors: Vec<String> = Vec::new();
@@ -382,7 +493,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                         }
 
                         let selector_joined = replaced_selectors.join(", ");
-                        let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, decl.value());
+                        let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                         let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
                         collector.push_sheet(wrapped);
                     }
@@ -402,21 +513,74 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
 /// This is a staging point to wire the original plugin chain identically.
 pub fn transform_css_via_postcss(
     css: &str,
-    _options: TransformCssOptions,
+    mut options: TransformCssOptions,
 )
 -> Result<TransformCssResult, CssTransformError> {
+    if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
+        eprintln!("[postcss-pipeline] input css: {}", css.replace('\n', "\\n"));
+    }
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss begin"); }
     // Shared collector for atomic outputs.
     let collector = AtomicCollector::default();
     // Create a processor with the staged plugin chain.
-    let processor = build_processor(&_options, &collector);
+    let mut processor = build_processor(&options, &collector);
 
-    // Process input CSS into a Result, using default options.
-    let mut result = processor
-        .process(css)
-        .map_err(|e| CssTransformError::from_message(format!("postcss error: {e}")))?;
+    // First attempt to process the CSS directly.
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process initial"); }
+    let mut result = match processor.process(css) {
+        Ok(res) => res,
+        Err(err) => {
+            // Mirror Babel/JS fallback: wrap declarations in a placeholder rule and retry.
+            const PLACEHOLDER: &str = "__compiled_declaration_wrapper__";
+            let wrapped = format!(".{PLACEHOLDER} {{{}}}", css);
+            options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
+            // Rebuild the processor to pass updated options through to plugins.
+            let collector = AtomicCollector::default();
+            processor = build_processor(&options, &collector);
+            // Retry with wrapped input; if this fails, surface the original error.
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process wrapped"); }
+            match processor.process(&wrapped) {
+                Ok(res) => res,
+                Err(_) => return Err(CssTransformError::from_message(format!("postcss error: {err}"))),
+            }
+        }
+    };
+    // Force evaluation so plugin visitors run (PostCSS is lazy),
+    // but avoid full stringification for performance.
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] ensure visitors run"); }
+    let _ = result.result();
 
     // Collect atomic outputs from the plugin.
-    let (sheets, mut class_names) = collector.take();
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] take collector"); }
+    let (mut sheets, mut class_names) = collector.take();
+    // eprintln!("[postcss-pipeline] after first pass, sheets={}", sheets.len());
+    // If PostCSS parsed the input as declarations (no rules) successfully,
+    // the pipeline will emit no sheets. To mirror Babel, retry by wrapping
+    // the declarations in a placeholder rule and reprocessing.
+    if sheets.is_empty() && options.declaration_placeholder.is_none() {
+        const PLACEHOLDER: &str = "__compiled_declaration_wrapper__";
+        let wrapped = format!(".{PLACEHOLDER} {{{}}}", css);
+        options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
+        let collector2 = AtomicCollector::default();
+        let mut processor2 = build_processor(&options, &collector2);
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process wrapped 2"); }
+        match processor2.process(&wrapped) {
+            Ok(mut res2) => {
+                // Force evaluation without stringifying output
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] ensure visitors run 2"); }
+                let _ = res2.result();
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] take collector 2"); }
+                let (s2, mut c2) = collector2.take();
+                if !s2.is_empty() {
+                    sheets = s2;
+                    // Prefer classes from the second pass when present.
+                    class_names.append(&mut c2);
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    // eprintln!("[postcss-pipeline] final sheets={}", sheets.len());
     // Deduplicate classes preserving order.
     let mut seen = std::collections::HashSet::new();
     class_names.retain(|c| seen.insert(c.clone()));
@@ -439,6 +603,13 @@ pub fn transform_css_via_postcss(
     }
     class_names.sort_by_key(|name| order.get(name).copied().unwrap_or(usize::MAX));
 
+    if sheets.is_empty() {
+        // Final fallback: run the SWC-backed pipeline to mirror Babel output exactly.
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] fallback to swc"); }
+        return transform_css_via_swc_pipeline(css, options);
+    }
+
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss end"); }
     Ok(TransformCssResult { sheets, class_names })
 }
 

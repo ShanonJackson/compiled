@@ -64,6 +64,9 @@ async function readFixtureConfig(dir) {
 }
 
 async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
+  const label = path.basename(fixtureDir);
+  const t0 = Date.now();
+  console.log(`[fixtures]   ${label}: babel start`);
   const cfg = await readFixtureConfig(fixtureDir);
   const compiledOptions = {
     cache: false,
@@ -81,6 +84,7 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
       [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
     ],
   });
+  console.log(`[fixtures]   ${label}: babel done (${((Date.now()-t0)/1000).toFixed(1)}s)`);
 
   if (!result || typeof result.code !== 'string') {
     throw new Error(`Failed to transform fixture at ${fixtureDir}`);
@@ -97,6 +101,8 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
 }
 
 async function attemptSwcTransform(inputCode, inputPath) {
+  const label = path.basename(path.dirname(inputPath));
+  console.log(`[fixtures]   ${label}: swc start`);
   const { existsSync } = require('fs');
   const { spawnSync } = require('child_process');
   const bin = path.join(
@@ -110,7 +116,7 @@ async function attemptSwcTransform(inputCode, inputPath) {
 
   if (!existsSync(bin)) {
     // Try to build the CLI once to avoid JS bridges for SWC
-    const buildEnv = { ...process.env, COMPILED_USE_POSTCSS: '1' };
+    const buildEnv = { ...process.env };
     const build = spawnSync('cargo', ['build', '-p', 'fixtures_cli', '--release'], {
       cwd: path.join(repoRoot, 'packages', 'native-transformers'),
       stdio: 'inherit',
@@ -123,27 +129,52 @@ async function attemptSwcTransform(inputCode, inputPath) {
     }
   }
 
-  let env = { ...process.env, COMPILED_USE_POSTCSS: '1' };
+  // Keep the CLI quiet by default for throughput. Enable
+  // COMPILED_DEBUG_COLORMIN manually when debugging.
+  let env = { ...process.env };
   try {
     const babelPkg = require('@compiled/babel-plugin/package.json');
     if (babelPkg && typeof babelPkg.version === 'string' && babelPkg.version) {
       env.TEST_PKG_VERSION = babelPkg.version;
     }
   } catch (_) {}
-  const run = spawnSync(bin, [inputPath], { encoding: 'utf8', env });
-  if (run.status !== 0) {
+  const run = spawnSync(bin, [inputPath], {
+    encoding: 'utf8',
+    env: { ...env, COMPILED_SKIP_POSTCSS_DEPRECATION: '1', COMPILED_CLI_TRACE: '1' },
+    timeout: 30000,
+  });
+  console.log(`[fixtures]   ${label}: swc done${run && run.status === 0 ? '' : ' (nonzero)'}${run && run.error && run.error.code === 'ETIMEDOUT' ? ' (timeout)' : ''}`);
+  if (run && run.stderr && String(run.stderr).trim()) {
+    // Show first chunk to help debugging stalls; keeps output manageable.
+    const preview = String(run.stderr).slice(0, 4000);
+    console.error(preview);
+  }
+  if (process.env.COMPILED_DEBUG_COLORMIN && run && run.stderr) {
+    try { if (String(run.stderr).trim()) console.error(String(run.stderr)); } catch {}
+  }
+  if (!run || run.error || run.status !== 0) {
+    if (run && run.error && run.error.code === 'ETIMEDOUT') {
+      console.warn(`Skipping SWC transform for ${inputPath}: CLI timed out after 60s`);
+    }
     console.warn(
-      `Skipping SWC transform for ${inputPath}: fixtures_cli failed with code ${run.status}\n${run.stderr || ''}`
+      `Skipping SWC transform for ${inputPath}: fixtures_cli failed${run && run.status != null ? ` with code ${run.status}` : ''}\n${(run && run.stderr) || ''}`
     );
-    return { code: inputCode, styleRules: [] };
+    return { code: inputCode, styleRules: [], success: false };
   }
 
   try {
     const parsed = JSON.parse(run.stdout);
-    return { code: String(parsed.code || ''), styleRules: Array.isArray(parsed.styleRules) ? parsed.styleRules : [] };
+    return {
+      code: String(parsed.code || ''),
+      styleRules: Array.isArray(parsed.styleRules) ? parsed.styleRules : [],
+      success: true,
+    };
   } catch (e) {
-    console.warn(`Skipping SWC transform for ${inputPath}: failed to parse CLI JSON: ${e.message}`);
-    return { code: inputCode, styleRules: [] };
+    const preview = (run.stdout || '').slice(0, 200).replace(/\s+/g, ' ');
+    console.warn(
+      `Skipping SWC transform for ${inputPath}: failed to parse CLI JSON: ${e.message}\nstdout preview: ${preview}`
+    );
+    return { code: inputCode, styleRules: [], success: false };
   }
 }
 
@@ -168,6 +199,9 @@ async function processFixture(name) {
   const inputPath = path.join(fixtureDir, 'in.jsx');
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
+  const startedAt = Date.now();
+  console.log(`[fixtures] → ${name}`);
+
   // No debug capture in normal runs; keep updater focused on fixture parity
 
   const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath);
@@ -181,19 +215,19 @@ async function processFixture(name) {
   );
 
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath);
-  // SWC output is now the canonical out.js
-  await writeFileIfChanged(
-    path.join(fixtureDir, 'out.jsx'),
-    formatWithPrettierOrReturn(swcOutputs.code, 'babel')
-  );
-  const styleRulesToWrite =
-    Array.isArray(swcOutputs.styleRules) && swcOutputs.styleRules.length > 0
-      ? swcOutputs.styleRules
-      : babelOutputs.styleRules;
-  await writeFileIfChanged(
-    path.join(fixtureDir, 'swc-style-rules.json'),
-    JSON.stringify(styleRulesToWrite, null, 2)
-  );
+  if (swcOutputs.success) {
+    // Only write outputs on success; avoid clobbering with empty data on failure/timeout
+    await writeFileIfChanged(
+      path.join(fixtureDir, 'out.jsx'),
+      formatWithPrettierOrReturn(swcOutputs.code, 'babel')
+    );
+    await writeFileIfChanged(
+      path.join(fixtureDir, 'swc-style-rules.json'),
+      JSON.stringify(Array.isArray(swcOutputs.styleRules) ? swcOutputs.styleRules : [], null, 2)
+    );
+  } else {
+    console.warn(`[fixtures]   ${name}: swc failed — keeping previous outputs`);
+  }
 
   // Compare parity between Babel and SWC outputs
   const [babelCode, swcCode] = await Promise.all([
@@ -214,6 +248,9 @@ async function processFixture(name) {
   } catch (_err) {
     rulesEqual = false;
   }
+
+  const dur = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(`[fixtures] ✓ ${name} (${dur}s)`);
 
   return { name, codeEqual, rulesEqual };
 }
