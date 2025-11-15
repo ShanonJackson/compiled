@@ -8,7 +8,7 @@ export const dynamicPadding = null;
 export const expressionObject = null;
 export const ExpressionExample = () => (
 	<div
-		className={ax(["_gq7j1f4h _9ad0ullc _rkan1osi", "_6wp8dlk8 _1qpb1403"])}
+		className={ax(["_1yt41f4h _syazullc _1llw1osi", "_18u0dlk8 _2rko8y89"])}
 		style={{
 			"--_y28lkp": ix(Math.max(base - 5, 0), "px"),
 		}}

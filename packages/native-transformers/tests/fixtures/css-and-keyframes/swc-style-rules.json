@@ -1,5 +1,4 @@
 [
-  "._yrq0idpf \\30 \\%{opacity:0}",
-  "._1exukb7n to{opacity:1}",
-  "._bexg16rn{animation:kgnpaw5 1s ease}"
+  "@keyframes kgnpaw5 { \\30 \\% { opacity: 0; }to { opacity: 1; } }",
+  "._y44v16rn{animation:kgnpaw5 1s ease}"
 ]

@@ -9,9 +9,7 @@ However, the WAY we resolve them is important, when we find a difference we firs
 That's where we need to fix the issue, because our goal is to have a 1:1 replica including all bugs, if we just start fixing issues bespokely we will diverge and we've failed.
 Whenever we can't achieve a 1:1 replica (i.e because Babel has an API that SWC doesn't have) then you need to raise that and suggest a way forwards. I.E We had clear comment: // COMPAT: Babel does x we need to replicate that here with Y
 
-Our work is almost done, we're in the process of verifying correctness and just finished our postcss pipeline. All the original JS sources are here:
-packages/postcss-plugin-sources for the versions of the plugins that the original babel-plugin was using, use those to create 1:1 replicas, including all bugs, quirks and features.
-any deviation will deviate hashes and break fixtures.
+We've even replicated the ENTIRE postcss pipeline of the original including all plugins 1:1 in Rust, so that the input to our hashing functions is identical to the original babel-plugin.
 
 Again to be very clear, All code and libraries in the original are translated 1:1 to Rust, including all bugs and quirks; We are NEVER 'patching'
 behaviours in bespoke places, if you ever need to deviate behaviour you MUST raise that as an issue and we will discuss how to handle it.
@@ -19,13 +17,18 @@ behaviours in bespoke places, if you ever need to deviate behaviour you MUST rai
 When this work is finished every input file will produce identical output files through babel or through swc. In all cases. Every single time.
 If you ever need the original JS source code of anything to compare, just ask me and i'll provide it. If everything is correctly ported 1:1 then the Sum of everything is a 1:1 replica.
 
+If you ever have to deviate from the original file/folder OR code logic because it can't be 1:1 you need to raise it immediately with a work around for approval.
+
+Always ask yourself, why does this difference exist? It exists because we failed to port something 1:1; Which means when we fix it we need to fix it how it works in the original.
+
+
 
 requirements.md
 - swc_core has to be on 26.3.4 [This requirement is currently met]
 - use oxc_resolver which is a replacement for webpack-custom-resolve [currently installed]
 - yarn 1.22.22 (is the yarn version used in the monorepo); node version is 20.15.1 (node version used in the monorepo)
 - This css-in-js plugin supports using imported values in css-in-js syntax; When you need to implement this behaviour use oxc_resolver 11.13.1 AND SWC to walk the dependency tree to find the exported value.
-- replicates logic verbatim AND file/folder strucutre; This is to ensure any bugs in old carry across to new. For things like babel.metadata that don't have a swc equivilent we should return metadata as a struct from the native rust transformer function.
+- replicates logic verbatim AND file/folder structure; This is to ensure any bugs in old carry across to new. For things like babel.metadata that don't have a swc equivilent we should return metadata as a struct from the native rust transformer function.
 - hashing must remain identical for both the <selector> and <value> portion of the hash.
 - postcss is a library that normalizes input; We need to replicate this library in postcss.rs for the version the babel-plugin is using. In Rust; Again it has to be verbatim and handle input/output identically to existing.
 - "style-rules" should be emitted when extract is true; Similar to how packages/parcel-transformer does it.
@@ -39,13 +42,18 @@ requirements.md
 - The 'transform' function will emit the new AST AND will emit 'style-rules' as a returned data type, basically anything that  is on babel's metadata will be returned as a return value of the transform pass.
 - Errors should be reported with https://rustdoc.swc.rs/swc_common/errors/struct.Handler.html identically to as they are now.
 - Javascript support is NOT required; Again this plugin will run natively via Rust on a SWC AST; Therefore we are never compiling this to WASM.
-
+- Ensure you fix warnings emitted in terminal when we run fixtures_cli -- release - We want a clean production copy.
 
 Testing Plan.md
 - Fixtures are going to be the test strategy for catching regressions between new plugins.
 - tests/fixtures/<test case name>, in.jsx = input code, out.jsx = output code after our plugins, babel-out.jsx output code after babel-plugins, babel-style-rules.json = JUST styleRules from babel, swc-style-rules.json = JUST styleRules from SWC
 - This is the command to update AND run fixtures for latest code: packages/native-transformers/scripts/update-fixtures.js
-- It checks for ANY missmatch in out.jsx compared to babel-out.jsx AND ANY missmatch in style-rules json files.
+- It checks for ANY miss match in out.jsx compared to babel-out.jsx AND ANY missmatch in style-rules json files.
 
+
+Resources:
+packages/postcss-plugin-sources  - You can find all the original post-css plugin source code here for the js implementations:
+cargo build --manifest-path packages/native-transformers/Cargo.toml -p fixtures_cli --release         (this builds fixtures)
+node packages/native-transformers/scripts/update-fixtures.js                (this runs the fixtures update script)
 
 

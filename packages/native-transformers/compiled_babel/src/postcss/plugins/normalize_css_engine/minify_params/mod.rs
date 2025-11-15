@@ -130,11 +130,15 @@ pub fn plugin() -> pc::BuiltPlugin {
             // Split by commas, then sort and dedupe for deterministic output
             let args = crate::postcss::plugins::normalize_css_engine::ordered_values::lib::arguments::get_arguments(&parsed);
             if tracing { eprintln!("[minify-params] get_arguments -> {} args @{}", args.len(), name); }
-            let joined = {
+            let mut joined = {
                 let splits: Vec<String> = args.into_iter().map(|a| split_arg(&a)).collect();
                 let set: std::collections::BTreeSet<String> = splits.into_iter().collect();
                 set.into_iter().collect::<Vec<_>>().join(",")
             };
+            // Ensure no spaces after ':' inside parameters to match cssnano
+            if joined.contains(": ") {
+                joined = joined.replace(": ", ":");
+            }
             if tracing { eprintln!("[minify-params] joined len={} @{}", joined.len(), name); }
 
             // Write back. The stringifier inserts one space after name when params are non-empty.

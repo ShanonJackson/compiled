@@ -4,8 +4,8 @@ import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 const fade = null;
 const toneMap = {
-	primary: "_9ad0xbvz",
-	danger: "_9ad014zx",
+	primary: "_syazxbvz",
+	danger: "_syaz14zx",
 };
 const baseStyles = null;
 const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr) => {
@@ -17,7 +17,7 @@ const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmp
 			{...__cmplp}
 			style={__cmpls}
 			ref={__cmplr}
-			className={ax(["_gq7jftgi _f1qkglyw", __cmplp.className])}
+			className={ax(["_1yt4ftgi _2fx6glyw", __cmplp.className])}
 		/>
 	);
 });
@@ -25,7 +25,7 @@ if (process.env.NODE_ENV !== "production") {
 	Wrapper.displayName = "Wrapper";
 }
 export const Component = () => (
-	<Wrapper className={ax(["_1knudlk8 _1rr818cn _m4k5r3uz", toneMap.primary])}>
-		<span className={ax(["_yrq0idpf _1exukb7n", "_bexg65d0 _1qji1vm8"])}>combo</span>
+	<Wrapper className={ax(["_1wybdlk8 _72bc18cn _1qiwr3uz", toneMap.primary])}>
+		<span className={ax(["_y44v65d0 _aetr1vm8"])}>combo</span>
 	</Wrapper>
 );

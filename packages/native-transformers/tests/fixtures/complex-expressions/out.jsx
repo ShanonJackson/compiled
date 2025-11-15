@@ -18,10 +18,7 @@ export const FancyButton = forwardRef(
 				{...__cmplp}
 				style={__cmpls}
 				ref={__cmplr}
-				className={ax([
-					"_ilggidpf _1exukb7n _bexg6l02 _1rjnyh40 _b8imnqa1 _1bl71iu8 _rkan120f",
-					__cmplp.className,
-				])}
+				className={ax(["_y44v6l02 _189eyh40 _1dqonqa1 _1h6d1iu8 _1llw120f", __cmplp.className])}
 			/>
 		);
 	}
@@ -30,9 +27,9 @@ if (process.env.NODE_ENV !== "production") {
 	FancyButton.displayName = "FancyButton";
 }
 const themed = {
-	primary: "_9ad01a6z",
-	secondary: "_9ad01iu8",
+	primary: "_syaz1a6z",
+	secondary: "_syaz1iu8",
 };
 const alias = "secondary";
 export const mappedClass = themed[alias];
-export const WithClassNames = () => <div className={ax(["_9ad01iu8 _gq7j198p"])}>example</div>;
+export const WithClassNames = () => <div className={ax(["_syaz1iu8 _1yt4puy2"])}>example</div>;

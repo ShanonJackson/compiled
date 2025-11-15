@@ -1781,6 +1781,16 @@ pub fn as_rule(node: &NodeRef) -> Option<Rule> {
     }
 }
 
+/// Helper to convert an existing node reference into an [`AtRule`] wrapper if it
+/// stores at-rule data.
+pub fn as_at_rule(node: &NodeRef) -> Option<AtRule> {
+    if matches!(node.borrow().data, NodeData::AtRule(_)) {
+        Some(AtRule { node: node.clone() })
+    } else {
+        None
+    }
+}
+
 /// Helper to convert an existing node reference into a [`Declaration`] wrapper if possible.
 pub fn as_declaration(node: &NodeRef) -> Option<Declaration> {
     if matches!(node.borrow().data, NodeData::Declaration(_)) {

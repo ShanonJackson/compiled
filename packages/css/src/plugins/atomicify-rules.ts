@@ -39,7 +39,11 @@ const atomicClassName = (node: Declaration, opts: PluginOpts) => {
   const selectors = opts.selectors ? opts.selectors.join('') : '';
   const prefix = opts.classHashPrefix ?? '';
   const group = hash(`${prefix}${opts.atRule}${selectors}${node.prop}`).slice(0, 4);
-
+  console.log({
+    selectors,
+    prefix,
+    inputToHash: `${prefix}${opts.atRule}${selectors}${node.prop}`
+  })
   const value = node.important ? node.value + node.important : node.value;
   const valueHash = hash(value).slice(0, 4);
 

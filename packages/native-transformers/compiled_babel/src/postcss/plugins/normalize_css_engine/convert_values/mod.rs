@@ -103,10 +103,16 @@ pub fn plugin() -> pc::BuiltPlugin {
                     vp::Node::Function { value, nodes: inner, .. } => {
                         let low = value.to_lowercase();
                         if matches!(low.as_str(), "calc"|"min"|"max"|"clamp"|"hsl"|"hsla") {
-                            for n in inner.iter_mut() { if let vp::Node::Word { .. } = n { parse_word(n, true, None); } }
-                            return true;
+                            // Only transform unit-like words inside supported math/color functions.
+                            for n in inner.iter_mut() {
+                                if let vp::Node::Word { .. } = n { parse_word(n, true, None); }
+                            }
+                            // Prevent walker from descending again into children we already handled.
+                            return false;
                         }
-                        if low == "url" { return true; }
+                        // Do not traverse into var()/url()/unknown functions — cssnano convert-values does not
+                        // rewrite inside them, and walking into var() breaks custom property names like "--foo".
+                        return false;
                     }
                     _ => {}
                 }
@@ -118,4 +124,3 @@ pub fn plugin() -> pc::BuiltPlugin {
         })
         .build()
 }
-
