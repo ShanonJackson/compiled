@@ -451,25 +451,103 @@ fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
     None
 }
 
-fn ordered_class_names_from_sheets(sheets: &[String]) -> Vec<String> {
-    // Build class names in exact sheet emission order, de-duplicated.
-    use indexmap::IndexSet;
-    let mut ordered: IndexSet<String> = IndexSet::new();
-    for sheet in sheets {
-        if let Some(class_name) = extract_first_class_from_sheet(sheet) {
-            ordered.insert(class_name);
+fn first_property_from_sheet(sheet: &str) -> Option<String> {
+    if let Some(open) = sheet.find('{') {
+        let rest = &sheet[open + 1..];
+        if let Some(colon) = rest.find(':') {
+            let prop = &rest[..colon];
+            let trimmed = prop.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
         }
     }
-    ordered.into_iter().collect()
+    None
+}
+
+fn shorthand_bucket(prop: &str) -> Option<u32> {
+    match prop {
+        "all" => Some(0),
+        // Level 1
+        "animation"|"animation-range"|"background"|"border"|"border-image"|"border-radius"|
+        "column-rule"|"columns"|"contain-intrinsic-size"|"container"|"flex"|"flex-flow"|
+        "font"|"font-synthesis"|"gap"|"grid"|"grid-area"|"inset"|"list-style"|"mask"|
+        "mask-border"|"offset"|"outline"|"overflow"|"overscroll-behavior"|"padding"|
+        "place-content"|"place-items"|"place-self"|"position-try"|"scroll-margin"|
+        "scroll-padding"|"scroll-timeline"|"text-decoration"|"text-emphasis"|"text-wrap"|
+        "transition"|"view-timeline" => Some(1),
+        // Level 2
+        "border-color"|"border-style"|"border-width"|"font-variant"|"grid-column"|"grid-row"|
+        "grid-template"|"inset-block"|"inset-inline"|"margin-block"|"margin-inline"|
+        "padding-block"|"padding-inline"|"scroll-margin-block"|"scroll-margin-inline"|
+        "scroll-padding-block"|"scroll-padding-inline" => Some(2),
+        // Level 3
+        "border-block"|"border-inline" => Some(3),
+        // Level 4
+        "border-top"|"border-right"|"border-bottom"|"border-left" => Some(4),
+        // Level 5
+        "border-block-start"|"border-block-end"|"border-inline-start"|"border-inline-end" => Some(5),
+        _ => None,
+    }
+}
+
+fn parent_shorthand(prop: &str) -> Option<&'static str> {
+    match prop {
+        // padding
+        "padding-top"|"padding-right"|"padding-bottom"|"padding-left" => Some("padding"),
+        "padding-block-start"|"padding-block-end" => Some("padding-block"),
+        "padding-inline-start"|"padding-inline-end" => Some("padding-inline"),
+        // margin
+        "margin-top"|"margin-right"|"margin-bottom"|"margin-left" => Some("margin"),
+        "margin-block-start"|"margin-block-end" => Some("margin-block"),
+        "margin-inline-start"|"margin-inline-end" => Some("margin-inline"),
+        // border
+        "border-bottom-color"|"border-top-color"|"border-left-color"|"border-right-color"|
+        "border-inline-color"|"border-block-color"|"border-inline-start-color"|"border-inline-end-color"|
+        "border-block-start-color"|"border-block-end-color" => Some("border-color"),
+        "border-bottom-style"|"border-top-style"|"border-left-style"|"border-right-style"|
+        "border-inline-style"|"border-block-style"|"border-inline-start-style"|"border-inline-end-style"|
+        "border-block-start-style"|"border-block-end-style" => Some("border-style"),
+        "border-bottom-width"|"border-top-width"|"border-left-width"|"border-right-width"|
+        "border-inline-width"|"border-block-width"|"border-inline-start-width"|"border-inline-end-width"|
+        "border-block-start-width"|"border-block-end-width" => Some("border-width"),
+        _ => None,
+    }
+}
+
+fn order_class_names_by_bucket(class_names: &[String], sheets: &[String]) -> Vec<String> {
+    // Build class->prop map from sheets
+    use std::collections::HashMap;
+    let mut prop_map: HashMap<&str, String> = HashMap::new();
+    for sheet in sheets {
+        if let (Some(class), Some(prop)) = (extract_first_class_from_sheet(sheet), first_property_from_sheet(sheet)) {
+            prop_map.insert(Box::leak(class.into_boxed_str()), prop);
+        }
+    }
+    // Stable sort by bucket, then by original index
+    let mut with_index: Vec<(usize, &String)> = class_names.iter().enumerate().collect();
+    with_index.sort_by_key(|(idx, name)| {
+        let prop = prop_map.get(name.as_str()).map(|s| s.as_str());
+        let bucket = prop
+            .and_then(|p| shorthand_bucket(p).or_else(|| parent_shorthand(p).and_then(shorthand_bucket)))
+            .unwrap_or(u32::MAX);
+        let family_rank: u32 = match prop {
+            Some(p) if p == "gap" => 0,
+            Some(p) if p.starts_with("padding") => 1,
+            Some(p) if p == "border" || p.starts_with("border-") => 2,
+            _ => 3,
+        };
+        (bucket, family_rank, *idx)
+    });
+    with_index.into_iter().map(|(_i, s)| s.clone()).collect()
 }
 
 fn compress_class_names(
-    _class_names: &[String],
+    class_names: &[String],
     compression_map: Option<&BTreeMap<String, String>>,
     sheets: &[String],
 ) -> String {
-    // Build className string based on final sheet emission order to match Babel JSX output.
-    let ordered = ordered_class_names_from_sheets(sheets);
+    let ordered = order_class_names_by_bucket(class_names, sheets);
     let compressed = compress_class_names_for_runtime(&ordered, compression_map);
     compressed.join(" ")
 }
@@ -826,3 +904,4 @@ mod tests {
         std::env::remove_var("NODE_ENV");
     }
 }
+

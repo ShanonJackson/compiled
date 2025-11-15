@@ -20,7 +20,7 @@ export const spreadTemplate = null;
 export const SpreadExampleComponent = () => (
 	<main
 		className={ax([
-			"_zulp1crf _19it1ujt _1e0c1txw _1wyb7vkz _ca0q19bv _u5f319bv _n3td19bv _19bv19bv _bfhk188t _syazd5lx",
+			"_zulp1crf _19it1ujt _ca0q19bv _u5f319bv _n3td19bv _19bv19bv _1e0c1txw _1wyb7vkz _bfhk188t _syazd5lx",
 			"_2rko1y44 _16qs1r5l",
 		])}
 	>

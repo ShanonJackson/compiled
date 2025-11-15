@@ -18,10 +18,7 @@ export const FancyButton = forwardRef(
 				{...__cmplp}
 				style={__cmpls}
 				ref={__cmplr}
-				className={ax([
-					"_y44v6l02 _189eyh40 _1dqonqa1 _1h6d1iu8 _1llw120f:hover",
-					__cmplp.className,
-				])}
+				className={ax(["_y44v6l02 _189eyh40 _1dqonqa1 _1h6d1iu8 _1llw120f", __cmplp.className])}
 			/>
 		);
 	}

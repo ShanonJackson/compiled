@@ -9,7 +9,7 @@ export const expressionObject = null;
 export const ExpressionExample = () => (
 	<div
 		className={ax([
-			"_ca0q1f4h _u5f31f4h _n3td1f4h _19bv1f4h _syazudzx _1llw1f4f:hover",
+			"_ca0q1f4h _u5f31f4h _n3td1f4h _19bv1f4h _syazudzx _1llw1f4f",
 			"_2rko14y2 _18u0dlk8",
 		])}
 		style={{
