@@ -58,7 +58,7 @@ fn value_is_ident(list: &Vec<ComponentValue>, expected: &str) -> bool {
     }
 }
 
-fn make_ident(value: &str) -> ComponentValue {
+pub fn make_ident(value: &str) -> ComponentValue {
     ComponentValue::Ident(Box::new(Ident { value: value.into(), raw: None, span: Default::default() }))
 }
 

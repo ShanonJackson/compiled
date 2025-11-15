@@ -230,7 +230,10 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
         remaining_depth: 8,
     };
 
-    if !matches!(expr, Expr::Lit(Lit::Str(_))) {
+    // Do not coerce boolean literals into numbers – Babel preserves booleans
+    // (e.g., "false") rather than converting to 0. This matters for CSS object
+    // properties like `inherits: false` under `@property`.
+    if !matches!(expr, Expr::Lit(Lit::Str(_)) | Expr::Lit(Lit::Bool(_))) {
         if let Value::Known(value) = expr.as_pure_number(ctx) {
             let allow_nan = matches!(expr, Expr::Lit(Lit::Num(_)) | Expr::Bin(_));
 
@@ -238,6 +241,12 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
                 return Some(make_numeric_literal(value, expr.span()));
             }
         }
+    }
+
+    // Do not coerce boolean literals into strings – Babel keeps booleans as booleans
+    // so downstream object CSS builder will inject a runtime CSS variable (var(--…)).
+    if matches!(expr, Expr::Lit(Lit::Bool(_))) {
+        return None;
     }
 
     match expr.as_pure_string(ctx) {

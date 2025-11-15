@@ -56,6 +56,8 @@ pub mod expand_shorthands_engine;
 pub mod sort_shorthand_declarations;
 #[path = "vendor_prefixing_lite.rs"]
 pub mod vendor_prefixing_lite;
+#[path = "vendor_autoprefixer/mod.rs"]
+pub mod vendor_autoprefixer;
 #[allow(unused_imports)]
 pub use atomicify_rules::*;
 

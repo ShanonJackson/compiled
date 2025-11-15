@@ -221,52 +221,15 @@ pub(crate) fn transform_css_via_swc_pipeline(
     mut options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
     let preserved_comments = collect_preserved_comments(css, options.optimize_css);
-    let css_trimmed = css;
-    let mut stylesheet = match parse_stylesheet(css_trimmed) {
+    let mut stylesheet = match parse_stylesheet(css) {
         Ok(sheet) => sheet,
         Err(original_err) => {
-            // COMPAT: Some at-rules like `@property` may not be accepted by the SWC CSS parser
-            // in certain versions. Babel preserves these blocks as a single rule. When we detect
-            // this specific shape, avoid the declaration-wrapper fallback that would lead to
-            // atomicification, and instead pass the original at-rule through as a single sheet
-            // after minimal whitespace normalization to match Babel's serialized output.
-            let starts_with_at_property = css_trimmed.trim_start().starts_with("@property ");
             const PLACEHOLDER: &str = "__compiled_declaration_wrapper__";
             let wrapped = format!(".{PLACEHOLDER} {{{}}}", css);
             match parse_stylesheet(&wrapped) {
                 Ok(sheet) => {
-                    if starts_with_at_property {
-                        // Build a passthrough result preserving the at-rule block and class names.
-                        let mut s = css_trimmed.trim().to_string();
-                        // Normalize common spacing to match Babel minified style-rules.
-                        // Remove spaces before/after tokens.
-                        for (a, b) in [
-                            (" :", ":"),
-                            (": ", ":"),
-                            (" ;", ";"),
-                            ("; ", ";"),
-                            (" {", "{"),
-                            ("{ ", "{"),
-                            (" }", "}"),
-                            ("} ", "}"),
-                        ] {
-                            s = s.replace(a, b);
-                        }
-                        // Minimal color normalization for this at-rule case.
-                        if s.contains("initial-value:black") {
-                            s = s.replace("initial-value:black", "initial-value:#000");
-                        }
-                        if s.contains("initial-value: black") {
-                            s = s.replace("initial-value: black", "initial-value:#000");
-                        }
-
-                        let mut ctx = TransformContext::new(&options);
-                        ctx.push_sheet(s);
-                        return Ok(ctx.finish());
-                    } else {
-                        options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
-                        sheet
-                    }
+                    options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
+                    sheet
                 }
                 Err(_) => return Err(original_err),
             }
@@ -310,7 +273,10 @@ pub(crate) fn transform_css_via_swc_pipeline(
 
     // Autoprefixer-equivalent vendor prefixing must run after
     // sort-atomic-style-sheet and before whitespace/extract to match Babel.
-    pipeline.push(Box::new(super::plugins::vendor_prefixing_lite::vendor_prefixing_lite()));
+    // Full Autoprefixer port (wired to browserslist and caniuse data)
+    if std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true) {
+        pipeline.push(Box::new(super::plugins::vendor_autoprefixer::vendor_autoprefixer()));
+    }
     pipeline.push(Box::new(normalize_whitespace()));
     pipeline.push(Box::new(extract_stylesheets()));
 

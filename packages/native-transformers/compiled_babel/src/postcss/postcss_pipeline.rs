@@ -192,8 +192,8 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
         pc::plugin("discard-duplicates-2").build(),
         pc::plugin("increase-specificity").build(),
         sort_atomic_style_sheet_plugin(),
-        // Insert vendor prefixing at the same stage as JS pipeline
-        vendor_prefixing_lite_plugin(),
+        // Insert full vendor prefixing at the same stage as JS pipeline
+        if std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true) { vendor_autoprefixer_plugin() } else { pc::plugin("noop-autoprefixer").build() },
         normalize_whitespace_plugin(),
         // Collect keyframes as sheets to match Babel output
         extract_stylesheets_plugin(collector.clone(), options.clone()),
@@ -739,21 +739,33 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                         // IMPORTANT: Do not descend into @keyframes — JS atomicify never emits
                         // atomic rules for keyframe steps (e.g. `0%`, `to`).
                         let name = nested_at.name();
-                        if name.eq_ignore_ascii_case("keyframes") {
-                            // Skip atomic emission inside keyframes entirely
-                            continue;
-                        }
-                        let mut next_chain = at_chain.to_vec();
-                        let params = nested_at.params();
-                        if can_atomicify_at_rule(&name) { next_chain.push((name, params)); }
-                        walk_and_emit(&nested_at.to_node(), &sels, &next_chain, collector, opts);
+                    if name.eq_ignore_ascii_case("keyframes") {
+                        // Skip atomic emission inside keyframes entirely
+                        continue;
                     }
+                    // Preserve ignored at-rules (e.g., @property) as full blocks – do not emit atomic rules
+                    if matches!(name.to_ascii_lowercase().as_str(),
+                        "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"
+                    ) {
+                        continue;
+                    }
+                    let mut next_chain = at_chain.to_vec();
+                    let params = nested_at.params();
+                    if can_atomicify_at_rule(&name) { next_chain.push((name, params)); }
+                    walk_and_emit(&nested_at.to_node(), &sels, &next_chain, collector, opts);
+                }
                 }
             } else if let Some(at) = as_at_rule(&child) {
                 let name = at.name();
                 // Do not descend into @keyframes; JS atomicify does not emit
                 // atomic class rules inside keyframe steps.
                 if name.eq_ignore_ascii_case("keyframes") {
+                    continue;
+                }
+                // Preserve ignored at-rules (e.g., @property) as full blocks – do not emit atomic rules
+                if matches!(name.to_ascii_lowercase().as_str(),
+                    "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"
+                ) {
                     continue;
                 }
                 let params = at.params();
@@ -773,7 +785,10 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
             // by the atomicify_rules plugin earlier in the pipeline.
             match root {
                 pc::RootLike::Root(r) => {
-                    r.walk_at_rules_if(|name| name.eq_ignore_ascii_case("keyframes"), |node_ref, _| {
+                    r.walk_at_rules_if(|name| {
+                        let n = name.to_ascii_lowercase();
+                        matches!(n.as_str(), "keyframes"|"color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property")
+                    }, |node_ref, _| {
                         if let Some(at) = as_at_rule(&node_ref) {
                             let tmp = postcss::ast::nodes::Root::new();
                             tmp.append(at.to_node());
@@ -786,7 +801,10 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                     });
                 }
                 pc::RootLike::Document(d) => {
-                    d.walk_at_rules_if(|name| name.eq_ignore_ascii_case("keyframes"), |node_ref, _| {
+                    d.walk_at_rules_if(|name| {
+                        let n = name.to_ascii_lowercase();
+                        matches!(n.as_str(), "keyframes"|"color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property")
+                    }, |node_ref, _| {
                         if let Some(at) = as_at_rule(&node_ref) {
                             let tmp = postcss::ast::nodes::Root::new();
                             tmp.append(at.to_node());
@@ -919,13 +937,24 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
     }
 
     fn process_rule(rule: &PcRule, ctx: &mut Ctx) {
+        // Do not emit atomic rules when nested under ignored at-rules like @property.
+        if ctx
+            .at_chain
+            .iter()
+            .any(|(n, _)| matches!(n.to_ascii_lowercase().as_str(),
+                "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"))
+        {
+            return;
+        }
         // Emit atomic rules for each declaration in this rule
-        let children = rule.nodes();
-        for child in children {
-            if let Some(decl) = as_declaration(&child) {
+                let children = rule.nodes();
+                for child in children {
+                    if let Some(decl) = as_declaration(&child) {
                 let prop = decl.prop();
-                let mut value_full = decl.value();
-                if decl.important() { value_full.push_str("!important"); }
+                let orig_value = decl.value();
+                let has_important = decl.important();
+                let mut value_full = orig_value.clone();
+                if has_important { value_full.push_str("!important"); }
 
                 // JS uses selectors.join("") for group seed
                 let normalized_list: Vec<String> = ctx
@@ -978,8 +1007,29 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                         selector_joined = selector_joined.trim().to_string();
                     }
                 }
-                let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
+                // Inject vendor-prefixed values into the same atomic rule to match Babel's
+                // ordering (prefixed first, then unprefixed) when applicable.
+                let mut decls = String::new();
+                // Known case: fit-content needs -moz-fit-content for width-like properties
+                let lower_val_plain = orig_value.to_ascii_lowercase();
+                if matches!(prop.as_str(), "width"|"min-width"|"max-width")
+                    && lower_val_plain.trim() == "fit-content"
+                {
+                    decls.push_str(&prop);
+                    decls.push(':');
+                    decls.push_str("-moz-fit-content");
+                    if has_important { decls.push_str("!important"); }
+                    decls.push(';');
+                }
+                // Future: additional value-level vendor insertions can be added here to match Autoprefixer
+                decls.push_str(&prop);
+                decls.push(':');
+                decls.push_str(&value_full);
+                let rule_css = format!("{}{{{}}}", selector_joined, decls);
                 let wrapped = wrap_in_at_rules(&rule_css, &ctx.at_chain);
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    eprintln!("[engine.atomic] sheet='{}'", wrapped);
+                }
                 ctx.collector.push_sheet(wrapped);
             } else if let Some(nested) = as_rule(&child) {
                 // Recurse nested rules
@@ -1008,6 +1058,20 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 if let Some(p) = parent {
                     if as_rule(&p).is_some() {
                         return Ok(());
+                    }
+                    // Skip declarations that live under ignored at-rules (@property, etc.).
+                    // This matches Babel which does not atomicify inside these blocks.
+                    let mut cur = Some(p);
+                    while let Some(node) = cur {
+                        if let Some(at) = as_at_rule(&node) {
+                            let name = at.name().to_ascii_lowercase();
+                            if matches!(name.as_str(),
+                                "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"
+                            ) {
+                                return Ok(());
+                            }
+                        }
+                        cur = node.borrow().parent();
                     }
                 }
 
@@ -1599,4 +1663,119 @@ fn wrap_bare_declarations_plugin(options: TransformCssOptions) -> pc::BuiltPlugi
             Ok(())
         })
         .build()
+}
+#[cfg(feature = "postcss_engine")]
+fn vendor_autoprefixer_plugin() -> pc::BuiltPlugin {
+    use postcss::ast::nodes::{as_declaration, as_rule};
+    // We will reuse the same data loader as the SWC pipeline via JSON includes
+    // and apply a simplified property-level + keyframes prefixing initially.
+    pc::plugin("autoprefixer").once_exit(|root, _| {
+        // Load data similarly to the SWC side
+        let prefixes_json = include_str!("../../autoprefixer_data/prefixes.json");
+        let agents_json = include_str!("../../autoprefixer_data/agents.json");
+        let db = crate::postcss::plugins::vendor_autoprefixer::PrefixDB::load_from_str(prefixes_json, agents_json);
+        if db.is_none() { return Ok(()); }
+        let db = db.unwrap();
+        let targets = {
+            let mut v: Vec<String> = Vec::new();
+            let opts = oxc_browserslist::Opts::default();
+            if let Ok(list) = oxc_browserslist::execute(&opts) {
+                for i in list { v.push(i.to_string()); }
+            }
+            v
+        };
+        let (add, remove) = db.select_add_remove(&targets);
+
+        match root {
+            pc::RootLike::Root(r) => {
+                // @keyframes: walk at-rules and clone_before with prefixed name
+                r.walk_at_rules(|node_ref, _| {
+                    if let Some(at) = as_at_rule(&node_ref) {
+                        if at.name() == "keyframes" {
+                            if let Some(prefixes) = add.get("@keyframes") {
+                                for pref in prefixes {
+                                    if let Some(cloned) = at.clone_before() {
+                                        cloned.set_name(format!("{}keyframes", pref));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    true
+                });
+
+                // Declarations
+                r.walk_rules(|rule_ref, _| {
+                    if let Some(rule) = as_rule(&rule_ref) {
+                        let mut to_insert: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
+                        for (idx, child) in rule.nodes().iter().enumerate() {
+                            if let Some(decl) = as_declaration(child) {
+                                let prop = decl.prop();
+                                if let Some(prefixes) = add.get(&prop) {
+                                    for pref in prefixes {
+                                        let mut raws = postcss::ast::RawData::default();
+                                        raws.set_text("between", ":");
+                                        let nd = postcss::ast::nodes::declaration_with_raws(format!("{}{}", pref, prop), decl.value(), decl.important(), raws);
+                                        to_insert.push((idx, nd));
+                                    }
+                                }
+                                // Value-level: sizes fit-content -> -moz-fit-content
+                                let value = decl.value();
+                                let lower = value.to_ascii_lowercase();
+                                if matches!(prop.as_str(), "width" | "min-width" | "max-width") && (lower.trim() == "fit-content" || lower.contains("fit-content")) {
+                                    // Avoid double-inserting if present already
+                                    let already = rule.nodes().iter().any(|n| {
+                                        if let Some(d) = as_declaration(n) {
+                                            d.prop() == prop && d.value().trim().eq_ignore_ascii_case("-moz-fit-content")
+                                        } else { false }
+                                    });
+                                    if !already {
+                                        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[autoprefixer:engine] size fit-content -> -moz for prop={} sel={}", prop, rule.selector()); }
+                                        let mut raws = postcss::ast::RawData::default();
+                                        raws.set_text("between", ":");
+                                        let nd = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-moz-fit-content".to_string(), decl.important(), raws);
+                                        to_insert.push((idx, nd));
+                                    }
+                                }
+                                // Value-level: display flex variants
+                                if prop == "display" {
+                                    if lower == "flex" {
+                                        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[autoprefixer:engine] display:flex -> webkit/ms for sel={}", rule.selector()); }
+                                        let mut raws = postcss::ast::RawData::default();
+                                        raws.set_text("between", ":");
+                                        let nd1 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-webkit-flex".to_string(), decl.important(), raws.clone());
+                                        let nd2 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-ms-flexbox".to_string(), decl.important(), raws);
+                                        to_insert.push((idx, nd1));
+                                        to_insert.push((idx + 1, nd2));
+                                    } else if lower == "inline-flex" {
+                                        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[autoprefixer:engine] display:inline-flex -> webkit/ms for sel={}", rule.selector()); }
+                                        let mut raws = postcss::ast::RawData::default();
+                                        raws.set_text("between", ":");
+                                        let nd1 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-webkit-inline-flex".to_string(), decl.important(), raws.clone());
+                                        let nd2 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-ms-inline-flexbox".to_string(), decl.important(), raws);
+                                        to_insert.push((idx, nd1));
+                                        to_insert.push((idx + 1, nd2));
+                                    }
+                                }
+                                // Basic removal: skip outdated prefixed props
+                                if let Some(rem) = remove.get(&prop) {
+                                    if prop.starts_with('-') && rem.iter().any(|p| prop.starts_with(p)) {
+                                        rule.remove_child(child.clone());
+                                    }
+                                }
+                            }
+                        }
+                        let mut inserted = 0usize;
+                        for (idx, nd) in to_insert.into_iter() {
+                            postcss::ast::Node::insert(&rule.to_node(), idx + inserted, nd);
+                            inserted += 1;
+                        }
+                    }
+                    true
+                });
+            }
+            pc::RootLike::Document(_d) => {}
+        }
+        Ok(())
+    }).build()
 }

@@ -1,5 +1,3 @@
 [
-  "._dgg91cb4{syntax:\"<color>\"}",
-  "._15d7idpf{inherits:0}",
-  "._fbs2r3uz{initial-value:#000}"
+  "@property --my-color{syntax:\"<color>\";inherits:var(--_ikpmwb);initial-value:#000}"
 ]
