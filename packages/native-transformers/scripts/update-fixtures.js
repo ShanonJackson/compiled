@@ -160,6 +160,15 @@ async function attemptSwcTransform(inputCode, inputPath) {
     env: runEnv,
   });
 
+  // Forward stderr so trace logs are visible when COMPILED_CLI_TRACE=1
+  if (run && typeof run.stderr === 'string' && run.stderr.length) {
+    try {
+      process.stderr.write(run.stderr);
+    } catch (_e) {
+      // ignore write errors
+    }
+  }
+
   if (run.status !== 0) {
     console.warn(`[fixtures] ${label}: swc run failed; skipping`);
     return { code: inputCode, styleRules: [], success: false };

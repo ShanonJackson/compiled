@@ -451,26 +451,26 @@ fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
     None
 }
 
-fn order_class_names_by_sheet(class_names: &mut [String], sheets: &[String]) {
-    use std::collections::HashMap;
-    let mut order: HashMap<String, usize> = HashMap::new();
-    for (i, sheet) in sheets.iter().enumerate() {
+fn ordered_class_names_from_sheets(sheets: &[String]) -> Vec<String> {
+    // Build class names in exact sheet emission order, de-duplicated.
+    use indexmap::IndexSet;
+    let mut ordered: IndexSet<String> = IndexSet::new();
+    for sheet in sheets {
         if let Some(class_name) = extract_first_class_from_sheet(sheet) {
-            order.entry(class_name).or_insert(i);
+            ordered.insert(class_name);
         }
     }
-
-    class_names.sort_by_key(|name| order.get(name).copied().unwrap_or(usize::MAX));
+    ordered.into_iter().collect()
 }
 
 fn compress_class_names(
-    class_names: &[String],
+    _class_names: &[String],
     compression_map: Option<&BTreeMap<String, String>>,
     sheets: &[String],
 ) -> String {
-    let mut compressed = compress_class_names_for_runtime(class_names, compression_map);
-    // COMPAT: Align class name ordering with emitted sheets like Babel
-    order_class_names_by_sheet(&mut compressed, sheets);
+    // Build className string based on final sheet emission order to match Babel JSX output.
+    let ordered = ordered_class_names_from_sheets(sheets);
+    let compressed = compress_class_names_for_runtime(&ordered, compression_map);
     compressed.join(" ")
 }
 

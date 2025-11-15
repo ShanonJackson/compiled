@@ -18,7 +18,7 @@ const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmp
 			style={__cmpls}
 			ref={__cmplr}
 			className={ax([
-				"_ca0qftgi _u5f3ftgi _n3tdftgi _19bvftgi _1l201r31 _cwctglyw _d7ut1o36",
+				"_ca0qftgi _u5f3ftgi _n3tdftgi _19bvftgi _1l201r31:focus _cwctglyw:focus _d7ut1o36:focus",
 				__cmplp.className,
 			])}
 		/>
@@ -28,7 +28,7 @@ if (process.env.NODE_ENV !== "production") {
 	Wrapper.displayName = "Wrapper";
 }
 export const Component = () => (
-	<Wrapper className={ax(["_1wybdlk8 _72bc18cn _1qiwr3uz", toneMap.primary])}>
-		<span className={ax(["_y44v65d0 _aetr1vm8"])}>combo</span>
+	<Wrapper className={ax(["_1wybdlk8 _72bc18cn:hover", toneMap.primary])}>
+		<span className={ax(["_y44v65d0 _aetr1vm8:after"])}>combo</span>
 	</Wrapper>
 );

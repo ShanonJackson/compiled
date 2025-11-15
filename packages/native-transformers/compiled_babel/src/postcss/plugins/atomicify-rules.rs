@@ -243,7 +243,15 @@ fn build_atomic_selector(
             .cloned()
             .unwrap_or(class_name.clone());
 
-        built.push(replace_nesting_selector(&normalized, &replacement));
+        let replaced = replace_nesting_selector(&normalized, &replacement);
+        if trace_enabled() {
+            let prop = declaration_name(&declaration.name);
+            eprintln!(
+                "[atomicify] prop='{}' selector='{}' class='{}' replaced='{}'",
+                prop, normalized, class_name, replaced
+            );
+        }
+        built.push(replaced);
     }
 
     built.join(", ")
@@ -366,11 +374,12 @@ fn serialize_complex_selector_with_possible_nesting(
         first = false;
     }
 
-    // Base serialization
+    // Base serialization using minified formatting so the selector text
+    // mirrors postcss-minify-selectors output used by Babel prior to hashing.
     let mut output = String::new();
     {
         let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
         let _ = generator.emit(selector);
     }
 
@@ -567,4 +576,7 @@ mod tests {
             panic!("expected qualified rule");
         }
     }
+}
+fn trace_enabled() -> bool {
+    std::env::var("COMPILED_CSS_TRACE").is_ok()
 }

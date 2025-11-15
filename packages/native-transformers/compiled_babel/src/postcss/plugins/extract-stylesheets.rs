@@ -24,6 +24,11 @@ impl Plugin for ExtractStyleSheets {
             };
 
             ctx.push_sheet(serialized);
+            if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+                if let Some(last) = ctx.sheets.last() {
+                    eprintln!("[extract] sheet='{}'", last);
+                }
+            }
         }
     }
 }

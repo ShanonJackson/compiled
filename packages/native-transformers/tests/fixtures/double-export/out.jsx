@@ -9,6 +9,6 @@ export { sharedClass as default };
 export const Example = () => (
 	<div>
 		<span className={ax(["_1wybdlk8 _syaz15td _bfhkqgb6"])}>object styles</span>
-		<span className={ax(["_k48p8n31 _30l31q9v"])}>template styles</span>
+		<span className={ax(["_k48p8n31 _30l31q9v:hover"])}>template styles</span>
 	</div>
 );

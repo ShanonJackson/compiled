@@ -88,16 +88,15 @@ fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
     None
 }
 
-fn order_class_names_by_sheet(class_names: &mut [String], sheets: &[String]) {
-    use std::collections::HashMap;
-    let mut order: HashMap<String, usize> = HashMap::new();
-    for (i, sheet) in sheets.iter().enumerate() {
+fn ordered_class_names_from_sheets(sheets: &[String]) -> Vec<String> {
+    use indexmap::IndexSet;
+    let mut ordered: IndexSet<String> = IndexSet::new();
+    for sheet in sheets {
         if let Some(class_name) = extract_first_class_from_sheet(sheet) {
-            order.entry(class_name).or_insert(i);
+            ordered.insert(class_name);
         }
     }
-
-    class_names.sort_by_key(|name| order.get(name).copied().unwrap_or(usize::MAX));
+    ordered.into_iter().collect()
 }
 
 fn negate_expression(expr: Expr) -> Expr {
@@ -237,11 +236,10 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result =
                 transform_css(&logical.css, options).unwrap_or_else(|err| panic!("{err}"));
-            let mut compressed_class_names =
-                compress_class_names_for_runtime(&css_result.class_names, compression_map.as_ref());
-            // COMPAT: Match Babel ordering by aligning className order with sheet emission order
-            order_class_names_by_sheet(&mut compressed_class_names, &css_result.sheets);
-            let class_name_literal = string_literal(compressed_class_names.join(" "));
+            let ordered = ordered_class_names_from_sheets(&css_result.sheets);
+            let compressed =
+                compress_class_names_for_runtime(&ordered, compression_map.as_ref());
+            let class_name_literal = string_literal(compressed.join(" "));
 
             TransformCssItemResult {
                 sheets: css_result.sheets,
@@ -269,11 +267,10 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let css = get_item_css(item);
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
-            let mut compressed_class_names =
-                compress_class_names_for_runtime(&css_result.class_names, compression_map.as_ref());
-            // COMPAT: Match Babel ordering by aligning className order with sheet emission order
-            order_class_names_by_sheet(&mut compressed_class_names, &css_result.sheets);
-            let class_name = compressed_class_names.join(" ");
+            let ordered = ordered_class_names_from_sheets(&css_result.sheets);
+            let compressed =
+                compress_class_names_for_runtime(&ordered, compression_map.as_ref());
+            let class_name = compressed.join(" ");
             let class_expression = if class_name.trim().is_empty() {
                 None
             } else {

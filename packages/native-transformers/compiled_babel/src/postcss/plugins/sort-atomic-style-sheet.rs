@@ -109,6 +109,24 @@ impl Plugin for SortAtomicStyleSheet {
         combined.extend(at_rules.into_iter().map(|info| info.node));
 
         stylesheet.rules = combined;
+
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+            use crate::postcss::utils::sort_pseudo_selectors::collect_rule_selectors as collect;
+            let mut parts: Vec<String> = Vec::new();
+            for rule in &stylesheet.rules {
+                match rule {
+                    Rule::QualifiedRule(q) => {
+                        let sel = collect(q).get(0).cloned().unwrap_or_default();
+                        parts.push(format!("rule('{}')", sel));
+                    }
+                    Rule::AtRule(a) => {
+                        parts.push(format!("@{} {}", at_rule_name(&a.name), at_rule_params(&a)));
+                    }
+                    _ => parts.push("<other>".into()),
+                }
+            }
+            eprintln!("[sort-atomic] rules=[{}]", parts.join(", "));
+        }
     }
 }
 

@@ -41,6 +41,19 @@ pub(crate) fn sort_rules(rules: &mut Vec<Rule>) {
     rules.sort_by(|a, b| {
         compare_declaration_buckets(first_declaration_in_rule(a), first_declaration_in_rule(b))
     });
+
+    if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+        let summary: Vec<String> = rules
+            .iter()
+            .map(|r| first_declaration_in_rule(r)
+                .map(|d| match &d.name {
+                    DeclarationName::Ident(i) => i.value.to_string(),
+                    DeclarationName::DashedIdent(i) => i.value.to_string(),
+                })
+                .unwrap_or_else(|| "<none>".to_string()))
+            .collect();
+        eprintln!("[sort-shorthand] order=[{}]", summary.join(", "));
+    }
 }
 
 fn sort_component_values(values: &mut Vec<ComponentValue>) {
@@ -86,7 +99,225 @@ fn shorthand_bucket_for_declaration(declaration: &Declaration) -> Option<u32> {
         DeclarationName::DashedIdent(ident) => ident.value.as_ref(),
     };
 
-    shorthand_bucket(name)
+    // First attempt: direct shorthand bucket match
+    if let Some(bucket) = shorthand_bucket(name) {
+        return Some(bucket);
+    }
+
+    // COMPAT: Babel ordering effectively groups certain longhands with their
+    // shorthand for sort priority. Mirror this by mapping known longhands
+    // to the bucket of their parent shorthand. This preserves encounter
+    // order among equal-bucket items via stable sort, aligning with Babel.
+    if let Some(parent) = parent_shorthand_for(name) {
+        return shorthand_bucket(parent);
+    }
+
+    None
+}
+
+fn parent_shorthand_for(property: &str) -> Option<&'static str> {
+    // Reverse mapping auto-derived from packages/utils/src/shorthand.ts (shorthandFor),
+    // choosing the parent shorthand with the minimal bucket depth when multiple apply.
+    match property {
+        // animation-range
+        "animation-range-end" => Some("animation-range"),
+        "animation-range-start" => Some("animation-range"),
+
+        // border family
+        "border-block-end" => Some("border-block"),
+        "border-block-end-color" => Some("border-color"),
+        "border-block-end-style" => Some("border-style"),
+        "border-block-end-width" => Some("border-width"),
+        "border-block-start" => Some("border-block"),
+        "border-block-start-color" => Some("border-color"),
+        "border-block-start-style" => Some("border-style"),
+        "border-block-start-width" => Some("border-width"),
+        "border-bottom-color" => Some("border-color"),
+        "border-bottom-style" => Some("border-style"),
+        "border-bottom-width" => Some("border-width"),
+        "border-top-color" => Some("border-color"),
+        "border-top-style" => Some("border-style"),
+        "border-top-width" => Some("border-width"),
+        "border-block-color" => Some("border-color"),
+        "border-inline-color" => Some("border-color"),
+        "border-inline-start-color" => Some("border-color"),
+        "border-inline-end-color" => Some("border-color"),
+        "border-left-color" => Some("border-color"),
+        "border-right-color" => Some("border-color"),
+        "border-image-outset" => Some("border-image"),
+        "border-image-repeat" => Some("border-image"),
+        "border-image-slice" => Some("border-image"),
+        "border-image-source" => Some("border-image"),
+        "border-image-width" => Some("border-image"),
+        "border-inline-end" => Some("border-inline"),
+        "border-inline-end-style" => Some("border-style"),
+        "border-inline-end-width" => Some("border-width"),
+        "border-inline-start" => Some("border-inline"),
+        "border-inline-start-style" => Some("border-style"),
+        "border-inline-start-width" => Some("border-width"),
+        "border-left-style" => Some("border-style"),
+        "border-left-width" => Some("border-width"),
+        "border-right-style" => Some("border-style"),
+        "border-right-width" => Some("border-width"),
+        "border-bottom-left-radius" => Some("border-radius"),
+        "border-bottom-right-radius" => Some("border-radius"),
+        "border-end-end-radius" => Some("border-radius"),
+        "border-end-start-radius" => Some("border-radius"),
+        "border-start-end-radius" => Some("border-radius"),
+        "border-start-start-radius" => Some("border-radius"),
+        "border-top-left-radius" => Some("border-radius"),
+        "border-top-right-radius" => Some("border-radius"),
+        "border-block-style" => Some("border-style"),
+        "border-inline-style" => Some("border-style"),
+        "border-block-width" => Some("border-width"),
+        "border-inline-width" => Some("border-width"),
+
+        // column-rule
+        "column-rule-color" => Some("column-rule"),
+        "column-rule-style" => Some("column-rule"),
+        "column-rule-width" => Some("column-rule"),
+
+        // contain-intrinsic-size
+        "contain-intrinsic-block-size" => Some("contain-intrinsic-size"),
+        "contain-intrinsic-height" => Some("contain-intrinsic-size"),
+        "contain-intrinsic-inline-size" => Some("contain-intrinsic-size"),
+        "contain-intrinsic-width" => Some("contain-intrinsic-size"),
+
+        // flex-flow
+        "flex-direction" => Some("flex-flow"),
+        "flex-wrap" => Some("flex-flow"),
+
+        // font-synthesis
+        "font-synthesis-position" => Some("font-synthesis"),
+        "font-synthesis-small-caps" => Some("font-synthesis"),
+        "font-synthesis-style" => Some("font-synthesis"),
+        "font-synthesis-weight" => Some("font-synthesis"),
+
+        // font-variant
+        "font-variant-alternates" => Some("font-variant"),
+        "font-variant-caps" => Some("font-variant"),
+        "font-variant-east-asian" => Some("font-variant"),
+        "font-variant-emoji" => Some("font-variant"),
+        "font-variant-ligatures" => Some("font-variant"),
+        "font-variant-numeric" => Some("font-variant"),
+        "font-variant-position" => Some("font-variant"),
+
+        // grid
+        "grid-column" => Some("grid-area"),
+        "grid-column-end" => Some("grid-area"),
+        "grid-column-start" => Some("grid-area"),
+        "grid-row" => Some("grid-area"),
+        "grid-row-end" => Some("grid-area"),
+        "grid-row-start" => Some("grid-area"),
+        "grid-template-rows" => Some("grid-template"),
+        "grid-template-columns" => Some("grid-template"),
+        "grid-template-areas" => Some("grid-template"),
+
+        // inset-block/inline
+        "inset-block-start" => Some("inset-block"),
+        "inset-block-end" => Some("inset-block"),
+        "top" => Some("inset-block"),
+        "bottom" => Some("inset-block"),
+        "inset-inline-start" => Some("inset-inline"),
+        "inset-inline-end" => Some("inset-inline"),
+        "left" => Some("inset-inline"),
+        "right" => Some("inset-inline"),
+
+        // list-style
+        "list-style-image" => Some("list-style"),
+        "list-style-position" => Some("list-style"),
+        "list-style-type" => Some("list-style"),
+
+        // margin block/inline
+        "margin-block-start" => Some("margin-block"),
+        "margin-block-end" => Some("margin-block"),
+        "margin-top" => Some("margin"),
+        "margin-bottom" => Some("margin"),
+        "margin-inline-start" => Some("margin-inline"),
+        "margin-inline-end" => Some("margin-inline"),
+        "margin-left" => Some("margin"),
+        "margin-right" => Some("margin"),
+
+        // mask-border
+        "mask-border-mode" => Some("mask-border"),
+        "mask-border-outset" => Some("mask-border"),
+        "mask-border-repeat" => Some("mask-border"),
+        "mask-border-slice" => Some("mask-border"),
+        "mask-border-source" => Some("mask-border"),
+        "mask-border-width" => Some("mask-border"),
+
+        // overscroll-behavior
+        "overscroll-behavior-x" => Some("overscroll-behavior"),
+        "overscroll-behavior-y" => Some("overscroll-behavior"),
+        "overscroll-behavior-inline" => Some("overscroll-behavior"),
+        "overscroll-behavior-block" => Some("overscroll-behavior"),
+
+        // padding block/inline
+        "padding-block-start" => Some("padding-block"),
+        "padding-block-end" => Some("padding-block"),
+        "padding-top" => Some("padding"),
+        "padding-bottom" => Some("padding"),
+        "padding-inline-start" => Some("padding-inline"),
+        "padding-inline-end" => Some("padding-inline"),
+        "padding-left" => Some("padding"),
+        "padding-right" => Some("padding"),
+
+        // place-*
+        "align-content" => Some("place-content"),
+        "justify-content" => Some("place-content"),
+        "align-items" => Some("place-items"),
+        "justify-items" => Some("place-items"),
+        "align-self" => Some("place-self"),
+        "justify-self" => Some("place-self"),
+
+        // position-try
+        "position-try-order" => Some("position-try"),
+        "position-try-fallbacks" => Some("position-try"),
+
+        // scroll-margin
+        "scroll-margin-block" => Some("scroll-margin"),
+        "scroll-margin-block-end" => Some("scroll-margin"),
+        "scroll-margin-block-start" => Some("scroll-margin"),
+        "scroll-margin-bottom" => Some("scroll-margin"),
+        "scroll-margin-inline" => Some("scroll-margin"),
+        "scroll-margin-inline-end" => Some("scroll-margin"),
+        "scroll-margin-inline-start" => Some("scroll-margin"),
+        "scroll-margin-left" => Some("scroll-margin"),
+        "scroll-margin-right" => Some("scroll-margin"),
+        "scroll-margin-top" => Some("scroll-margin"),
+
+        // scroll-padding
+        "scroll-padding-block" => Some("scroll-padding"),
+        "scroll-padding-block-end" => Some("scroll-padding"),
+        "scroll-padding-block-start" => Some("scroll-padding"),
+        "scroll-padding-bottom" => Some("scroll-padding"),
+        "scroll-padding-inline" => Some("scroll-padding"),
+        "scroll-padding-inline-end" => Some("scroll-padding"),
+        "scroll-padding-inline-start" => Some("scroll-padding"),
+        "scroll-padding-left" => Some("scroll-padding"),
+        "scroll-padding-right" => Some("scroll-padding"),
+        "scroll-padding-top" => Some("scroll-padding"),
+
+        // scroll-timeline
+        "scroll-timeline-name" => Some("scroll-timeline"),
+        "scroll-timeline-axis" => Some("scroll-timeline"),
+
+        // text-* groups
+        "text-decoration-color" => Some("text-decoration"),
+        "text-decoration-line" => Some("text-decoration"),
+        "text-decoration-style" => Some("text-decoration"),
+        "text-decoration-thickness" => Some("text-decoration"),
+        "text-emphasis-color" => Some("text-emphasis"),
+        "text-emphasis-style" => Some("text-emphasis"),
+        "text-wrap-mode" => Some("text-wrap"),
+        "text-wrap-style" => Some("text-wrap"),
+
+        // view-timeline
+        "view-timeline-name" => Some("view-timeline"),
+        "view-timeline-axis" => Some("view-timeline"),
+
+        _ => None,
+    }
 }
 
 fn first_declaration_in_rule(rule: &Rule) -> Option<&Declaration> {
@@ -338,3 +569,4 @@ mod tests {
         assert_eq!(original, sorted);
     }
 }
+

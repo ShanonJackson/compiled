@@ -534,7 +534,9 @@ fn serialize_complex_selector(selector: &ComplexSelector) -> String {
     let mut output = String::new();
     {
         let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+        // Align with postcss-minify-selectors output where combinators and
+        // redundant spaces are minimized in the serialized selector.
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
         generator
             .emit(selector)
             .expect("failed to serialize selector");
@@ -546,7 +548,8 @@ fn serialize_relative_selector(selector: &RelativeSelector) -> String {
     let mut output = String::new();
     {
         let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+        // Match minified selector formatting from the JS plugin.
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
         generator
             .emit(selector)
             .expect("failed to serialize relative selector");

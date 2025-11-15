@@ -5,9 +5,7 @@ import { DARK_MODE, MEDIA_QUERY } from "./media";
 export const responsiveStyles = null;
 export const responsiveTemplate = null;
 export const MediaExample = () => (
-	<section
-		className={ax(["_syazr3uz _hjr5u67f _1pnlcc57 _17lw8n31", "_syaz1usb _hjr5qgb6 _1pnl15td"])}
-	>
+	<section className={ax(["_syazr3uz _hjr5u67f _1pnlcc57", "_syaz1usb _hjr5qgb6 _1pnl15td"])}>
 		responsive media queries
 	</section>
 );
