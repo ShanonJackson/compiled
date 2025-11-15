@@ -140,6 +140,7 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     // Step 2 of bisect: add a small batch of light plugins
     // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
     let plugins: Vec<pc::BuiltPlugin> = vec![
+        wrap_bare_declarations_plugin(options.clone()),
         discard_duplicates_plugin(),
         discard_empty_rules_plugin(),
         pc::plugin("parent-orphaned-pseudos").build(),
@@ -652,7 +653,15 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                             let replaced = norm.replace('&', &format!(".{}", used_class));
                             replaced_selectors.push(replaced);
                         }
-                        let selector_joined = replaced_selectors.join(", ");
+                        let mut selector_joined = replaced_selectors.join(", ");
+                        if let Some(ph) = &opts.declaration_placeholder {
+                            if !ph.is_empty() {
+                                let needle = format!(" {}", ph);
+                                selector_joined = selector_joined.replace(&needle, "");
+                                selector_joined = selector_joined.replace(ph, "");
+                                selector_joined = selector_joined.trim().to_string();
+                            }
+                        }
                         let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                         collector.push_sheet(wrap_in_at_rules(&css, at_chain));
                     } else if let Some(_nested_rule) = as_rule(&gc) {
@@ -885,7 +894,16 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     replaced_selectors.push(replaced);
                 }
 
-                let selector_joined = replaced_selectors.join(", ");
+                let mut selector_joined = replaced_selectors.join(", ");
+                if let Some(ph) = &ctx.opts.declaration_placeholder {
+                    if !ph.is_empty() {
+                        // Remove placeholder selector segments if present
+                        let needle = format!(" {}", ph);
+                        selector_joined = selector_joined.replace(&needle, "");
+                        selector_joined = selector_joined.replace(ph, "");
+                        selector_joined = selector_joined.trim().to_string();
+                    }
+                }
                 let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                 let wrapped = wrap_in_at_rules(&rule_css, &ctx.at_chain);
                 ctx.collector.push_sheet(wrapped);
@@ -974,7 +992,15 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     replaced_selectors.push(replaced);
                 }
 
-                let selector_joined = replaced_selectors.join(", ");
+                let mut selector_joined = replaced_selectors.join(", ");
+                if let Some(ph) = &opts.declaration_placeholder {
+                    if !ph.is_empty() {
+                        let needle = format!(" {}", ph);
+                        selector_joined = selector_joined.replace(&needle, "");
+                        selector_joined = selector_joined.replace(ph, "");
+                        selector_joined = selector_joined.trim().to_string();
+                    }
+                }
                 let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                 let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
                 collector.push_sheet(wrapped);
@@ -1007,12 +1033,14 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 }
                 let mut stack = sel_stack.lock().unwrap();
                 let parent = stack.last().cloned().unwrap_or_else(|| vec!["&".to_string()]);
-                let raw_selector = rule.selector();
-                let combined = if let Some(ph) = &opts.declaration_placeholder {
-                    if raw_selector == *ph { parent } else { combine_selectors(&parent, &raw_selector) }
-                } else {
-                    combine_selectors(&parent, &raw_selector)
-                };
+                let mut raw_selector = rule.selector();
+                if let Some(ph) = &opts.declaration_placeholder {
+                    if raw_selector.contains(ph) {
+                        let cleaned = raw_selector.replace(ph, "").trim().to_string();
+                        raw_selector = cleaned;
+                    }
+                }
+                let combined = if raw_selector.is_empty() { parent } else { combine_selectors(&parent, &raw_selector) };
                 stack.push(combined);
                 Ok(())
             }
@@ -1141,8 +1169,17 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                                 for norm in &normalized_list {
                                     replaced.push(norm.replace('&', &format!(".{}", used_class)));
                                 }
-                                let selector_joined = replaced.join(", ");
-                                let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
+                        let mut selector_joined = replaced.join(", ");
+                        if let Some(ph) = &opts.class_hash_prefix { let _ = ph; }
+                        if let Some(ph) = &opts.declaration_placeholder {
+                            if !ph.is_empty() {
+                                let needle = format!(" {}", ph);
+                                selector_joined = selector_joined.replace(&needle, "");
+                                selector_joined = selector_joined.replace(ph, "");
+                                selector_joined = selector_joined.trim().to_string();
+                            }
+                        }
+                        let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                                 collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
                             }
                         }
@@ -1170,6 +1207,9 @@ pub fn transform_css_via_postcss(
         eprintln!("[postcss-pipeline] input css: {}", css.replace('\n', "\\n"));
     }
     if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss begin"); }
+    // Do not string-wrap bare declarations here; the engine plugin 'wrap-bare-decls'
+    // promotes them into an empty-selector rule before other plugins run.
+    let input_css: String = css.to_string();
     // Shared collector for atomic outputs.
     let collector = AtomicCollector::default();
     // Create a processor with the staged plugin chain.
@@ -1177,7 +1217,7 @@ pub fn transform_css_via_postcss(
 
     // First attempt to process the CSS directly.
     if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process initial"); }
-    let mut result = match processor.process(css) {
+    let mut result = match processor.process(&input_css) {
         Ok(res) => res,
         Err(err) => {
             // Mirror Babel/JS fallback: wrap declarations in a placeholder rule and retry.
@@ -1404,4 +1444,77 @@ pub fn transform_css_via_postcss(
 fn expand_shorthands_plugin() -> pc::BuiltPlugin {
     // Deprecated shim; real expansion is handled by expand_shorthands_engine::plugin()
     pc::plugin("expand-shorthands-disabled").build()
+}
+#[cfg(feature = "postcss_engine")]
+fn wrap_bare_declarations_plugin(options: TransformCssOptions) -> pc::BuiltPlugin {
+    use postcss::ast::nodes::{as_declaration, Rule as PcRule};
+
+    let _placeholder = options.declaration_placeholder.unwrap_or_default();
+
+    pc::plugin("wrap-bare-decls")
+        .once(move |root, _| {
+            match root {
+                pc::RootLike::Root(r) => {
+                    let mut decls: Vec<postcss::ast::NodeRef> = Vec::new();
+                    r.each(|node_ref, _| {
+                        if as_declaration(&node_ref).is_some() {
+                            decls.push(node_ref.clone());
+                        }
+                        true
+                    });
+                    if !decls.is_empty() {
+                        // Use an empty selector so no placeholder leaks into output
+                        let wrapper = PcRule::new("");
+                        for d in decls {
+                            // Ensure ':' between prop and value
+                            {
+                                let mut b = d.borrow_mut();
+                                b.raws.set_text("between", ":");
+                            }
+                            // Move decl into wrapper
+                            r.remove_child(d.clone());
+                            wrapper.append(d);
+                        }
+                        // Insert wrapper at the beginning
+                        r.prepend(wrapper.to_node());
+                    }
+                }
+                pc::RootLike::Document(d) => {
+                    let mut decls: Vec<postcss::ast::NodeRef> = Vec::new();
+                    d.each(|node_ref, _| {
+                        if as_declaration(&node_ref).is_some() {
+                            decls.push(node_ref.clone());
+                        }
+                        true
+                    });
+                    if !decls.is_empty() {
+                        // Use an empty selector so no placeholder leaks into output
+                        let wrapper = PcRule::new("");
+                        for d in decls {
+                            {
+                                let mut b = d.borrow_mut();
+                                b.raws.set_text("between", ":");
+                            }
+                            d.clone();
+                            d.borrow();
+                            // Remove using low-level Node::remove by index
+                            if let Some(idx) = d
+                                .borrow()
+                                .parent()
+                                .and_then(|p| {
+                                    let b = p.borrow();
+                                    b.nodes.iter().position(|n| std::ptr::eq(n, &d))
+                                })
+                            {
+                                postcss::ast::Node::remove(&d.borrow().parent().unwrap(), idx);
+                            }
+                            wrapper.append(d);
+                        }
+                        d.prepend(wrapper.to_node());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .build()
 }

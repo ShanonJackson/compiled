@@ -168,6 +168,61 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
         }
     }
 
+    // Evaluate simple Math.* calls when all arguments reduce to numbers.
+    if let Expr::Call(call) = expr {
+        use swc_core::ecma::ast::{Callee, Expr, MemberExpr, MemberProp, Ident};
+        let mut callee_member: Option<(String, String)> = None;
+        if let Callee::Expr(callee_expr) = &call.callee {
+            if let Expr::Member(MemberExpr { obj, prop, .. }) = &**callee_expr {
+                // Get object identifier
+                if let Expr::Ident(Ident { sym: obj_sym, .. }) = &**obj {
+                    if obj_sym.as_ref() == "Math" {
+                        if let MemberProp::Ident(name) = prop {
+                            callee_member = Some(("Math".to_string(), name.sym.as_ref().to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((_, method)) = callee_member {
+            // Collect numeric args
+            let ctx = ExprCtx {
+                unresolved_ctxt: SyntaxContext::empty(),
+                is_unresolved_ref_safe: false,
+                in_strict: false,
+                remaining_depth: 8,
+            };
+            let mut nums: Vec<f64> = Vec::new();
+            for arg in &call.args {
+                // Prefer full evaluation (resolving identifiers) before static folding
+                let evaluated = evaluate_expression(&arg.expr, meta.clone());
+                let mut val_expr = evaluated.value;
+                if let Some(ev2) = try_static_evaluate(&val_expr, &evaluated.meta) { val_expr = ev2; }
+                if let Value::Known(n) = val_expr.as_pure_number(ctx) {
+                    nums.push(n);
+                } else {
+                    nums.clear();
+                    break;
+                }
+            }
+            if !nums.is_empty() {
+                let result = match method.as_str() {
+                    "max" => nums.into_iter().fold(f64::NEG_INFINITY, f64::max),
+                    "min" => nums.into_iter().fold(f64::INFINITY, f64::min),
+                    "abs" => nums.get(0).copied().map(f64::abs).unwrap_or(0.0),
+                    "ceil" => nums.get(0).copied().map(f64::ceil).unwrap_or(0.0),
+                    "floor" => nums.get(0).copied().map(f64::floor).unwrap_or(0.0),
+                    "round" => nums.get(0).copied().map(f64::round).unwrap_or(0.0),
+                    _ => f64::NAN,
+                };
+                if result.is_finite() || result.is_nan() {
+                    return Some(make_numeric_literal(result, expr.span()));
+                }
+            }
+        }
+    }
+
     let ctx = ExprCtx {
         unresolved_ctxt: SyntaxContext::empty(),
         is_unresolved_ref_safe: false,
@@ -241,6 +296,14 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
         }
 
         if let Some(evaluated) = try_static_evaluate(&value, &updated_meta) {
+            return create_result_pair(evaluated, updated_meta);
+        }
+
+        // COMPAT: If evaluating the intermediate value failed, attempt to
+        // statically evaluate the original target expression as Babel does
+        // via path.evaluate(). This enables folding of pure calls like
+        // Math.max(base-5, 0) when inputs are constant.
+        if let Some(evaluated) = try_static_evaluate(target_expression, &updated_meta) {
             return create_result_pair(evaluated, updated_meta);
         }
 

@@ -168,7 +168,7 @@ fn minify_color(input: &str, options: &ColorminOptions) -> String {
                 if s.len() < best.len() { best = s; }
             }
             if best.len() < input.len() { return best; }
-            else { return input.to_lowercase(); }
+            else { return input.to_string(); }
         }
     }
     // Fallback: handle named colors explicitly when parser didn't.
@@ -270,13 +270,7 @@ pub fn plugin() -> pc::BuiltPlugin {
                 return Ok(());
             }
 
-            let newv = transform_value(&value, &options);
-            // Fall back to original (lowercased) when not shorter, matching minifyColor.js
-            let picked = if newv.len() < value.len() {
-                newv
-            } else {
-                value.to_lowercase()
-            };
+            let picked = transform_value(&value, &options);
             if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
                 // Build context (parent chain) for debugging
                 fn context_for_decl(decl: &postcss::ast::nodes::Declaration) -> String {

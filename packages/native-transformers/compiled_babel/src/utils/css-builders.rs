@@ -10,6 +10,7 @@ use swc_core::ecma::ast::{
 use swc_core::ecma::ast::MemberProp;
 use swc_ecma_codegen::text_writer::JsWriter;
 use swc_ecma_codegen::{Config, Emitter, Node};
+use swc_core::ecma::utils::ExprExt;
 
 use crate::css_map::{visit_css_map_path_with_builder, CssMapUsage};
 use crate::types::{Metadata, MetadataContext};
@@ -17,6 +18,7 @@ use crate::utils_ast::build_code_frame_error;
 use crate::utils_css::{add_unit_if_needed, css_affix_interpolation, kebab_case, CssValue};
 use crate::utils_css_map::{create_error_message, ErrorMessages};
 use crate::utils_evaluate_expression::evaluate_expression;
+use crate::utils_create_result_pair::create_result_pair;
 use crate::utils_hash::hash;
 use crate::utils_is_compiled::{
     is_compiled_css_call_expression, is_compiled_css_map_call_expression,
@@ -668,7 +670,15 @@ where
         }
 
         let node_expression = node_expression.unwrap();
-        let evaluated = evaluate_expression(node_expression, meta.clone());
+        // COMPAT: For computed member expressions (e.g. colors[2]) do not attempt
+        // to evaluate statically like Babel; keep them dynamic so they are emitted
+        // as CSS variables rather than inlined literal strings.
+        let force_variable = matches!(node_expression, Expr::Member(m) if matches!(m.prop, swc_core::ecma::ast::MemberProp::Computed(_)));
+        let evaluated = if force_variable {
+            create_result_pair((*node_expression).clone(), meta.clone())
+        } else {
+            evaluate_expression(node_expression, meta.clone())
+        };
         callback_if_file_included(meta, &evaluated.meta);
 
         match &evaluated.value {
@@ -681,6 +691,53 @@ where
                 literal_result.push_str(&raw);
                 literal_result.push_str(&num_lit.value.to_string());
                 continue;
+            }
+            Expr::Call(call) => {
+                // Inline simple Math.* calls when arguments are numeric after evaluation
+                use swc_core::ecma::ast::{Callee, Expr as E2, MemberExpr as M2, MemberProp as P2, Ident as I2};
+                if let Callee::Expr(callee_expr) = &call.callee {
+                    if let E2::Member(M2 { obj, prop, .. }) = &**callee_expr {
+                        if let E2::Ident(I2 { sym: obj_sym, .. }) = &**obj {
+                            if obj_sym.as_ref() == "Math" {
+                                if let P2::Ident(name) = prop {
+                                    let method = name.sym.as_ref();
+                                    let ctx = swc_core::ecma::utils::ExprCtx {
+                                        unresolved_ctxt: swc_core::common::SyntaxContext::empty(),
+                                        is_unresolved_ref_safe: false,
+                                        in_strict: false,
+                                        remaining_depth: 8,
+                                    };
+                                    let mut nums: Vec<f64> = Vec::new();
+                                    for arg in &call.args {
+                                        let ev = evaluate_expression(&arg.expr, evaluated.meta.clone());
+                                        let mut arg_expr = ev.value;
+                                        // We don't have direct access to the internal try_static_evaluate here;
+                                        // rely on ExprExt as_pure_number on the evaluated form.
+                                        if let swc_core::ecma::utils::Value::Known(n) = arg_expr.as_pure_number(ctx) {
+                                            nums.push(n);
+                                        } else { nums.clear(); break; }
+                                    }
+                                    if !nums.is_empty() {
+                                        let result = match method {
+                                            "max" => nums.into_iter().fold(f64::NEG_INFINITY, f64::max),
+                                            "min" => nums.into_iter().fold(f64::INFINITY, f64::min),
+                                            "abs" => nums.get(0).copied().map(f64::abs).unwrap_or(0.0),
+                                            "ceil" => nums.get(0).copied().map(f64::ceil).unwrap_or(0.0),
+                                            "floor" => nums.get(0).copied().map(f64::floor).unwrap_or(0.0),
+                                            "round" => nums.get(0).copied().map(f64::round).unwrap_or(0.0),
+                                            _ => f64::NAN,
+                                        };
+                                        if result.is_finite() || result.is_nan() {
+                                            literal_result.push_str(&raw);
+                                            literal_result.push_str(&result.to_string());
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }

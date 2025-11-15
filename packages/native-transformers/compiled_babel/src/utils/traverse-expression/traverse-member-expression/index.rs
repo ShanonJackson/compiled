@@ -97,6 +97,13 @@ pub fn traverse_member_expression(
     meta: Metadata,
     evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
+    // COMPAT: Do not attempt to resolve computed member expressions (e.g. colors[2]).
+    // Babels evaluateExpression path does not fold these and keeps them dynamic,
+    // which later results in CSS variables for template interpolations instead
+    // of inlining literals or collapsing to the container value.
+    if matches!(expression.prop, MemberProp::Computed(_)) {
+        return create_result_pair(Expr::Member(expression.clone()), meta);
+    }
     traverse_member_expression_with_arguments(expression, meta, None, evaluate_expression)
 }
 
