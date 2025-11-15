@@ -1224,6 +1224,32 @@ where
                     continue;
                 }
 
+                // COMPAT: Mirror Babel behavior by emitting a runtime CSS variable
+                // for boolean literal values inside object styles (e.g. `inherits: false`
+                // within an `@property` block). This allows the value to be provided at
+                // runtime via inline style while preserving identical hashing/IO.
+                if let Expr::Lit(Lit::Bool(_)) = &prop_value {
+                    let (variable_expression, variable_name) =
+                        get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
+
+                    let name = format!("--_{}", hash(&variable_name));
+
+                    variables.push(Variable {
+                        name: name.clone(),
+                        expression: variable_expression,
+                        prefix: None,
+                        suffix: None,
+                    });
+
+                    css.push(CssItem::unconditional(format!(
+                        "{}: var({});",
+                        css_property_name(&key),
+                        name
+                    )));
+
+                    continue;
+                }
+
                 if is_empty_value(&prop_value) {
                     continue;
                 }

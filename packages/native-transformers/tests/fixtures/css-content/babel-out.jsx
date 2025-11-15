@@ -5,3 +5,4 @@ export const blank = null;
 export const text = null;
 export const quoted = null;
 export const arrow = null;
+export const Element = <div className={ax(["_1sb2b3bt", "_1sb21e8g", "_1sb21e8g", "_1sb2bjq5"])} />;

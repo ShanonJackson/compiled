@@ -192,6 +192,8 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
         pc::plugin("discard-duplicates-2").build(),
         pc::plugin("increase-specificity").build(),
         sort_atomic_style_sheet_plugin(),
+        // Insert vendor prefixing at the same stage as JS pipeline
+        vendor_prefixing_lite_plugin(),
         normalize_whitespace_plugin(),
         // Collect keyframes as sheets to match Babel output
         extract_stylesheets_plugin(collector.clone(), options.clone()),
@@ -345,6 +347,69 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
             Ok(())
         })
         .build()
+}
+
+#[cfg(feature = "postcss_engine")]
+fn vendor_prefixing_lite_plugin() -> pc::BuiltPlugin {
+    use postcss::ast::nodes::{as_declaration, as_rule};
+    pc::plugin("vendor-prefixing-lite").once_exit(|root, _| {
+        match root {
+            pc::RootLike::Root(r) => {
+                r.walk_rules(|rule_ref, _| {
+                    if let Some(rule) = as_rule(&rule_ref) {
+                        let mut to_prepend: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
+                        let children = rule.nodes();
+                        for (idx, child) in children.iter().enumerate() {
+                            if let Some(decl) = as_declaration(child) {
+                                let prop = decl.prop().to_lowercase();
+                                let value = decl.value();
+                                if matches!(prop.as_str(), "width" | "min-width" | "max-width") && value.eq_ignore_ascii_case("fit-content") {
+                                    let mut raws = postcss::ast::RawData::default();
+                                    raws.set_text("between", ":");
+                                    let new_decl = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-moz-fit-content".to_string(), decl.important(), raws);
+                                    to_prepend.push((idx, new_decl));
+                                }
+                            }
+                        }
+                        // Insert in order before originals
+                        let mut inserted = 0usize;
+                        for (idx, new_decl) in to_prepend.into_iter() {
+                            postcss::ast::Node::insert(&rule.to_node(), idx + inserted, new_decl);
+                            inserted += 1;
+                        }
+                    }
+                    true
+                });
+            }
+            pc::RootLike::Document(d) => {
+                d.walk_rules(|rule_ref, _| {
+                    if let Some(rule) = as_rule(&rule_ref) {
+                        let mut to_prepend: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
+                        let children = rule.nodes();
+                        for (idx, child) in children.iter().enumerate() {
+                            if let Some(decl) = as_declaration(child) {
+                                let prop = decl.prop().to_lowercase();
+                                let value = decl.value();
+                                if matches!(prop.as_str(), "width" | "min-width" | "max-width") && value.eq_ignore_ascii_case("fit-content") {
+                                    let mut raws = postcss::ast::RawData::default();
+                                    raws.set_text("between", ":");
+                                    let new_decl = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-moz-fit-content".to_string(), decl.important(), raws);
+                                    to_prepend.push((idx, new_decl));
+                                }
+                            }
+                        }
+                        let mut inserted = 0usize;
+                        for (idx, new_decl) in to_prepend.into_iter() {
+                            postcss::ast::Node::insert(&rule.to_node(), idx + inserted, new_decl);
+                            inserted += 1;
+                        }
+                    }
+                    true
+                });
+            }
+        }
+        Ok(())
+    }).build()
 }
 
 #[cfg(feature = "postcss_engine")]
