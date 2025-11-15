@@ -49,6 +49,9 @@ pub mod parent_orphaned_pseudos;
 pub mod reduce_initial;
 #[path = "sort-atomic-style-sheet.rs"]
 pub mod sort_atomic_style_sheet;
+#[cfg(feature = "postcss_engine")]
+#[path = "expand_shorthands_engine.rs"]
+pub mod expand_shorthands_engine;
 #[path = "sort-shorthand-declarations.rs"]
 pub mod sort_shorthand_declarations;
 #[allow(unused_imports)]

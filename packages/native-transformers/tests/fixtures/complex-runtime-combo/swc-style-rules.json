@@ -1,11 +1,13 @@
 [
   "._1yt4ftgi{padding:8px}",
-  ":focus ._2fx6glyw{outline:none}",
+  ":focus ._itd01r31{outline-color:currentColor}",
+  ":focus ._14vfglyw{outline-style:none}",
+  ":focus ._wc3a1o36{outline-width:medium}",
   "._1wybdlk8{font-size:14px}",
   "@media (min-width:600px){._72bc18cn:hover{content:\"hover\"}._1qiwr3uz:hover{background-color:#000}}",
   "._syazxbvz{color:#1e90ff}",
   "._syaz14zx{color:crimson}",
-  "@keyframes k17e8rkr { \n  \\30 \\% { opacity: 0; }\n  to { opacity: 1; }\n }",
+  "@keyframes k17e8rkr{\\30 \\%{opacity:0}to{opacity:1}}",
   "._y44v65d0{animation:k17e8rkr 2s linear}",
   "._aetr1vm8:after{content:\"!\"}"
 ]

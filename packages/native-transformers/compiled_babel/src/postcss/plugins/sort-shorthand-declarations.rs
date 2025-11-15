@@ -125,7 +125,7 @@ fn find_first_declaration(values: &[ComponentValue]) -> Option<&Declaration> {
     None
 }
 
-fn shorthand_bucket(property: &str) -> Option<u32> {
+pub fn shorthand_bucket(property: &str) -> Option<u32> {
     let bucket = match property {
         "all" => 0,
         "animation"

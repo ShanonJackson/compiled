@@ -181,7 +181,7 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
             use super::plugins::normalize_css_engine as nce;
             nce::normalize_string::plugin()
         },
-        pc::plugin("expand-shorthands").build(),
+        super::plugins::expand_shorthands_engine::plugin(),
         // Start emitting atomic rules.
         atomicify_rules_plugin(options.clone(), collector.clone()),
         pc::plugin("flatten-multiple-selectors").build(),
@@ -197,15 +197,146 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
 
 #[cfg(feature = "postcss_engine")]
 fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
-    // Light whitespace normalization similar to postcss-normalize-whitespace.
-    // We leverage the stringifier defaults by cleaning raws on exit.
+    use postcss::ast::nodes::{as_at_rule, as_declaration, as_rule};
+    use crate::postcss::value_parser as vp;
+
+    fn is_variable_function(name: &str) -> bool {
+        matches!(name.to_ascii_lowercase().as_str(), "var"|"env"|"constant")
+    }
+
+    fn reduce_calc_whitespace(node: &mut vp::Node) {
+        match node {
+            vp::Node::Space { value } => { *value = " ".to_string(); }
+            vp::Node::Function { value, before, after, nodes, .. } => {
+                if !is_variable_function(value) {
+                    *before = String::new();
+                    *after = String::new();
+                }
+                if value.eq_ignore_ascii_case("calc") {
+                    for n in nodes.iter_mut() { reduce_calc_whitespace(n); }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn reduce_whitespace(node: &mut vp::Node) -> bool {
+        match node {
+            vp::Node::Space { value } => { *value = " ".to_string(); }
+            vp::Node::Div { before, after, .. } => { *before = String::new(); *after = String::new(); }
+            vp::Node::Function { value, before, after, nodes, .. } => {
+                if !is_variable_function(value) {
+                    *before = String::new();
+                    *after = String::new();
+                }
+                if value.eq_ignore_ascii_case("calc") {
+                    for n in nodes.iter_mut() { reduce_calc_whitespace(n); }
+                    return false; // do not re-walk children
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
     pc::plugin("normalize-whitespace")
-        .once_exit(|root, _result| {
+        .once_exit(|root, _| {
+            // Walk the full tree and mirror postcss-normalize-whitespace behaviour
+            let container = match root { pc::RootLike::Root(r) => r.raw().clone(), pc::RootLike::Document(d) => d.to_node() };
+
+            // Helper to strip all whitespace characters from a raws text field if present
+            fn strip_raw_before(node: &postcss::ast::NodeRef) {
+                let mut borrowed = node.borrow_mut();
+                if let Some(before) = borrowed.raws.get_text("before") {
+                    if before.chars().any(|c| c.is_whitespace()) {
+                        let mut s = String::with_capacity(before.len());
+                        for ch in before.chars() { if !ch.is_whitespace() { s.push(ch); } }
+                        borrowed.raws.set_text("before", &s);
+                    }
+                }
+            }
+
+            // Compute previous sibling of a node
+            fn prev_sibling(node: &postcss::ast::NodeRef) -> Option<postcss::ast::NodeRef> {
+                let parent = { node.borrow().parent() }?;
+                let borrowed = parent.borrow();
+                let mut idx = None;
+                for (i, child) in borrowed.nodes.iter().enumerate() {
+                    if std::ptr::eq(child, node) { idx = Some(i); break; }
+                }
+                let i = idx?;
+                if i == 0 { None } else { Some(borrowed.nodes[i-1].clone()) }
+            }
+
+            // Depth-first traversal
+            fn walk(node: &postcss::ast::NodeRef) {
+                // Clone children to avoid borrow conflicts during mutation
+                let children = { node.borrow().nodes.clone() };
+                for child in children {
+                    // Common: strip raws.before whitespace for decl/rule/atrule
+                    strip_raw_before(&child);
+
+                    if let Some(decl) = as_declaration(&child) {
+                        // !important spacing
+                        if decl.important() {
+                            child.borrow_mut().raws.set_text("important", "!important");
+                        }
+                        // IE9 hack spacing around \9
+                        let mut v = decl.value();
+                        if v.contains("\\9") {
+                            v = v.replace(" \\9", "\\9");
+                            v = v.replace("\\9 ", "\\9");
+                        }
+                        // Reduce spaces inside functions/dividers
+                        let mut parsed = vp::parse(&v);
+                        vp::walk(&mut parsed.nodes[..], &mut |n| reduce_whitespace(n), false);
+                        let mut reduced = vp::stringify(&parsed.nodes);
+                        // Custom properties empty -> single space
+                        if decl.prop().starts_with("--") && reduced.is_empty() {
+                            reduced = " ".to_string();
+                        }
+                        decl.set_value(reduced);
+
+                        // Remove extra semicolons in raws.before when previous sibling is not a rule
+                        if let Some(prev) = prev_sibling(&child) {
+                            if as_rule(&prev).is_none() {
+                                let mut b = child.borrow_mut();
+                                if let Some(before) = b.raws.get_text("before") {
+                                    if before.contains(';') {
+                                        let no_semis = before.replace(';', "");
+                                        b.raws.set_text("before", &no_semis);
+                                    }
+                                }
+                            }
+                        }
+                        // between ':' and drop own semicolon
+                        let mut b = child.borrow_mut();
+                        b.raws.set_text("between", ":");
+                        b.raws.set_text("ownSemicolon", "");
+                    } else if let Some(_r) = as_rule(&child) {
+                        let mut b = child.borrow_mut();
+                        b.raws.set_text("between", "");
+                        b.raws.set_text("after", "");
+                        // Ensure last declaration in this block does not force a semicolon
+                        b.raws.set_text("semicolon", "false");
+                    } else if let Some(_a) = as_at_rule(&child) {
+                        let mut b = child.borrow_mut();
+                        b.raws.set_text("between", "");
+                        b.raws.set_text("after", "");
+                        // Ensure last declaration in this block does not force a semicolon
+                        b.raws.set_text("semicolon", "false");
+                    }
+
+                    // Recurse
+                    walk(&child);
+                }
+            }
+
+            walk(&container);
+            // Remove final newline
             match root {
-                // Use keep_between = false to fully collapse inter-node whitespace,
-                // matching cssnano/postcss-normalize-whitespace before extraction.
-                pc::RootLike::Root(r) => r.clean_raws(false),
-                pc::RootLike::Document(d) => d.clean_raws(false),
+                pc::RootLike::Root(r) => r.raw().borrow_mut().raws.set_text("after", ""),
+                pc::RootLike::Document(d) => d.to_node().borrow_mut().raws.set_text("after", ""),
             }
             Ok(())
         })
@@ -1066,6 +1197,15 @@ pub fn transform_css_via_postcss(
         }
         0
     }
+    fn first_property(sheet: &str) -> Option<String> {
+        if let Some(open) = sheet.find('{') {
+            let after = &sheet[open+1..];
+            if let Some(colon) = after.find(':') {
+                return Some(after[..colon].trim().to_string());
+            }
+        }
+        None
+    }
     #[derive(Clone)]
     struct SheetInfo { idx: usize, text: String }
     #[derive(Clone)]
@@ -1115,7 +1255,29 @@ pub fn transform_css_via_postcss(
         }
     }
     let mut paired: Vec<(SheetKind, SheetInfo)> = sheets.iter().cloned().enumerate().map(|(i, s)| (classify(&s), SheetInfo{ idx: i, text: s })).collect();
-    paired.sort_by(|(ka, _), (kb, _)| cmp_at(ka, kb));
+    paired.sort_by(|(ka, ia), (kb, ib)| {
+        use std::cmp::Ordering;
+        let mut ord = match (ka, kb) {
+            (SheetKind::CatchAll{score: sa}, SheetKind::CatchAll{score: sb}) => {
+                let mut o = sa.cmp(sb);
+                if o == Ordering::Equal {
+                    // Fallback to shorthand bucket ordering for identical pseudo score
+                    let ba = first_property(&ia.text).and_then(|p| crate::postcss::plugins::sort_shorthand_declarations::shorthand_bucket(&p));
+                    let bb = first_property(&ib.text).and_then(|p| crate::postcss::plugins::sort_shorthand_declarations::shorthand_bucket(&p));
+                    o = match (ba, bb) {
+                        (Some(a), Some(b)) => a.cmp(&b),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        (None, None) => Ordering::Equal,
+                    };
+                }
+                o
+            }
+            _ => cmp_at(ka, kb),
+        };
+        if ord == Ordering::Equal { ord = ia.idx.cmp(&ib.idx); }
+        ord
+    });
     // Group identical at-rules into a single sheet with concatenated inner rules, preserving first appearance order.
     use std::collections::{HashMap, HashSet};
     let mut group_order: Vec<String> = Vec::new();
@@ -1188,4 +1350,8 @@ pub fn transform_css_via_postcss(
 
     if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss end"); }
     Ok(TransformCssResult { sheets, class_names })
+}
+fn expand_shorthands_plugin() -> pc::BuiltPlugin {
+    // Deprecated shim; real expansion is handled by expand_shorthands_engine::plugin()
+    pc::plugin("expand-shorthands-disabled").build()
 }

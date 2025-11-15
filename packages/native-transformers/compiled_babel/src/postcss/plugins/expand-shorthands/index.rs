@@ -96,7 +96,7 @@ fn expand_component_values(values: &mut Vec<ComponentValue>) {
     }
 }
 
-fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>> {
+pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>> {
     let property = declaration_property_name(&declaration.name);
     let converter = match conversion_for_property(&property) {
         Some(converter) => converter,
@@ -131,6 +131,28 @@ fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>> {
     }
 
     Some(declarations)
+}
+
+/// Engine helper: expand a (prop, value) pair into longhand (prop, value) string pairs
+/// using the same conversion logic as the SWC plugin.
+pub fn expand_shorthand_pairs(prop: &str, value: &str) -> Option<Vec<(String, String)>> {
+    let converter = match conversion_for_property(prop) { Some(c) => c, None => return None };
+    let components = super::types::parse_value_to_components(value);
+    let values_root = ValuesRoot::from_components(&components);
+    if values_root.is_empty() || values_root.contains_var_function() { return None; }
+    let expanded = converter(&values_root);
+    if expanded.is_empty() { return Some(Vec::new()); }
+    if expanded.len() == 1 && matches!(expanded[0], LonghandDeclaration::KeepOriginal) { return None; }
+    let mut out: Vec<(String, String)> = Vec::new();
+    for entry in expanded {
+        if let LonghandDeclaration::Replace { prop, value } = entry {
+            let text = super::types::serialize_component_values(&value).unwrap_or_default();
+            out.push((prop, text));
+        } else {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 fn conversion_for_property(property: &str) -> Option<fn(&ValuesRoot) -> Vec<LonghandDeclaration>> {

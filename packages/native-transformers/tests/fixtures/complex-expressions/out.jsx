@@ -32,4 +32,4 @@ const themed = {
 };
 const alias = "secondary";
 export const mappedClass = themed[alias];
-export const WithClassNames = () => <div className={ax(["_syaz1iu8 _1yt4puy2"])}>example</div>;
+export const WithClassNames = () => <div className={ax(["_1yt4puy2 _syaz1iu8"])}>example</div>;

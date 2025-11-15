@@ -3,7 +3,7 @@ use super::{Node, ParsedValue};
 pub fn parse(input: &str) -> ParsedValue {
     // Minimal port of postcss-value-parser parse.js sufficient for cssnano plugins.
     let mut tokens: Vec<Node> = Vec::new();
-    let mut value = input.to_string();
+    let value = input.to_string();
     let mut pos: usize = 0;
     let max = value.len();
     let bytes: Vec<u8> = value.as_bytes().to_vec();
