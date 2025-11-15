@@ -181,6 +181,17 @@ fn process_selector_list(list: &mut SelectorList) { for complex in &mut list.chi
 fn process_relative_selector_list(list: &mut RelativeSelectorList) { for rel in &mut list.children { if let Some(c)=&mut rel.combinator { process_combinator(c); } process_complex_selector(&mut rel.selector); } dedupe_relative_selectors(&mut list.children); sort_relative_selectors(&mut list.children); }
 
 fn minify_selector_string(selector: &str) -> Option<String> {
+    // COMPAT: cssnano postcss-minify-selectors replaces keyframe step tags
+    // literally using postcss-selector-parser, so 'from' -> '0%' and '100%' -> 'to'
+    // without going through a selector AST/codegen. Mirroring this avoids SWC
+    // escaping (e.g. '0%' -> '\\30 \\%').
+    let lower = selector.trim().to_ascii_lowercase();
+    if lower == "from" {
+        return Some("0%".to_string());
+    }
+    if lower == "100%" {
+        return Some("to".to_string());
+    }
     // Build a tiny stylesheet to leverage SWC to parse just the selector prelude
     let css_input = format!("{}{{}}", selector);
     let cm: SourceMap = Default::default();

@@ -612,7 +612,7 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
         if trimmed.is_empty() { return value.to_string(); }
         let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
         let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
-        if min.len() < trimmed.len() { min } else { trimmed.to_lowercase() }
+        if min.len() < trimmed.len() { min } else { trimmed.to_string() }
     }
 
     fn walk_and_emit(node: &postcss::ast::NodeRef, selectors: &[String], at_chain: &[(String, String)], collector: &AtomicCollector, opts: &TransformCssOptions) {
@@ -934,7 +934,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     if trimmed.is_empty() { return value.to_string(); }
                     let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
                     let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
-                    if min.len() < trimmed.len() { min } else { trimmed.to_lowercase() }
+                    if min.len() < trimmed.len() { min } else { trimmed.to_string() }
                 }
                 value_full = minify_color_value(&value_full);
                 if decl.important() { value_full.push_str("!important"); }
@@ -1045,7 +1045,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     // Use default options (modern defaults), consistent with our plugin defaults.
                     let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
                     let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
-                    let out = if min.len() < trimmed.len() { min } else { trimmed.to_lowercase() };
+                    let out = if min.len() < trimmed.len() { min } else { trimmed.to_string() };
                     if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
                         eprintln!("[atomicify] colormin: '{}' -> '{}'", trimmed, out);
                     }

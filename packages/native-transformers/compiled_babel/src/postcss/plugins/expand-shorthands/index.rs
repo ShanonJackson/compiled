@@ -100,20 +100,44 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
     let property = declaration_property_name(&declaration.name);
     let converter = match conversion_for_property(&property) {
         Some(converter) => converter,
-        None => return None,
+        None => {
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                eprintln!("[expand-shorthands:SWC] skip prop='{}' (no converter)", property);
+            }
+            return None;
+        }
     };
 
     let values_root = ValuesRoot::from_components(&declaration.value);
-    if values_root.is_empty() || values_root.contains_var_function() {
+    if values_root.is_empty() {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[expand-shorthands:SWC] skip prop='{}' (empty)", property);
+        }
         return None;
+    }
+    if values_root.contains_var_function() {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[expand-shorthands:SWC] skip prop='{}' (contains var())", property);
+        }
+        return None;
+    }
+
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[expand-shorthands:SWC] visit prop='{}'", property);
     }
 
     let expanded = converter(&values_root);
     if expanded.is_empty() {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[expand-shorthands:SWC] expanded prop='{}' -> <empty>", property);
+        }
         return Some(Vec::new());
     }
 
     if expanded.len() == 1 && matches!(expanded[0], LonghandDeclaration::KeepOriginal) {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[expand-shorthands:SWC] keep original prop='{}'", property);
+        }
         return None;
     }
 
@@ -122,9 +146,16 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
     for entry in expanded {
         match entry {
             LonghandDeclaration::Replace { prop, value } => {
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    let text = super::types::serialize_component_values(&value).unwrap_or_default();
+                    eprintln!("[expand-shorthands:SWC]   -> {}:{}", prop, text);
+                }
                 declarations.push(clone_with_new_name(declaration, &prop, value));
             }
             LonghandDeclaration::KeepOriginal => {
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    eprintln!("[expand-shorthands:SWC] keep original prop='{}' (seen later)", property);
+                }
                 return None;
             }
         }
