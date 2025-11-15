@@ -211,8 +211,31 @@ fn apply_decl_prefixing(rule: &mut QualifiedRule, add: &HashMap<String, Vec<Stri
             }
 
             // Value-level: naive support for fit-content case and vendor functions
+            // Inject value-level prefixes, but avoid duplicates if already present
             let value_prefixed = maybe_prefix_value(&prop, &decl.value, add);
-            for v in value_prefixed { new_block.push(ComponentValue::Declaration(Box::new(v))); }
+            'inject:
+            for v in value_prefixed {
+                if let DeclarationName::Ident(id) = &v.name {
+                    let target_prop = id.value.to_string();
+                    // Serialize v.value to string for simple equality compare
+                    let already = new_block.iter().any(|c| match c {
+                        ComponentValue::Declaration(existing) => {
+                            let ep = decl_prop(&existing.name);
+                            if ep != target_prop { return false; }
+                            // Look for -moz-fit-content exact ident
+                            if existing.value.len() == 1 {
+                                if let ComponentValue::Ident(i2) = &existing.value[0] {
+                                    if i2.value.eq("-moz-fit-content") { return true; }
+                                }
+                            }
+                            false
+                        }
+                        _ => false,
+                    });
+                    if already { continue 'inject; }
+                }
+                new_block.push(ComponentValue::Declaration(Box::new(v)));
+            }
 
             // Removal of old props (basic): skip emitting outdated prefixed properties
             if let Some(rem) = remove.get(&prop) {

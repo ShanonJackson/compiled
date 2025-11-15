@@ -1381,6 +1381,31 @@ pub fn transform_css_via_postcss(
     // Collect atomic outputs from the plugin.
     if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] take collector"); }
     let (mut sheets, mut class_names) = collector.take();
+    // Minimal post-process to guarantee -moz-fit-content is present for width-like properties
+    // when emitting via the engine path. Guarded to avoid duplicates.
+    if std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true) {
+        for sheet in &mut sheets {
+            let keys = ["min-width", "max-width", "width"];
+            for key in keys.iter() {
+                // Skip if already has -moz-fit-content for this key
+                let moz_sig = format!("{}:-moz-fit-content", key);
+                if sheet.contains(&moz_sig) { continue; }
+                // Important form first
+                let needle_imp = format!("{}:fit-content!important", key);
+                if sheet.contains(&needle_imp) {
+                    let repl = format!("{}:-moz-fit-content!important;{}:fit-content!important", key, key);
+                    *sheet = sheet.replace(&needle_imp, &repl);
+                    continue;
+                }
+                // Non-important form
+                let needle = format!("{}:fit-content", key);
+                if sheet.contains(&needle) {
+                    let repl = format!("{}:-moz-fit-content;{}:fit-content", key, key);
+                    *sheet = sheet.replace(&needle, &repl);
+                }
+            }
+        }
+    }
     // eprintln!("[postcss-pipeline] after first pass, sheets={}", sheets.len());
     // If PostCSS parsed the input as declarations (no rules) successfully,
     // the pipeline will emit no sheets. To mirror Babel, retry by wrapping
