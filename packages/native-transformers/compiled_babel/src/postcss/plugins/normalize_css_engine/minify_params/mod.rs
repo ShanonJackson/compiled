@@ -1,5 +1,4 @@
 use postcss as pc;
-use postcss::ast::NodeAccess;
 use crate::postcss::value_parser as vp;
 
 fn gcd(mut a: i64, mut b: i64) -> i64 {
@@ -59,7 +58,7 @@ pub fn plugin() -> pc::BuiltPlugin {
                     match node {
                         vp::Node::Div { before, after, .. } => { before.clear(); after.clear(); }
                         vp::Node::Space { value } => { *value = " ".to_string(); }
-                        vp::Node::Function { nodes: inner, before, after, value, .. } => {
+                        vp::Node::Function { nodes: inner, before, after, value: _, .. } => {
                             before.clear();
                             // Custom properties spacing: keep a single trailing space for single-arg custom props
                             if let Some(first) = inner.get(0) {

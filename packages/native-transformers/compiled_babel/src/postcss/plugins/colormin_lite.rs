@@ -1,5 +1,4 @@
-use swc_core::atoms::Atom;
-use swc_core::css::ast::{ComponentValue, Declaration, Ident, QualifiedRule, Rule, Stylesheet, Token};
+use swc_core::css::ast::{ComponentValue, Declaration, Rule, Stylesheet, Token};
 use crate::postcss::plugins::expand_shorthands::types::parse_value_to_components;
 use crate::postcss::transform::{Plugin, TransformContext};
 

@@ -189,10 +189,6 @@ fn reduce_with_precision(node: &Node, precision: usize) -> Option<Node> {
                     let right_div = reduce_with_precision(&Node::Op { op: '/', left: lr.clone(), right: Box::new(Node::Value { num: rn, unit: None }) }, precision)?;
                     Some(Node::Op { op: lop, left: Box::new(left_div), right: Box::new(right_div) })
                 }
-                // Multiplication by zero yields zero (unitless) when safe
-                ('*', Node::Value { num: ln, unit: _ }, Node::Value { num: rn, unit: _ }) if ln == 0.0 || rn == 0.0 => {
-                    Some(Node::Value { num: 0.0, unit: None })
-                }
                 _ => None,
             }
         }
@@ -246,7 +242,7 @@ pub fn plugin() -> pc::BuiltPlugin {
     let opt = Options::default();
     pc::plugin("postcss-calc")
         .once_exit(move |css, _| {
-            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+            let process_decl = |decl: postcss::ast::nodes::Declaration| {
                 let value = decl.value(); if value.is_empty() { return; }
                 let mut parsed = vp::parse(&value);
                 let mut changed = false;

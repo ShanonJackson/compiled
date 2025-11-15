@@ -1,10 +1,8 @@
 use postcss as pc;
 use crate::postcss::value_parser as vp;
 use once_cell::sync::Lazy;
-#[cfg(feature = "browserslist")]
-use oxc_browserslist::{execute, Opts};
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 
 // ===== Names plugin mapping (reverse: hex -> name), built to match JS order (last wins) =====
@@ -217,7 +215,7 @@ fn walk(parent: &mut vp::ParsedValue, cb: &mut dyn FnMut(&mut vp::Node, usize) -
 
 pub(crate) fn transform_value(value: &str, options: &ColorminOptions) -> String {
     let mut parsed = vp::parse(value);
-    walk(&mut parsed, &mut |node, index| {
+    walk(&mut parsed, &mut |node, _index| {
         match node {
             vp::Node::Function { value, nodes, .. } => {
                 if Regex::new(r"^(?i)(rgb|hsl)a?$").unwrap().is_match(value) {
@@ -238,18 +236,7 @@ pub(crate) fn transform_value(value: &str, options: &ColorminOptions) -> String 
     vp::stringify(&parsed.nodes)
 }
 
-fn resolve_browsers() -> Vec<String> {
-    #[cfg(feature = "browserslist")]
-    {
-        let mut opts = Opts::default();
-        opts.path = Some(env!("CARGO_MANIFEST_DIR").to_string());
-        return execute(&opts)
-            .map(|list| list.into_iter().map(|e| format!("{} {}", e.name().to_ascii_lowercase(), e.version().to_ascii_lowercase())).collect())
-            .unwrap_or_default();
-    }
-    #[allow(unreachable_code)]
-    Vec::new()
-}
+fn resolve_browsers() -> Vec<String> { Vec::new() }
 
 pub fn plugin() -> pc::BuiltPlugin {
     // browserslist resolution (used only for transparent bug). If unavailable, default modern.

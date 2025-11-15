@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use swc_core::common::{input::StringInput, FileName, SourceMap, Spanned};
 use swc_core::css::ast::{
-    AtRule, AtRuleName, AtRulePrelude, ComponentValue, CompoundSelector, Declaration,
-    DeclarationName, ListOfComponentValues, QualifiedRule, QualifiedRulePrelude, Rule, Stylesheet,
+    AtRule, AtRuleName, AtRulePrelude, ComponentValue, Declaration, DeclarationName,
+    ListOfComponentValues, QualifiedRule, QualifiedRulePrelude, Rule, Stylesheet,
 };
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};

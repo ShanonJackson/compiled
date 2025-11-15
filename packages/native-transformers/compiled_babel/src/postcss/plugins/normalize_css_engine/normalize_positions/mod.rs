@@ -2,7 +2,7 @@ use postcss as pc;
 use crate::postcss::value_parser as vp;
 
 fn normalize_pair(value: &str) -> String {
-    let mut parsed = vp::parse(value);
+    let parsed = vp::parse(value);
     let mut tokens: Vec<String> = Vec::new();
     let mut nodes = parsed.nodes.clone();
     vp::walk(&mut nodes[..], &mut |n| {
@@ -32,4 +32,3 @@ pub fn plugin() -> pc::BuiltPlugin {
         })
         .build()
 }
-

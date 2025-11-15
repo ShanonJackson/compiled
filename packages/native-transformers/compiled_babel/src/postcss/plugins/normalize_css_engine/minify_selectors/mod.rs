@@ -30,7 +30,7 @@ fn normalize_attribute_string(str_value: &mut Str) {
     value = value.replace("\\\n", "").replace("\\r", "").replace("\\f", "");
     str_value.value = Atom::from(value.trim().to_string());
     if let Some(raw) = &str_value.raw {
-        let mut raw_value = raw.to_string().replace("\\\n", "").replace("\\r", "").replace("\\f", "");
+        let raw_value = raw.to_string().replace("\\\n", "").replace("\\r", "").replace("\\f", "");
         str_value.raw = Some(Atom::from(raw_value.trim().to_string()));
     }
 }

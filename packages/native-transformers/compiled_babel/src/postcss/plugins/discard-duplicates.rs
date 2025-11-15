@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use swc_core::css::ast::{ComponentValue, Declaration, DeclarationName, Stylesheet};
+use swc_core::css::ast::{
+    ComponentValue, Declaration, DeclarationName, QualifiedRule, Rule, Stylesheet,
+};
+use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 
 use super::super::transform::{Plugin, TransformContext};
 
@@ -13,7 +16,7 @@ impl Plugin for DiscardDuplicates {
     }
 
     fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
-        discard_top_level_duplicates(stylesheet);
+        discard_top_level_duplicates(stylesheet, _ctx);
     }
 }
 
@@ -21,10 +24,29 @@ pub fn discard_duplicates() -> DiscardDuplicates {
     DiscardDuplicates
 }
 
-fn discard_top_level_duplicates(stylesheet: &mut Stylesheet) {
+fn discard_top_level_duplicates(stylesheet: &mut Stylesheet, ctx: &TransformContext<'_>) {
+    // 1:1 with JS plugin semantics:
+    // - Remove duplicate declarations that exist at the root level (when input is a flat list
+    //   of declarations)
+    // - Additionally, when the input was wrapped in a placeholder selector to allow parsing
+    //   of declaration lists (SWC pipeline), perform the same duplicate removal within that
+    //   specific rule block only.
+
+    let placeholder = ctx.options.declaration_placeholder.as_deref();
+
     for rule in &mut stylesheet.rules {
-        if let swc_core::css::ast::Rule::ListOfComponentValues(list) = rule {
-            remove_duplicate_declarations(&mut list.children);
+        match rule {
+            Rule::ListOfComponentValues(list) => {
+                remove_duplicate_declarations(&mut list.children);
+            }
+            Rule::QualifiedRule(qrule) => {
+                if let Some(ph) = placeholder {
+                    if qualified_rule_has_selector(qrule, ph) {
+                        remove_duplicate_declarations(&mut qrule.block.value);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -67,4 +89,17 @@ fn declaration_name_key(declaration: &Declaration) -> Option<String> {
         DeclarationName::Ident(ident) => Some(ident.value.to_string()),
         DeclarationName::DashedIdent(ident) => Some(ident.value.to_string()),
     }
+}
+
+fn qualified_rule_has_selector(rule: &QualifiedRule, expected_selector: &str) -> bool {
+    // Serialize the prelude (selector list) and compare textually to the expected placeholder
+    // (e.g. ".__compiled_declaration_wrapper__").
+    // Serialize the entire prelude for reliable comparison across variants.
+    let mut output = String::new();
+    {
+        let writer = BasicCssWriter::new(&mut output, None, Default::default());
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+        let _ = generator.emit(&rule.prelude);
+    }
+    output.trim() == expected_selector
 }

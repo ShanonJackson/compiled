@@ -70,7 +70,7 @@ fn parse_word(node: &mut vp::Node, keep_zero_unit: bool, precision_px: Option<us
 fn clamp_opacity(node: &mut vp::Node) {
     if let vp::Node::Word { value } = node {
         if let Some(pair) = vp::unit::unit(value) {
-            let mut num: f64 = pair.number.parse().unwrap_or(0.0);
+            let num: f64 = pair.number.parse().unwrap_or(0.0);
             if num > 1.0 { *value = if pair.unit == "%" { format!("{}%", num) } else { format!("{}", 1) }; }
             else if num < 0.0 { *value = format!("{}{}", 0, pair.unit); }
         }

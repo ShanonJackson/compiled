@@ -1,6 +1,5 @@
 #[cfg(feature = "postcss_engine")]
 use postcss as pc;
-use regex::Regex;
 
 // Submodules mirroring JS plugin file structure for clarity and parity.
 pub mod minify_selectors;
@@ -652,7 +651,7 @@ pub fn colormin_plugin() -> pc::BuiltPlugin {
         let b = parse_rgb_component(parts[2])?;
         // Alpha may be percentage or number; cssnano prefers numeric 0..1, accept both
         let a = if let Some(p) = parts[3].strip_suffix('%') {
-            (p.parse::<f32>().ok()? / 100.0)
+            p.parse::<f32>().ok()? / 100.0
         } else {
             parts[3].parse::<f32>().ok()?
         };
@@ -693,7 +692,7 @@ pub fn colormin_plugin() -> pc::BuiltPlugin {
         let parts: Vec<&str> = body.split(',').map(|p| p.trim()).collect();
         if parts.len()!=4 { return None; }
         let a = if let Some(p) = parts[3].strip_suffix('%') {
-            (p.parse::<f32>().ok()? / 100.0)
+            p.parse::<f32>().ok()? / 100.0
         } else {
             parts[3].parse::<f32>().ok()?
         };

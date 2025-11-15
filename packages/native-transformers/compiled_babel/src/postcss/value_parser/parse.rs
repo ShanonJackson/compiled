@@ -2,13 +2,11 @@ use super::{Node, ParsedValue};
 
 pub fn parse(input: &str) -> ParsedValue {
     // Minimal port of postcss-value-parser parse.js sufficient for cssnano plugins.
-    let mut tokens: Vec<Node> = Vec::new();
     let value = input.to_string();
     let mut pos: usize = 0;
     let max = value.len();
     let bytes: Vec<u8> = value.as_bytes().to_vec();
     let mut stack: Vec<Vec<Node>> = vec![Vec::new()];
-    let mut balanced: i32 = 0;
 
     while pos < max {
         let code = bytes[pos];
@@ -101,8 +99,7 @@ pub fn parse(input: &str) -> ParsedValue {
             let name = String::from_utf8(bytes[start..end].to_vec()).unwrap_or_default();
             if end < max && bytes[end] == b'(' {
                 // parse function
-                let mut fn_nodes: Vec<Node> = Vec::new();
-                balanced += 1;
+                
                 // consume '('
                 end += 1;
                 let inner_start = end;
@@ -117,10 +114,9 @@ pub fn parse(input: &str) -> ParsedValue {
                 let inner_end = i;
                 let inner = if inner_start <= inner_end { String::from_utf8(bytes[inner_start..inner_end].to_vec()).unwrap_or_default() } else { String::new() };
                 let parsed_inner = parse(&inner); // recurse
-                fn_nodes = parsed_inner.nodes;
+                let fn_nodes = parsed_inner.nodes;
                 stack.last_mut().unwrap().push(Node::Function { value: name, nodes: fn_nodes, before: String::new(), after: String::new(), unclosed: inner_end >= max });
                 pos = if inner_end < max { inner_end + 1 } else { max };
-                balanced -= 1;
                 continue;
             } else {
                 stack.last_mut().unwrap().push(Node::Word { value: name });
@@ -156,8 +152,7 @@ pub fn parse(input: &str) -> ParsedValue {
         }
     }
 
-    tokens = stack.pop().unwrap_or_default();
-    ParsedValue { nodes: tokens }
+    ParsedValue { nodes: stack.pop().unwrap_or_default() }
 }
 
 fn is_ident_start(c: u8) -> bool {

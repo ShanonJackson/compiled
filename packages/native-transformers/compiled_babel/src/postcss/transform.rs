@@ -270,7 +270,10 @@ pub fn transform_css(
         if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss end"); }
         return r;
     }
-    transform_css_via_swc_pipeline(css, options)
+    #[cfg(not(feature = "postcss_engine"))]
+    {
+        return transform_css_via_swc_pipeline(css, options);
+    }
 }
 
 /// Legacy Babel plugin name used in error reporting.

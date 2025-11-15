@@ -1,5 +1,4 @@
 use postcss as pc;
-use crate::postcss::value_parser as vp;
 use regex::Regex;
 
 fn merge_range_bounds(left: &str, right: &str) -> Option<String> {
@@ -34,7 +33,7 @@ pub fn plugin() -> pc::BuiltPlugin {
     let re = Regex::new(r"(?i)u\+[0-9a-f?]+(?:-[0-9a-f?]+)?").unwrap();
     pc::plugin("postcss-normalize-unicode")
         .once_exit(move |css, _| {
-            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+            let process_decl = |decl: postcss::ast::nodes::Declaration| {
                 if decl.prop().eq_ignore_ascii_case("unicode-range") {
                     let value = decl.value();
                     if value.is_empty() { return; }

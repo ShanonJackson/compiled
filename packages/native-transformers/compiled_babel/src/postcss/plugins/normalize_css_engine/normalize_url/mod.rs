@@ -1,5 +1,4 @@
 use postcss as pc;
-use postcss::ast::NodeAccess;
 use crate::postcss::value_parser as vp;
 use percent_encoding::percent_decode_str;
 use regex::Regex;
@@ -82,7 +81,7 @@ fn test_parameter(name: &str) -> bool {
 fn normalize_data_url(url: &str, strip_hash: bool) -> Result<String, ()> {
     let re = Regex::new(r"(?i)^data:(?P<type>[^,]*?),(?P<data>[^#]*?)(?:#(?P<hash>.*))?$").unwrap();
     let caps = re.captures(url).ok_or(())?;
-    let mut typ = caps.name("type").map(|m| m.as_str()).unwrap_or("").to_string();
+    let typ = caps.name("type").map(|m| m.as_str()).unwrap_or("").to_string();
     let data = caps.name("data").map(|m| m.as_str()).unwrap_or("").to_string();
     let mut hash = caps.name("hash").map(|m| m.as_str()).unwrap_or("").to_string();
     if strip_hash { hash.clear(); }
@@ -96,7 +95,7 @@ fn normalize_data_url(url: &str, strip_hash: bool) -> Result<String, ()> {
     let mime_type = media.get(0).map(|s| s.to_lowercase()).unwrap_or_else(|| "".to_string());
     let mut attrs: Vec<String> = media.into_iter().skip(1).map(|attribute| {
         let mut parts = attribute.splitn(2, '=').map(|s| s.trim().to_string());
-        let mut key = parts.next().unwrap_or_default();
+        let key = parts.next().unwrap_or_default();
         let mut value = parts.next().unwrap_or_default();
         if key == "charset" {
             value = value.to_lowercase();

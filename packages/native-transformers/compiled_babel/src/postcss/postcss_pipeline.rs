@@ -1,6 +1,7 @@
 #[cfg(feature = "postcss_engine")]
 use postcss as pc;
 #[cfg(feature = "postcss_engine")]
+#[allow(unused_imports)]
 use postcss::ast::NodeAccess;
 use postcss::ast::nodes::{as_at_rule, as_declaration, as_rule, Declaration as PcDeclaration, Rule as PcRule};
 
@@ -138,8 +139,8 @@ fn discard_empty_rules_plugin() -> pc::BuiltPlugin {
 fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -> pc::Processor {
     // Step 2 of bisect: add a small batch of light plugins
     // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
-    let mut plugins: Vec<pc::BuiltPlugin> = vec![
-        pc::plugin("discard-duplicates").build(),
+    let plugins: Vec<pc::BuiltPlugin> = vec![
+        discard_duplicates_plugin(),
         discard_empty_rules_plugin(),
         pc::plugin("parent-orphaned-pseudos").build(),
         pc::plugin("postcss-nested").build(),
@@ -343,6 +344,56 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
         .build()
 }
 
+#[cfg(feature = "postcss_engine")]
+fn discard_duplicates_plugin() -> pc::BuiltPlugin {
+    use std::collections::HashMap;
+    use postcss::ast::nodes::as_declaration;
+
+    // Mirrors packages/css/src/plugins/discard-duplicates.ts: remove earlier
+    // duplicate declarations that exist directly under the root.
+    pc::plugin("discard-duplicates").once(|root_like, _result| {
+        fn process_root(root: &postcss::ast::nodes::Root) {
+            let mut by_prop: HashMap<String, Vec<postcss::ast::NodeRef>> = HashMap::new();
+            for child in root.nodes() {
+                if let Some(decl) = as_declaration(&child) {
+                    let prop = decl.prop();
+                    by_prop.entry(prop.to_string()).or_default().push(child.clone());
+                }
+            }
+            for (_prop, nodes) in by_prop.into_iter() {
+                if nodes.len() > 1 {
+                    for i in 0..nodes.len() - 1 {
+                        root.remove_child(nodes[i].clone());
+                    }
+                }
+            }
+        }
+
+        match root_like {
+            pc::RootLike::Root(root) => process_root(root),
+            pc::RootLike::Document(document) => {
+                // Documents can also contain top-level declarations; handle similarly.
+                let mut by_prop: HashMap<String, Vec<postcss::ast::NodeRef>> = HashMap::new();
+                for child in document.nodes() {
+                    if let Some(decl) = as_declaration(&child) {
+                        let prop = decl.prop();
+                        by_prop.entry(prop.to_string()).or_default().push(child.clone());
+                    }
+                }
+                for (_prop, nodes) in by_prop.into_iter() {
+                    if nodes.len() > 1 {
+                        for i in 0..nodes.len() - 1 {
+                            document.remove_child(nodes[i].clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }).build()
+}
+
 // minify_selectors_plugin and minify_params_plugin now live under plugins::normalize_css
 
 #[cfg(feature = "postcss_engine")]
@@ -351,7 +402,6 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
     use crate::postcss::plugins::at_rules::types::ParsedAtRule;
     use crate::postcss::utils::style_ordering::STYLE_ORDER;
     use postcss::ast::nodes::{as_at_rule, as_rule, AtRule as PcAtRule, Rule as PcRule};
-    use postcss::ast::NodeRef as PcNodeRef;
 
     #[derive(Clone)]
     struct AtInfo {
@@ -500,7 +550,7 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
 }
 
 #[cfg(feature = "postcss_engine")]
-fn extract_stylesheets_plugin(collector: AtomicCollector, options: TransformCssOptions) -> pc::BuiltPlugin {
+fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCssOptions) -> pc::BuiltPlugin {
     use postcss::list::comma;
     use postcss::ast::nodes::as_at_rule;
 
@@ -1162,7 +1212,7 @@ pub fn transform_css_via_postcss(
         let wrapped = format!(".{PLACEHOLDER} {{{}}}", css);
         options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
         let collector2 = AtomicCollector::default();
-        let mut processor2 = build_processor(&options, &collector2);
+        let processor2 = build_processor(&options, &collector2);
         if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process wrapped 2"); }
         match processor2.process(&wrapped) {
             Ok(mut res2) => {
@@ -1183,7 +1233,7 @@ pub fn transform_css_via_postcss(
     // Reorder sheets to match Babel's sort-atomic-style-sheet order
     fn first_selector_text(sheet: &str) -> String {
         // e.g. ".class:hover{...}" or multiple selectors before '{'
-        if let Some(start) = sheet.find('.') {
+        if sheet.find('.').is_some() {
             let before_brace = &sheet[..sheet.find('{').unwrap_or(sheet.len())];
             let comma_split = before_brace.split(',').next().unwrap_or(before_brace);
             return comma_split.trim().to_string();

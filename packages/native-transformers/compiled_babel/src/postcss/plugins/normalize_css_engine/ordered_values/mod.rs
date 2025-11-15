@@ -129,7 +129,7 @@ fn normalize_transition(args: Vec<Vec<vp::Node>>) -> Vec<Vec<vp::Node>> {
                     }
                 }
                 vp::Node::Word { value } => {
-                    if let Some((_, u)) = vp_unit(value) {
+                    if vp_unit(value).is_some() {
                         if time1.is_empty() { time1.push(node.clone()); time1.push(add_space()); }
                         else { time2.push(node.clone()); time2.push(add_space()); }
                     } else {
@@ -157,7 +157,7 @@ fn get_value(lists: Vec<Vec<vp::Node>>) -> String {
     let total = lists.len();
     for (idx, arg) in lists.into_iter().enumerate() {
         let last_idx = arg.len().saturating_sub(1);
-        for (i, mut val) in arg.into_iter().enumerate() {
+        for (i, val) in arg.into_iter().enumerate() {
             // Drop trailing space at very end
             if idx + 1 == total && i == last_idx {
                 if let vp::Node::Space { .. } = val { continue; }
@@ -327,9 +327,9 @@ fn normalize_grid_gap(parsed: &vp::ParsedValue) -> String {
 fn normalize_grid_line(parsed: &vp::ParsedValue) -> String {
     // operate on string per JS
     let s = to_string(parsed);
-    let mut grid_value: Vec<String> = s.split('/').map(|p| p.to_string()).collect();
+    let grid_value: Vec<String> = s.split('/').map(|p| p.to_string()).collect();
     if grid_value.len() > 1 {
-        let mapped: Vec<String> = grid_value.into_iter().map(|mut grid_line| {
+        let mapped: Vec<String> = grid_value.into_iter().map(|grid_line| {
             let mut front = String::new();
             let mut back = String::new();
             let gl = grid_line.trim().to_string();
@@ -360,7 +360,7 @@ pub fn plugin() -> pc::BuiltPlugin {
     let cache = std::sync::Mutex::new(std::collections::HashMap::<String, String>::new());
     pc::plugin("postcss-ordered-values")
         .once_exit(move |css, _| {
-            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+            let process_decl = |decl: postcss::ast::nodes::Declaration| {
                 let lower_prop = decl.prop().to_lowercase();
                 let normalized_prop = vendor_unprefixed(&lower_prop).to_string();
                 let supported = matches!(

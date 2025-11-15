@@ -350,7 +350,7 @@ pub fn plugin() -> pc::BuiltPlugin {
     let initial_support = true;
     pc::plugin("postcss-reduce-initial")
         .once_exit(move |css, _| {
-            let mut process_decl = |decl: postcss::ast::nodes::Declaration| {
+            let process_decl = |decl: postcss::ast::nodes::Declaration| {
                 let prop = decl.prop().to_lowercase();
                 if ignore_default.contains(&prop.as_str()) { return; }
                 let value_l = decl.value().to_lowercase();
