@@ -1361,8 +1361,16 @@ pub fn transform_css_via_postcss(
                 let mut o = sa.cmp(sb);
                 if o == Ordering::Equal {
                     // Fallback to shorthand bucket ordering for identical pseudo score
-                    let ba = first_property(&ia.text).and_then(|p| crate::postcss::plugins::sort_shorthand_declarations::shorthand_bucket(&p));
-                    let bb = first_property(&ib.text).and_then(|p| crate::postcss::plugins::sort_shorthand_declarations::shorthand_bucket(&p));
+                    let ba = first_property(&ia.text).and_then(|p| {
+                        use crate::postcss::plugins::sort_shorthand_declarations::{shorthand_bucket, parent_shorthand_for};
+                        shorthand_bucket(&p)
+                            .or_else(|| parent_shorthand_for(&p).and_then(shorthand_bucket))
+                    });
+                    let bb = first_property(&ib.text).and_then(|p| {
+                        use crate::postcss::plugins::sort_shorthand_declarations::{shorthand_bucket, parent_shorthand_for};
+                        shorthand_bucket(&p)
+                            .or_else(|| parent_shorthand_for(&p).and_then(shorthand_bucket))
+                    });
                     o = match (ba, bb) {
                         (Some(a), Some(b)) => a.cmp(&b),
                         (Some(_), None) => Ordering::Less,

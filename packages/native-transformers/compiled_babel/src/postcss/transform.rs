@@ -113,11 +113,63 @@ impl<'a> TransformContext<'a> {
         std::mem::take(&mut self.preserved_comments)
     }
 
-    pub fn finish(self) -> TransformCssResult {
-        TransformCssResult {
-            sheets: self.sheets,
-            class_names: self.class_names.into_iter().collect(),
+    fn first_class_from_sheet(sheet: &str) -> Option<String> {
+        // Find first '.' and read until '{', whitespace, or comma.
+        let dot = sheet.find('.')?;
+        let rest = &sheet[dot + 1..];
+        let end = rest
+            .find(|c: char| c == '{' || c == ' ' || c == ',')
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        if name.is_empty() { None } else { Some(name.to_string()) }
+    }
+
+    fn reorder_class_names_by_sheets(
+        mut class_names: Vec<String>,
+        sheets: &[String],
+    ) -> Vec<String> {
+        use std::collections::HashSet;
+        let mut ordered_keys: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for sheet in sheets {
+            if let Some(class_name) = Self::first_class_from_sheet(sheet) {
+                if seen.insert(class_name.clone()) {
+                    ordered_keys.push(class_name);
+                }
+            }
         }
+
+        if ordered_keys.is_empty() {
+            return class_names;
+        }
+
+        let mut included: HashSet<String> = HashSet::new();
+        let mut result: Vec<String> = Vec::with_capacity(class_names.len());
+
+        // Add in the order classes appear in sheets
+        for key in ordered_keys {
+            if let Some(pos) = class_names.iter().position(|c| c == &key) {
+                let name = class_names.remove(pos);
+                included.insert(name.clone());
+                result.push(name);
+            }
+        }
+
+        // Append any remaining classes preserving original encounter order
+        for name in class_names.into_iter() {
+            if !included.contains(&name) {
+                result.push(name);
+            }
+        }
+
+        result
+    }
+
+    pub fn finish(self) -> TransformCssResult {
+        let sheets = self.sheets;
+        let encountered: Vec<String> = self.class_names.into_iter().collect();
+        let class_names = Self::reorder_class_names_by_sheets(encountered, &sheets);
+        TransformCssResult { sheets, class_names }
     }
 }
 
@@ -279,3 +331,4 @@ pub fn transform_css(
 /// Legacy Babel plugin name used in error reporting.
 #[allow(dead_code)]
 const FALLBACK_PLUGIN_NAME: &str = "@compiled/postcss";
+

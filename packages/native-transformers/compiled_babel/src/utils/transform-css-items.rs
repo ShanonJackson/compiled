@@ -308,7 +308,7 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result =
                 transform_css(&logical.css, options).unwrap_or_else(|err| panic!("{err}"));
-            let ordered = order_class_names_by_bucket(&css_result.class_names, &css_result.sheets);
+            let ordered = css_result.class_names.clone();
             let compressed =
                 compress_class_names_for_runtime(&ordered, compression_map.as_ref());
             let class_name_literal = string_literal(compressed.join(" "));
@@ -339,7 +339,7 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let css = get_item_css(item);
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
-            let ordered = order_class_names_by_bucket(&css_result.class_names, &css_result.sheets);
+            let ordered = css_result.class_names.clone();
             let compressed =
                 compress_class_names_for_runtime(&ordered, compression_map.as_ref());
             let class_name = compressed.join(" ");
@@ -543,5 +543,6 @@ mod tests {
         }
     }
 }
+
 
 

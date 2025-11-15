@@ -3,7 +3,6 @@ use std::env;
 
 use indexmap::IndexSet;
 use swc_core::atoms::Atom;
-use swc_core::common::errors::SourceMapper;
 use swc_core::common::{SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, AssignPat, BindingIdent, BlockStmt, BlockStmtOrExpr, CallExpr, Callee,
@@ -100,6 +99,13 @@ fn build_component_tag_expr(tag: &Tag) -> Expr {
     match tag.tag_type {
         TagType::InBuiltComponent => string_lit(&tag.name),
         TagType::UserDefinedComponent => Expr::Ident(ident(&tag.name)),
+    }
+}
+
+fn component_name_from_tag(tag: &Tag) -> Option<String> {
+    match tag.tag_type {
+        TagType::UserDefinedComponent => Some(tag.name.clone()),
+        _ => None,
     }
 }
 
@@ -545,28 +551,12 @@ fn order_class_names_by_bucket(class_names: &[String], sheets: &[String]) -> Vec
 fn compress_class_names(
     class_names: &[String],
     compression_map: Option<&BTreeMap<String, String>>,
-    sheets: &[String],
+    _sheets: &[String],
 ) -> String {
-    let ordered = order_class_names_by_bucket(class_names, sheets);
-    let compressed = compress_class_names_for_runtime(&ordered, compression_map);
+    let compressed = compress_class_names_for_runtime(class_names, compression_map);
     compressed.join(" ")
 }
 
-fn component_name_from_metadata(meta: &Metadata) -> Option<String> {
-    let span = meta.parent_span?;
-    let source_map = {
-        let state = meta.state();
-        state.file().source_map.clone()
-    };
-
-    let snippet = source_map.span_to_snippet(span).ok()?;
-    let name = snippet.trim();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
-}
 
 /// Builds the styled component wrapper mirroring the Babel helper.
 pub fn build_styled_component(tag: Tag, css_output: CssOutput, meta: &Metadata) -> Expr {
@@ -603,7 +593,7 @@ pub fn build_styled_component(tag: Tag, css_output: CssOutput, meta: &Metadata) 
     let unconditional_class_names =
         compress_class_names(&css_result.class_names, class_map_ref, &css_result.sheets);
 
-    let component_name = component_name_from_metadata(meta);
+    let component_name = component_name_from_tag(&tag);
     let helper = get_runtime_class_name_library(meta);
 
     let class_array = build_class_name_array(
@@ -904,4 +894,5 @@ mod tests {
         std::env::remove_var("NODE_ENV");
     }
 }
+
 

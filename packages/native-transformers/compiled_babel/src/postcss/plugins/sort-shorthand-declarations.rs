@@ -115,7 +115,7 @@ fn shorthand_bucket_for_declaration(declaration: &Declaration) -> Option<u32> {
     None
 }
 
-fn parent_shorthand_for(property: &str) -> Option<&'static str> {
+pub fn parent_shorthand_for(property: &str) -> Option<&'static str> {
     // Reverse mapping auto-derived from packages/utils/src/shorthand.ts (shorthandFor),
     // choosing the parent shorthand with the minimal bucket depth when multiple apply.
     match property {
