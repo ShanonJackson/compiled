@@ -18,7 +18,7 @@ const Wrapper = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmp
 			style={__cmpls}
 			ref={__cmplr}
 			className={ax([
-				"_ca0qftgi _u5f3ftgi _n3tdftgi _19bvftgi _itd01r31 _14vfglyw _wc3a1o36",
+				"_ca0qftgi _u5f3ftgi _n3tdftgi _19bvftgi _1l201r31 _cwctglyw _d7ut1o36",
 				__cmplp.className,
 			])}
 		/>

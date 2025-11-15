@@ -136,6 +136,9 @@ fn register_export_named_decl(metadata: &Metadata, decl: &swc_core::ecma::ast::N
 
         return;
     }
+
+    // No source provided: local export aliases are handled during binding
+    // resolution to mirror Babel behaviour (see resolve_binding).
 }
 
 fn register_function_decl(metadata: &Metadata, decl: &FnDecl) {

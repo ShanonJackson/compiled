@@ -9,7 +9,10 @@ use serde_json::Value;
 use swc_core::common::comments::{Comment, SingleThreadedComments};
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap};
-use swc_core::ecma::ast::{EsVersion, Expr, Program, Prop, PropName, PropOrSpread};
+use swc_core::ecma::ast::{
+    EsVersion, Expr, Program, Prop, PropName, PropOrSpread, ModuleItem, ModuleDecl,
+    ExportSpecifier, ModuleExportName,
+};
 use swc_ecma_parser::lexer::Lexer;
 use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax};
 
@@ -26,6 +29,47 @@ use crate::utils_traversers_types::TraverserResult;
 use crate::utils_types::{
     BindingPathKind, EvaluateExpression, ImportBindingKind, PartialBindingWithMeta,
 };
+
+fn parse_current_module(meta: &Metadata) -> Option<Program> {
+    let state = meta.state();
+    let Some(path) = state.filename.clone() else { return None; };
+    let options = state.opts.clone();
+    drop(state);
+
+    let code = fs::read_to_string(&path).ok()?;
+    let (program, _cm, _comments) = parse_program(&path, &code, &options)?;
+    Some(program)
+}
+
+fn find_local_name_for_named_export(meta: &Metadata, export_name: &str) -> Option<String> {
+    let program = parse_current_module(meta)?;
+    let Program::Module(module) = program else { return None; };
+
+    for item in module.body.iter() {
+        if let ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named)) = item {
+            if named.src.is_none() {
+                for spec in &named.specifiers {
+                    if let ExportSpecifier::Named(n) = spec {
+                        let exported_matches = n
+                            .exported
+                            .as_ref()
+                            .map(|e| match e { ModuleExportName::Ident(i) => i.sym.as_ref() == export_name, ModuleExportName::Str(s) => s.value.as_ref() == export_name })
+                            .unwrap_or_else(|| match &n.orig { ModuleExportName::Ident(i) => i.sym.as_ref() == export_name, ModuleExportName::Str(s) => s.value.as_ref() == export_name });
+
+                        if exported_matches {
+                            return Some(match &n.orig {
+                                ModuleExportName::Ident(i) => i.sym.to_string(),
+                                ModuleExportName::Str(s) => s.value.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 fn ensure_module_resolver(state: &mut TransformState) {
     if state.module_resolver.is_some() {
@@ -565,6 +609,28 @@ pub fn resolve_binding(
     evaluate_expression: EvaluateExpression,
 ) -> Option<PartialBindingWithMeta> {
     let binding = get_scoped_binding(reference_name, &meta)?;
+
+    // COMPAT: Babel resolves local export aliases by mapping the exported name
+    // back to its local before proceeding. If our scoped binding is a
+    // placeholder (no node captured), try to resolve a local name from a
+    // `export { local as reference_name }` declaration in this module and then
+    // resolve that local instead.
+    if binding.node.is_none() {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[resolve_binding] placeholder for '{}', checking local export alias", reference_name);
+        }
+        if let Some(local_name) = find_local_name_for_named_export(&meta, reference_name) {
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                eprintln!(
+                    "[resolve_binding] alias '{}' -> local '{}'",
+                    reference_name, local_name
+                );
+            }
+            if let Some(resolved) = resolve_binding(&local_name, meta.clone(), evaluate_expression) {
+                return Some(resolved);
+            }
+        }
+    }
     let path_kind = binding.path.clone().map(|path| path.kind);
 
     match path_kind {

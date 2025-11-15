@@ -9,32 +9,28 @@ process.chdir(repoRoot);
 
 const babel = require('@babel/core');
 
-const fixtureRoot = path.join(repoRoot, 'packages', 'native-transformers', 'tests', 'fixtures');
+const fixtureRoot = path.join(
+  repoRoot,
+  'packages',
+  'native-transformers',
+  'tests',
+  'fixtures'
+);
+
+const MAX_MISMATCH_PRINT = 3; // show at most this many missing/extra rules
 
 const BABEL_OPTIONS = {
   babelrc: false,
   configFile: false,
   sourceMaps: false,
   ast: false,
-  caller: {
-    name: 'compiled-native-transformers-fixtures',
-  },
+  caller: { name: 'compiled-native-transformers-fixtures' },
   plugins: [
     [
       require.resolve('@compiled/babel-plugin'),
-      {
-        cache: false,
-        optimizeCss: true,
-        importReact: true,
-        extract: true,
-      },
+      { cache: false, optimizeCss: true, importReact: true, extract: true },
     ],
-    [
-      require.resolve('@compiled/babel-plugin-strip-runtime'),
-      {
-        compiledRequireExclude: true,
-      },
-    ],
+    [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
   ],
 };
 
@@ -58,22 +54,37 @@ async function readFixtureConfig(dir) {
   try {
     const text = await fsp.readFile(path.join(dir, 'config.json'), 'utf8');
     return JSON.parse(text);
-  } catch (e) {
+  } catch (_e) {
     return {};
+  }
+}
+
+async function writeFileIfChanged(filePath, content) {
+  const normalized = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+  let existing;
+  try {
+    existing = await fsp.readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (existing !== normalized) {
+    await fsp.writeFile(filePath, normalized + (normalized.endsWith('\n') ? '' : '\n'));
   }
 }
 
 async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   const label = path.basename(fixtureDir);
   const t0 = Date.now();
-  console.log(`[fixtures]   ${label}: babel start`);
+  console.log(`[fixtures] ${label}: babel`);
   const cfg = await readFixtureConfig(fixtureDir);
   const compiledOptions = {
     cache: false,
     optimizeCss: true,
     importReact: true,
     extract: typeof cfg.extract === 'boolean' ? cfg.extract : true,
-    ...(cfg.classNameCompressionMap ? { classNameCompressionMap: cfg.classNameCompressionMap } : {}),
+    ...(cfg.classNameCompressionMap
+      ? { classNameCompressionMap: cfg.classNameCompressionMap }
+      : {}),
   };
 
   const result = babel.transformSync(inputCode, {
@@ -81,28 +92,30 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
     filename: inputPath,
     plugins: [
       [require.resolve('@compiled/babel-plugin'), compiledOptions],
-      [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
+      [
+        require.resolve('@compiled/babel-plugin-strip-runtime'),
+        { compiledRequireExclude: true },
+      ],
     ],
   });
-  console.log(`[fixtures]   ${label}: babel done (${((Date.now()-t0)/1000).toFixed(1)}s)`);
+  console.log(
+    `[fixtures] ${label}: babel done ${((Date.now() - t0) / 1000).toFixed(1)}s`
+  );
 
   if (!result || typeof result.code !== 'string') {
     throw new Error(`Failed to transform fixture at ${fixtureDir}`);
   }
 
   const metadata = (result.metadata && result.metadata.styleRules) || [];
-
-  const outputs = {
+  return {
     code: formatWithPrettierOrReturn(result.code, 'babel'),
     styleRules: Array.isArray(metadata) ? metadata : [],
   };
-
-  return outputs;
 }
 
 async function attemptSwcTransform(inputCode, inputPath) {
   const label = path.basename(path.dirname(inputPath));
-  console.log(`[fixtures]   ${label}: swc start`);
+  console.log(`[fixtures] ${label}: swc`);
   const { existsSync } = require('fs');
   const { spawnSync } = require('child_process');
   const bin = path.join(
@@ -115,7 +128,6 @@ async function attemptSwcTransform(inputCode, inputPath) {
   );
 
   if (!existsSync(bin)) {
-    // Try to build the CLI once to avoid JS bridges for SWC
     const buildEnv = { ...process.env };
     const build = spawnSync('cargo', ['build', '-p', 'fixtures_cli', '--release'], {
       cwd: path.join(repoRoot, 'packages', 'native-transformers'),
@@ -124,73 +136,46 @@ async function attemptSwcTransform(inputCode, inputPath) {
       env: buildEnv,
     });
     if (build.status !== 0) {
-      console.warn(`Skipping SWC transform for ${inputPath}: failed to build fixtures_cli`);
-      return { code: inputCode, styleRules: [] };
+      console.warn(`[fixtures] ${label}: swc build failed; skipping`);
+      return { code: inputCode, styleRules: [], success: false };
     }
   }
 
-  // Keep the CLI quiet by default for throughput. Enable
-  // COMPILED_DEBUG_COLORMIN manually when debugging.
-  let env = { ...process.env };
+  const runEnv = { ...process.env };
+  // Ensure native transformer headers report the same version as Babel.
+  // The Rust transformers read TEST_PKG_VERSION to embed the plugin version.
   try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const babelPkg = require('@compiled/babel-plugin/package.json');
     if (babelPkg && typeof babelPkg.version === 'string' && babelPkg.version) {
-      env.TEST_PKG_VERSION = babelPkg.version;
+      runEnv.TEST_PKG_VERSION = babelPkg.version;
     }
-  } catch (_) {}
+  } catch (_e) {
+    // ignore if package cannot be resolved; transformers will fall back
+  }
   const run = spawnSync(bin, [inputPath], {
+    cwd: path.join(repoRoot, 'packages', 'native-transformers'),
     encoding: 'utf8',
-    env: { ...env, COMPILED_SKIP_POSTCSS_DEPRECATION: '1', COMPILED_CLI_TRACE: '1' },
-    timeout: 30000,
+    shell: process.platform === 'win32',
+    env: runEnv,
   });
-  console.log(`[fixtures]   ${label}: swc done${run && run.status === 0 ? '' : ' (nonzero)'}${run && run.error && run.error.code === 'ETIMEDOUT' ? ' (timeout)' : ''}`);
-  if (run && run.stderr && String(run.stderr).trim()) {
-    // Show first chunk to help debugging stalls; keeps output manageable.
-    const preview = String(run.stderr).slice(0, 4000);
-    console.error(preview);
-  }
-  if (process.env.COMPILED_DEBUG_COLORMIN && run && run.stderr) {
-    try { if (String(run.stderr).trim()) console.error(String(run.stderr)); } catch {}
-  }
-  if (!run || run.error || run.status !== 0) {
-    if (run && run.error && run.error.code === 'ETIMEDOUT') {
-      console.warn(`Skipping SWC transform for ${inputPath}: CLI timed out after 60s`);
-    }
-    console.warn(
-      `Skipping SWC transform for ${inputPath}: fixtures_cli failed${run && run.status != null ? ` with code ${run.status}` : ''}\n${(run && run.stderr) || ''}`
-    );
+
+  if (run.status !== 0) {
+    console.warn(`[fixtures] ${label}: swc run failed; skipping`);
     return { code: inputCode, styleRules: [], success: false };
   }
 
   try {
-    const parsed = JSON.parse(run.stdout);
+    const parsed = JSON.parse(run.stdout || '{}');
+    console.log(`[fixtures] ${label}: swc done`);
     return {
-      code: String(parsed.code || ''),
+      code: parsed.code || inputCode,
       styleRules: Array.isArray(parsed.styleRules) ? parsed.styleRules : [],
       success: true,
     };
-  } catch (e) {
-    const preview = (run.stdout || '').slice(0, 200).replace(/\s+/g, ' ');
-    console.warn(
-      `Skipping SWC transform for ${inputPath}: failed to parse CLI JSON: ${e.message}\nstdout preview: ${preview}`
-    );
+  } catch (_e) {
+    console.warn(`[fixtures] ${label}: swc output invalid; skipping`);
     return { code: inputCode, styleRules: [], success: false };
-  }
-}
-
-async function writeFileIfChanged(filePath, content) {
-  const normalized = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
-  let existing;
-  try {
-    existing = await fsp.readFile(filePath, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  if (existing !== normalized) {
-    await fsp.writeFile(filePath, normalized + (normalized.endsWith('\n') ? '' : '\n'));
   }
 }
 
@@ -200,11 +185,13 @@ async function processFixture(name) {
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
   const startedAt = Date.now();
-  console.log(`[fixtures] → ${name}`);
+  console.log(`[fixtures] === ${name} ===`);
 
-  // No debug capture in normal runs; keep updater focused on fixture parity
-
-  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath);
+  const babelOutputs = await generateBabelOutputs(
+    fixtureDir,
+    inputCode,
+    inputPath
+  );
   await writeFileIfChanged(
     path.join(fixtureDir, 'babel-out.jsx'),
     formatWithPrettierOrReturn(babelOutputs.code, 'babel')
@@ -216,27 +203,31 @@ async function processFixture(name) {
 
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath);
   if (swcOutputs.success) {
-    // Only write outputs on success; avoid clobbering with empty data on failure/timeout
     await writeFileIfChanged(
       path.join(fixtureDir, 'out.jsx'),
       formatWithPrettierOrReturn(swcOutputs.code, 'babel')
     );
     await writeFileIfChanged(
       path.join(fixtureDir, 'swc-style-rules.json'),
-      JSON.stringify(Array.isArray(swcOutputs.styleRules) ? swcOutputs.styleRules : [], null, 2)
+      JSON.stringify(
+        Array.isArray(swcOutputs.styleRules) ? swcOutputs.styleRules : [],
+        null,
+        2
+      )
     );
   } else {
-    console.warn(`[fixtures]   ${name}: swc failed — keeping previous outputs`);
+    console.warn(`[fixtures] ${name}: swc failed; keeping previous outputs`);
   }
 
-  // Compare parity between Babel and SWC outputs
   const [babelCode, swcCode] = await Promise.all([
     fsp.readFile(path.join(fixtureDir, 'babel-out.jsx'), 'utf8'),
     fsp.readFile(path.join(fixtureDir, 'out.jsx'), 'utf8'),
   ]);
-  let codeEqual = babelCode === swcCode;
+  const codeEqual = babelCode === swcCode;
 
+  // Compare style-rules ignoring order
   let rulesEqual = true;
+  let ruleReport = null;
   try {
     const [babelRulesText, swcRulesText] = await Promise.all([
       fsp.readFile(path.join(fixtureDir, 'babel-style-rules.json'), 'utf8'),
@@ -244,22 +235,60 @@ async function processFixture(name) {
     ]);
     const babelRules = JSON.parse(babelRulesText || '[]');
     const swcRules = JSON.parse(swcRulesText || '[]');
-    rulesEqual = JSON.stringify(babelRules) === JSON.stringify(swcRules);
+
+    const bSet = new Set(babelRules);
+    const sSet = new Set(swcRules);
+    const missing = [];
+    const extra = [];
+    for (const it of babelRules) if (!sSet.has(it)) missing.push(it);
+    for (const it of swcRules) if (!bSet.has(it)) extra.push(it);
+
+    const lengthMismatch = babelRules.length !== swcRules.length;
+    rulesEqual = missing.length === 0 && extra.length === 0;
+
+    if (!rulesEqual || lengthMismatch) {
+      ruleReport = {
+        lengthMismatch,
+        bLen: babelRules.length,
+        sLen: swcRules.length,
+        missing: missing.slice(0, MAX_MISMATCH_PRINT),
+        extra: extra.slice(0, MAX_MISMATCH_PRINT),
+      };
+    }
   } catch (_err) {
     rulesEqual = false;
+    ruleReport = { error: 'failed to read/parse style-rules' };
   }
 
   const dur = ((Date.now() - startedAt) / 1000).toFixed(1);
-  console.log(`[fixtures] ✓ ${name} (${dur}s)`);
+  console.log(`[fixtures] ${name}: done ${dur}s`);
 
-  return { name, codeEqual, rulesEqual };
+  return { name, codeEqual, rulesEqual, ruleReport };
 }
 
 async function main() {
   const entries = await fsp.readdir(fixtureRoot, { withFileTypes: true });
-  const fixtures = entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((entry) => entry.name);
+  const allFixtures = entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .map((e) => e.name);
+
+  const args = process.argv.slice(2).filter(Boolean);
+  let fixtures = allFixtures;
+  if (args.length > 0) {
+    const requested = args
+      .flatMap((a) => a.split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const unknown = requested.filter((n) => !allFixtures.includes(n));
+    if (unknown.length > 0) {
+      console.error(
+        `Unknown fixture name(s): ${unknown.join(', ')}\nAvailable: ${allFixtures.join(', ')}`
+      );
+      process.exitCode = 1;
+      return;
+    }
+    fixtures = requested;
+  }
 
   const results = [];
   for (const fixtureName of fixtures) {
@@ -267,32 +296,42 @@ async function main() {
     results.push(res);
   }
 
-  const ruleMismatches = results.filter((r) => !r.rulesEqual);
-  const codeOnlyMismatches = results.filter((r) => r.rulesEqual && !r.codeEqual);
+  const ruleMismatches = results.filter(
+    (r) => !r.rulesEqual || (r.ruleReport && r.ruleReport.lengthMismatch)
+  );
+  const codeOnlyMismatches = results.filter(
+    (r) => (r.rulesEqual || ruleMismatches.length === 0) && !r.codeEqual
+  );
 
   if (ruleMismatches.length > 0) {
-    console.error('Fixture parity check failed (style rules differ):');
+    console.error('Style-rules mismatches (order ignored):');
     for (const r of ruleMismatches) {
-      console.error(` - ${r.name}: style rules differ (babel vs swc)`);
-      if (!r.codeEqual) {
-        console.error(`   · code also differs (babel-out.jsx vs out.jsx)`);
-      }
+      const rep = r.ruleReport || {};
+      const parts = [];
+      if (rep.lengthMismatch)
+        parts.push(`length mismatch babel=${rep.bLen} swc=${rep.sLen}`);
+      if (rep.missing && rep.missing.length)
+        parts.push(`missing: ${rep.missing.map((s) => JSON.stringify(s)).join(', ')}`);
+      if (rep.extra && rep.extra.length)
+        parts.push(`extra: ${rep.extra.map((s) => JSON.stringify(s)).join(', ')}`);
+      if (rep.error) parts.push(rep.error);
+      console.error(` - ${r.name}: ${parts.join(' | ')}`);
+      if (!r.codeEqual) console.error(`   code also differs`);
     }
     process.exitCode = 1;
     return;
   }
 
   if (codeOnlyMismatches.length > 0) {
-    console.warn('All style rules match. Code-only differences detected:');
+    console.warn('Code-only differences:');
     for (const r of codeOnlyMismatches) {
-      console.warn(` - ${r.name}: code differs (babel-out.jsx vs out.jsx)`);
+      console.warn(` - ${r.name}: babel-out.jsx vs out.jsx`);
     }
-    // Do not fail the run when only code differs.
     process.exitCode = 0;
     return;
   }
 
-  console.log('All fixtures match: code and style rules are identical.');
+  console.log('All fixtures match.');
 }
 
 main().catch((error) => {

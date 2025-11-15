@@ -10,6 +10,7 @@ use crate::utils_build_compiled_component::build_compiled_component;
 use crate::utils_comments::get_node_comments;
 use crate::utils_css_builders::build_css as build_css_from_expr;
 use crate::utils_types::CssOutput;
+use swc_core::ecma::ast::JSXElement;
 
 fn is_css_attribute(attr: &JSXAttr) -> bool {
     matches!(
@@ -88,6 +89,100 @@ where
         return;
     };
 
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        use swc_core::ecma::ast::JSXElementName;
+        let name = match &element.opening.name {
+            JSXElementName::Ident(id) => id.sym.as_ref().to_string(),
+            _ => String::from("<complex>"),
+        };
+        let attrs: Vec<String> = element
+            .opening
+            .attrs
+            .iter()
+            .map(|a| match a {
+                JSXAttrOrSpread::JSXAttr(attr) => match &attr.name {
+                    JSXAttrName::Ident(id) => id.sym.as_ref().to_string(),
+                    _ => String::from("<computed>"),
+                },
+                JSXAttrOrSpread::SpreadElement(_) => String::from("<spread>"),
+            })
+            .collect();
+        eprintln!(
+            "[css-prop] visit element name={} attrs=[{}] span={:?}",
+            name,
+            attrs.join(","),
+            element.opening.span
+        );
+    }
+
+    let css_prop_index = element
+        .opening
+        .attrs
+        .iter()
+        .enumerate()
+        .find_map(|(index, attr)| match attr {
+            JSXAttrOrSpread::JSXAttr(attr) if is_css_attribute(attr) => Some(index),
+            _ => None,
+        });
+
+    let Some(index) = css_prop_index else {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[css-prop] no css attribute on element span={:?}", element.opening.span);
+        }
+        return;
+    };
+
+    let attr_clone = match &element.opening.attrs[index] {
+        JSXAttrOrSpread::JSXAttr(attr) => attr.clone(),
+        _ => return,
+    };
+
+    if attr_clone.value.is_none() {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[css-prop] css attribute has no value span={:?}", attr_clone.span);
+        }
+        return;
+    }
+
+    if is_css_prop_disabled(element.opening.span, meta)
+        || is_css_prop_disabled(attr_clone.span, meta)
+    {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[css-prop] css prop disabled via directive span_el={:?} span_attr={:?}", element.opening.span, attr_clone.span);
+        }
+        return;
+    }
+
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[css-prop] found css attribute span={:?}", attr_clone.span);
+    }
+
+    let css_output = build_css_from_attribute(&attr_clone, meta, &build_css);
+
+    element.opening.attrs.remove(index);
+
+    if css_output.css.is_empty() {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[css-prop] built empty css output span={:?}", element.opening.span);
+        }
+        return;
+    }
+
+    let jsx_expr = Expr::JSXElement(element.as_ref().clone().into());
+    let replacement = build_compiled_component(jsx_expr, &css_output, meta);
+    *node = replacement;
+}
+
+/// Convenience wrapper that mirrors the Babel visitor by invoking the shared
+/// `build_css` helper when transforming a `css` prop.
+pub fn visit_css_prop(node: &mut Expr, meta: &Metadata) {
+    visit_css_prop_with_builder(node, meta, build_css_from_expr);
+}
+
+/// Transform a css prop on a JSXElement directly (for nested elements),
+/// mirroring the logic of `visit_css_prop_with_builder` but working in-place.
+pub fn visit_css_prop_on_element(element: &mut JSXElement, meta: &Metadata) {
+    // Find css attribute
     let css_prop_index = element
         .opening
         .attrs
@@ -117,23 +212,22 @@ where
         return;
     }
 
-    let css_output = build_css_from_attribute(&attr_clone, meta, &build_css);
+    // Build CSS from the attribute value
+    let css_output = build_css_from_attribute(&attr_clone, meta, &build_css_from_expr);
 
+    // Remove the css attribute regardless of whether CSS was produced
     element.opening.attrs.remove(index);
 
     if css_output.css.is_empty() {
         return;
     }
 
-    let jsx_expr = Expr::JSXElement(element.as_ref().clone().into());
+    // Replace current element with compiled wrapper
+    let jsx_expr = Expr::JSXElement(element.clone().into());
     let replacement = build_compiled_component(jsx_expr, &css_output, meta);
-    *node = replacement;
-}
-
-/// Convenience wrapper that mirrors the Babel visitor by invoking the shared
-/// `build_css` helper when transforming a `css` prop.
-pub fn visit_css_prop(node: &mut Expr, meta: &Metadata) {
-    visit_css_prop_with_builder(node, meta, build_css_from_expr);
+    if let Expr::JSXElement(new_el) = replacement {
+        *element = *new_el;
+    }
 }
 
 #[cfg(test)]

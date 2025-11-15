@@ -8,7 +8,7 @@ export const second = sharedClass;
 export { sharedClass as default };
 export const Example = () => (
 	<div>
-		<span css={sharedClass}>object styles</span>
-		<span css={hoverHighlight}>template styles</span>
+		<span className={ax(["_1wybdlk8 _syaz15td _bfhkqgb6"])}>object styles</span>
+		<span className={ax(["_k48p8n31 _30l31q9v"])}>template styles</span>
 	</div>
 );

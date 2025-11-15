@@ -140,8 +140,10 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     // Step 2 of bisect: add a small batch of light plugins
     // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
     let plugins: Vec<pc::BuiltPlugin> = vec![
-        wrap_bare_declarations_plugin(options.clone()),
+        // Match Babel ordering: run duplicate-declaration removal before wrapping
+        // bare declarations into a rule. This ensures last-wins semantics align.
         discard_duplicates_plugin(),
+        wrap_bare_declarations_plugin(options.clone()),
         discard_empty_rules_plugin(),
         pc::plugin("parent-orphaned-pseudos").build(),
         pc::plugin("postcss-nested").build(),
@@ -792,6 +794,13 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     s.push('&');
                     s.push_str(rest);
                     return s;
+                }
+            } else if trimmed.starts_with(':') {
+                // Special case: patterns like ":focus &" should behave like "&:focus &"
+                if let Some(amp) = trimmed.find('&') {
+                    let pseudo = trimmed[..amp].trim();
+                    let rest = trimmed[amp..].trim_start();
+                    return format!("&{} {}", pseudo, rest);
                 }
             }
             return trimmed.to_string();
@@ -1495,7 +1504,7 @@ fn wrap_bare_declarations_plugin(options: TransformCssOptions) -> pc::BuiltPlugi
                                 let mut b = d.borrow_mut();
                                 b.raws.set_text("between", ":");
                             }
-                            d.clone();
+                            let _ = d.clone();
                             d.borrow();
                             // Remove using low-level Node::remove by index
                             if let Some(idx) = d

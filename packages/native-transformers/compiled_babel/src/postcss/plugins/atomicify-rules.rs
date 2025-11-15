@@ -297,6 +297,16 @@ fn normalize_selector(selector: &str) -> String {
         }
     }
 
+    // If the selector begins with a pseudo and also contains '&' later (e.g. ":focus &"),
+    // mirror Babel by inserting a leading nesting selector for the pseudo: "&:focus &".
+    if trimmed.starts_with(':') && trimmed.contains('&') {
+        if let Some(amp) = trimmed.find('&') {
+            let pseudo = trimmed[..amp].trim();
+            let rest = trimmed[amp..].trim_start();
+            return format!("&{} {}", pseudo, rest);
+        }
+    }
+
     if trimmed.contains('&') {
         trimmed.to_string()
     } else if trimmed.starts_with(':') {

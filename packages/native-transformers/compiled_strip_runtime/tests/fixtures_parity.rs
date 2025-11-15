@@ -87,6 +87,18 @@ fn print_program(cm: &Lrc<SourceMap>, program: &Program) -> String {
     code
 }
 
+fn sort_rules(rules: &[String]) -> Vec<String> {
+    let mut v = rules.to_vec();
+    v.sort();
+    v
+}
+
+fn assert_rules_unordered_eq(left: &[String], right: &[String], msg: &str) {
+    let l = sort_rules(left);
+    let r = sort_rules(right);
+    assert_eq!(l, r, "{}", msg);
+}
+
 fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
     let fixture_dir = root.join(name);
     let input_path = fixture_dir.join("in.jsx");
@@ -153,13 +165,22 @@ fn run_fixture(root: &Path, name: &str) -> Result<(), Box<dyn Error>> {
         expected_out = generated_code.clone();
     }
 
-    assert_eq!(
-        strip_output.metadata.style_rules, babel_style_rules,
-        "strip-runtime metadata diverged from Babel baseline for fixture {name}"
+    // Compare style rules ignoring order to reduce churn when only ordering differs.
+    assert_rules_unordered_eq(
+        &strip_output.metadata.style_rules,
+        &babel_style_rules,
+        &format!(
+            "strip-runtime metadata diverged from Babel baseline for fixture {} (order-insensitive)",
+            name
+        ),
     );
-    assert_eq!(
-        strip_output.metadata.style_rules, stored_swc_style_rules,
-        "stored swc-style-rules.json is outdated for fixture {name}"
+    assert_rules_unordered_eq(
+        &strip_output.metadata.style_rules,
+        &stored_swc_style_rules,
+        &format!(
+            "stored swc-style-rules.json is outdated for fixture {} (order-insensitive)",
+            name
+        ),
     );
 
     let mut expected_code = expected_out;

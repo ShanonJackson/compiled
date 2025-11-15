@@ -1873,6 +1873,9 @@ impl CompiledBabelTransform {
 
         if has_styled_import {
             let metadata = Metadata::new(self.state());
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                eprintln!("[transform] StyledVisitor active");
+            }
             let mut visitor = StyledVisitor::new(metadata);
             module.visit_mut_with(&mut visitor);
             visitor.insert_display_names(module);
@@ -1880,6 +1883,9 @@ impl CompiledBabelTransform {
 
         if css_prop_enabled {
             let metadata = Metadata::new(self.state());
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                eprintln!("[transform] CssPropVisitor active");
+            }
             let mut visitor = CssPropVisitor::new(metadata);
             module.visit_mut_with(&mut visitor);
         }
@@ -1992,6 +1998,15 @@ impl VisitMut for CssPropVisitor {
                 .with_own_span(Some(expr.span()));
             visit_css_prop(expr, &meta);
         }
+    }
+
+    fn visit_mut_jsx_element(&mut self, element: &mut swc_core::ecma::ast::JSXElement) {
+        // First traverse children so nested elements are handled depth-first
+        element.visit_mut_children_with(self);
+
+        // Then attempt css prop transform on this element directly
+        let meta = self.meta.clone();
+        crate::css_prop::visit_css_prop_on_element(element, &meta);
     }
 }
 

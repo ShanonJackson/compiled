@@ -710,7 +710,7 @@ where
                                     let mut nums: Vec<f64> = Vec::new();
                                     for arg in &call.args {
                                         let ev = evaluate_expression(&arg.expr, evaluated.meta.clone());
-                                        let mut arg_expr = ev.value;
+                                        let arg_expr = ev.value;
                                         // We don't have direct access to the internal try_static_evaluate here;
                                         // rely on ExprExt as_pure_number on the evaluated form.
                                         if let swc_core::ecma::utils::Value::Known(n) = arg_expr.as_pure_number(ctx) {
@@ -938,6 +938,14 @@ where
                 if let Some(binding) =
                     resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
                 {
+                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                        eprintln!(
+                            "[build_css] ident='{}' source={:?} has_node={}",
+                            identifier.sym,
+                            binding.source,
+                            binding.node.is_some()
+                        );
+                    }
                     if let Some(node) = binding.node.clone() {
                         let compiled = {
                             let state = binding.meta.state();
@@ -951,6 +959,12 @@ where
                             let result = build_css(&node, &binding.meta);
                             assert_no_imported_css_variables(expr, meta, &binding, &result);
                             css_output = Some(result);
+                        } else if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                            eprintln!(
+                                "[build_css] ident='{}' resolved node not compiled util: kind={}",
+                                identifier.sym,
+                                print_expression(&node)
+                            );
                         }
                     }
                 }

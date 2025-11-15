@@ -108,7 +108,7 @@ pub fn plugin() -> postcss::BuiltPlugin {
                             decl.set_value(first_val);
                             decl.set_important(important);
                             for (name, val) in pairs.into_iter().skip(1) {
-                                if let Some(mut new_decl) = decl.clone_after() {
+                                if let Some(new_decl) = decl.clone_after() {
                                     new_decl.set_prop(name);
                                     new_decl.set_value(val);
                                     new_decl.set_important(important);

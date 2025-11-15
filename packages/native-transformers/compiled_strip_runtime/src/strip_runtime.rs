@@ -237,6 +237,24 @@ impl StripRuntimeTransform {
         replacement
     }
 
+    fn expr_to_jsx_child(expr: Expr) -> Option<swc_core::ecma::ast::JSXElementChild> {
+        use swc_core::ecma::ast::{JSXElementChild, JSXExpr, JSXExprContainer, JSXText};
+
+        match expr {
+            Expr::JSXElement(el) => Some(JSXElementChild::JSXElement(el)),
+            Expr::JSXFragment(fragment) => Some(JSXElementChild::JSXFragment(fragment)),
+            Expr::Lit(Lit::Str(s)) => Some(JSXElementChild::JSXText(JSXText {
+                span: s.span,
+                value: s.value.clone(),
+                raw: s.value,
+            })),
+            other => Some(JSXElementChild::JSXExprContainer(JSXExprContainer {
+                span: DUMMY_SP,
+                expr: JSXExpr::Expr(Box::new(other)),
+            })),
+        }
+    }
+
     fn finalize_program(&mut self, program: &mut Program) {
         if self.style_rules.is_empty() {
             // Fallback: if no identifiers were collected (e.g., wrapper forms
@@ -505,6 +523,30 @@ impl VisitMut for StripRuntimeTransform {
             if let Some(replacement) = self.replace_cc_jsxs_call(call) {
                 *expr = replacement;
                 return;
+            }
+        }
+    }
+
+    fn visit_mut_jsx_element(&mut self, element: &mut swc_core::ecma::ast::JSXElement) {
+        use swc_core::ecma::ast::JSXElementName;
+
+        // First, traverse into children
+        element.visit_mut_children_with(self);
+
+        // Replace any CC children inline (nested wrappers), mirroring Babel's JSXElement behavior.
+        for child in &mut element.children {
+            if let swc_core::ecma::ast::JSXElementChild::JSXElement(child_el) = child {
+                let is_cc = matches!(
+                    child_el.opening.name,
+                    JSXElementName::Ident(ref ident) if ident.sym.as_ref() == "CC"
+                );
+                if is_cc {
+                    if let Some(replacement) = self.replace_cc_jsx(child_el) {
+                        if let Some(new_child) = Self::expr_to_jsx_child(replacement) {
+                            *child = new_child;
+                        }
+                    }
+                }
             }
         }
     }
