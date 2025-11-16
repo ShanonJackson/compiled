@@ -12,6 +12,5 @@ const fadeIn = keyframes({
 const styles = css({
   animation: `${fadeIn} 1s ease`,
 });
-const test = "Hello world";
 
 export const Component = () => <div css={styles}>Hello</div>;

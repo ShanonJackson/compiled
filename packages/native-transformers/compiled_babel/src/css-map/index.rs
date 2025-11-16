@@ -104,7 +104,13 @@ where
                 }
 
                 let transform_result = transform_css_items(&css_output.css, meta);
-                total_sheets.extend(transform_result.sheets.clone());
+                total_sheets.extend(
+                    transform_result
+                        .sheets
+                        .iter()
+                        .filter(|sheet| sheet.contains('{'))
+                        .cloned(),
+                );
 
                 if transform_result.class_names.len() > 1 {
                     panic!(

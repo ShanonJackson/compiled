@@ -1,6 +1,6 @@
 use std::fmt;
 
-use swc_core::ecma::ast::{Prop, PropName, PropOrSpread};
+use swc_core::ecma::ast::{Expr, Lit, Prop, PropName, PropOrSpread};
 
 use crate::types::Metadata;
 
@@ -102,7 +102,14 @@ pub fn create_error_message(message: impl AsRef<str>) -> String {
 
 /// Determines whether the provided property key is a static literal value.
 pub fn object_key_is_literal_value(key: &PropName) -> bool {
-    matches!(key, PropName::Ident(_) | PropName::Str(_))
+    match key {
+        PropName::Ident(_) | PropName::Str(_) => true,
+        PropName::Computed(comp) => matches!(
+            comp.expr.as_ref(),
+            Expr::Ident(_) | Expr::Lit(Lit::Str(_))
+        ),
+        _ => false,
+    }
 }
 
 /// Returns the string value of an identifier or string literal key.
@@ -110,6 +117,13 @@ pub fn get_key_value(key: &PropName) -> String {
     match key {
         PropName::Ident(ident) => ident.sym.as_ref().to_string(),
         PropName::Str(str) => str.value.as_ref().to_string(),
+        PropName::Computed(comp) => match comp.expr.as_ref() {
+            Expr::Ident(ident) => ident.sym.as_ref().to_string(),
+            Expr::Lit(Lit::Str(str)) => str.value.as_ref().to_string(),
+            _ => panic!(
+                "Expected an identifier or a string literal, got computed expression"
+            ),
+        },
         _ => panic!(
             "Expected an identifier or a string literal, got type {}",
             match key {

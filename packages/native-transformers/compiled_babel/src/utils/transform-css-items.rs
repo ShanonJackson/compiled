@@ -310,6 +310,9 @@ fn record_style_rules(sheets: &[String], meta: &Metadata) {
 
     let mut state = meta.state_mut();
     for sheet in sheets {
+        if !sheet.contains('{') {
+            continue;
+        }
         let normalized =
             crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing(sheet);
         state.style_rules.insert(normalized);
@@ -437,8 +440,13 @@ pub fn transform_css_items(css_items: &[CssItem], meta: &Metadata) -> TransformC
 
     for item in css_items {
         let result = transform_css_item(item, meta);
-        record_style_rules(&result.sheets, meta);
-        sheets.extend(result.sheets);
+        let filtered_sheets: Vec<String> = result
+            .sheets
+            .into_iter()
+            .filter(|sheet| sheet.contains('{'))
+            .collect();
+        record_style_rules(&filtered_sheets, meta);
+        sheets.extend(filtered_sheets);
         if let Some(class_expression) = result.class_expression {
             class_names.push(class_expression);
         }

@@ -1,0 +1,4 @@
+{
+  "extract": true,
+  "importSources": ["@atlaskit/css"]
+}
