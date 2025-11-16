@@ -7,6 +7,8 @@ use postcss::ast::nodes::{as_at_rule, as_declaration, as_rule, Declaration as Pc
 
 use super::transform::{transform_css_via_swc_pipeline, CssTransformError, TransformCssOptions, TransformCssResult};
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "postcss_engine")]
+use crate::postcss::utils::{selector_stringifier, value_minifier::minify_value_whitespace};
 
 #[cfg(feature = "postcss_engine")]
 #[derive(Clone, Default)]
@@ -630,7 +632,7 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
 
     fn normalized_selector(selector: &str) -> String {
         let trimmed = selector.trim();
-        if trimmed.contains('&') {
+        let normalized = if trimmed.contains('&') {
             // JS normalizeSelector returns trimmed when '&' is present, but downstream formatting in the JS pipeline
             // preserves a space before pseudos in some cases (e.g., '& :hover'). To match hash inputs, insert a space
             // after '&' when it is immediately followed by a pseudo/class/attribute.
@@ -644,6 +646,12 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
             out
         } else {
             format!("& {}", trimmed)
+        };
+
+        if let Some(list) = selector_stringifier::parse_selector_list_from_str(&normalized) {
+            selector_stringifier::serialize_selector_list(&list)
+        } else {
+            normalized
         }
     }
 
@@ -700,8 +708,9 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                     if let Some(decl) = as_declaration(&gc) {
                         let prop = decl.prop();
                         let mut value_full = decl.value();
-                        value_full = minify_color_value(&value_full);
-                        if decl.important() { value_full.push_str("!important"); }
+                value_full = minify_color_value(&value_full);
+                if decl.important() { value_full.push_str("!important"); }
+                value_full = minify_value_whitespace(&value_full);
                         let mut replaced_selectors: Vec<String> = Vec::new();
                         for sel in &sels {
                             let norm = normalized_selector(sel);
@@ -867,36 +876,42 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
         if trimmed.is_empty() {
             return "&".to_string();
         }
-        // If the selector already contains '&', return it as-is except for the
-        // JS quirk where "& :pseudo" is normalized to "&:pseudo".
-        if trimmed.contains('&') {
+        let normalized = if trimmed.contains('&') {
             if trimmed.starts_with('&') {
                 let rest = trimmed[1..].trim_start();
                 if rest.starts_with(':') {
                     let mut s = String::with_capacity(1 + rest.len());
                     s.push('&');
                     s.push_str(rest);
-                    return s;
+                    s
+                } else {
+                    trimmed.to_string()
                 }
             } else if trimmed.starts_with(':') {
-                // Special case: patterns like ":focus &" should behave like "&:focus &"
                 if let Some(amp) = trimmed.find('&') {
                     let pseudo = trimmed[..amp].trim();
                     let rest = trimmed[amp..].trim_start();
-                    return format!("&{} {}", pseudo, rest);
+                    format!("&{} {}", pseudo, rest)
+                } else {
+                    trimmed.to_string()
                 }
+            } else {
+                trimmed.to_string()
             }
-            return trimmed.to_string();
-        }
-        // Standalone pseudo gets prefixed without a space (e.g. ":hover" -> "&:hover").
-        if trimmed.starts_with(':') {
+        } else if trimmed.starts_with(':') {
             let mut s = String::with_capacity(1 + trimmed.len());
             s.push('&');
             s.push_str(trimmed);
-            return s;
+            s
+        } else {
+            format!("& {}", trimmed)
+        };
+
+        if let Some(list) = selector_stringifier::parse_selector_list_from_str(&normalized) {
+            selector_stringifier::serialize_selector_list(&list)
+        } else {
+            normalized
         }
-        // Default path matches JS: add "& " prefix.
-        format!("& {}", trimmed)
     }
 
     fn at_chain_label(at_chain: &[(String, String)]) -> String {
@@ -955,6 +970,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 let has_important = decl.important();
                 let mut value_full = orig_value.clone();
                 if has_important { value_full.push_str("!important"); }
+                value_full = minify_value_whitespace(&value_full);
 
                 // JS uses selectors.join("") for group seed
                 let normalized_list: Vec<String> = ctx
@@ -1094,6 +1110,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 }
                 value_full = minify_color_value(&value_full);
                 if decl.important() { value_full.push_str("!important"); }
+                value_full = minify_value_whitespace(&value_full);
 
                 // JS uses selectors.join("") for the group seed; when selectors is undefined in JS this coerces to 'undefined'.
                 let normalized_list: Vec<String> = selectors.iter().map(|s| normalized_selector(s)).collect();
@@ -1114,6 +1131,9 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                         group_seed,
                         group
                     );
+                    if prop == "margin-left" {
+                        eprintln!("[atomicify.hash.postcss] value='{}'", value_full);
+                    }
                 }
                 let value_hash = hash(&value_full).chars().take(4).collect::<String>();
                 let full_class = format!("_{}{}", group, value_hash);
@@ -1222,7 +1242,9 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     if let Some(decl) = as_declaration(&child) {
                         let prop = decl.prop();
                         let mut value_full = decl.value();
+                        value_full = minify_color_value(&value_full);
                         if decl.important() { value_full.push_str("!important"); }
+                        value_full = minify_value_whitespace(&value_full);
 
                         // Hash once using selectors.join("")
                         let normalized_list: Vec<String> = selectors.iter().map(|s| normalized_selector(s)).collect();
@@ -1275,7 +1297,9 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                             if let Some(nested_decl) = as_declaration(&gc) {
                                 let prop = nested_decl.prop();
                                 let mut value_full = nested_decl.value();
+                                value_full = minify_color_value(&value_full);
                                 if nested_decl.important() { value_full.push_str("!important"); }
+                                value_full = minify_value_whitespace(&value_full);
 
                                 let mut group_seed = String::new();
                                 if let Some(prefix) = &opts.class_hash_prefix { group_seed.push_str(prefix); }

@@ -274,7 +274,14 @@ fn atomic_class_name(
     if declaration.important.is_some() {
         value_seed.push_str("!important");
     }
-    let value_hash = hash(&value_seed);
+    let minified_seed = crate::postcss::utils::value_minifier::minify_value_whitespace(&value_seed);
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() && declaration_name(&declaration.name) == "margin-left" {
+        eprintln!(
+            "[atomicify.hash] raw='{}' min='{}'",
+            value_seed, minified_seed
+        );
+    }
+    let value_hash = hash(&minified_seed);
     let value = value_hash.chars().take(4).collect::<String>();
 
     format!("_{}{}", group, value)
@@ -315,7 +322,7 @@ fn normalize_selector(selector: &str) -> String {
         }
     }
 
-    if trimmed.contains('&') {
+    let normalized = if trimmed.contains('&') {
         trimmed.to_string()
     } else if trimmed.starts_with(':') {
         let mut normalized = String::with_capacity(1 + trimmed.len());
@@ -324,7 +331,17 @@ fn normalize_selector(selector: &str) -> String {
         normalized
     } else {
         format!("& {}", trimmed)
-    }
+    };
+
+    let minified = if let Some(list) =
+        crate::postcss::utils::selector_stringifier::parse_selector_list_from_str(&normalized)
+    {
+        crate::postcss::utils::selector_stringifier::serialize_selector_list(&list)
+    } else {
+        normalized
+    };
+
+    minified
 }
 
 fn declaration_name(name: &DeclarationName) -> String {
@@ -347,9 +364,19 @@ fn collect_rule_selectors(rule: &QualifiedRule) -> Vec<String> {
             .map(|rel| serialize_complex_selector_with_possible_nesting(&rel.selector))
             .collect(),
         QualifiedRulePrelude::ListOfComponentValues(list) => {
-            serialize_component_values(&list.children)
-                .into_iter()
-                .collect()
+            if let Some(parsed) =
+                crate::postcss::utils::selector_stringifier::parse_selector_list_from_component_values(list)
+            {
+                parsed
+                    .children
+                    .iter()
+                    .map(serialize_complex_selector_with_possible_nesting)
+                    .collect()
+            } else {
+                serialize_component_values(&list.children)
+                    .into_iter()
+                    .collect()
+            }
         }
     }
 }
@@ -357,44 +384,7 @@ fn collect_rule_selectors(rule: &QualifiedRule) -> Vec<String> {
 fn serialize_complex_selector_with_possible_nesting(
     selector: &swc_core::css::ast::ComplexSelector,
 ) -> String {
-    // Count nesting selectors: leading and any later occurrence
-    let mut leading_nesting = false;
-    let mut trailing_nesting = false;
-    let mut first = true;
-    for child in &selector.children {
-        if let swc_core::css::ast::ComplexSelectorChildren::CompoundSelector(comp) = child {
-            if comp.nesting_selector.is_some() {
-                if first {
-                    leading_nesting = true;
-                } else {
-                    trailing_nesting = true;
-                }
-            }
-        }
-        first = false;
-    }
-
-    // Base serialization using minified formatting so the selector text
-    // mirrors postcss-minify-selectors output used by Babel prior to hashing.
-    let mut output = String::new();
-    {
-        let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
-        let _ = generator.emit(selector);
-    }
-
-    // If we detected a duplication pattern (leading and trailing nesting),
-    // ensure serialized string includes both '&' prefix and suffix.
-    if leading_nesting && trailing_nesting {
-        if output.starts_with(':') {
-            output = format!("&{}", output);
-        }
-        if !output.trim_end().ends_with('&') {
-            output.push_str(" &");
-        }
-    }
-
-    output
+    crate::postcss::utils::selector_stringifier::serialize_complex_selector(selector)
 }
 
 fn serialize_node<T>(node: &T) -> Option<String>
@@ -574,6 +564,15 @@ mod tests {
             assert!(selectors[0].contains("._"));
         } else {
             panic!("expected qualified rule");
+        }
+    }
+
+    #[test]
+    fn parse_selector_as_rule_produces_selector_list() {
+        let rule = parse_selector_as_rule("._foo>*");
+        match rule.prelude {
+            QualifiedRulePrelude::SelectorList(_) => {}
+            other => panic!("expected selector list, got {:?}", other),
         }
     }
 }

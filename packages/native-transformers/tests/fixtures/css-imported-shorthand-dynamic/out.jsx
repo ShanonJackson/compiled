@@ -5,7 +5,7 @@ import { padding, outline } from "./external";
 const styles = null;
 export const Component = () => (
 	<div
-		className={ax(["_1yt46vxg"])}
+		className={ax(["_1yt41ge8"])}
 		style={{
 			"--_oex9l5": ix(outline),
 		}}

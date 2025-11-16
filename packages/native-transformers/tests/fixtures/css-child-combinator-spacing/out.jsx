@@ -3,7 +3,7 @@ import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 const styles = null;
 export const Component = () => (
-	<div className={ax(["_4cvr1h6o _wpxlopcn _kdptidpf _1va9idpf _1e0c1txw"])}>
+	<div className={ax(["_4cvr1h6o _1e0c1txw _bmkseyat _i12cidpf _fhioidpf"])}>
 		<span />
 		<span />
 		<span />

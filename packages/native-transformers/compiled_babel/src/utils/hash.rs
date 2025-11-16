@@ -95,8 +95,17 @@ mod tests {
     }
 
     #[test]
+    fn matches_var_value_hash() {
+        assert_eq!(
+            hash("var(--space-200,4px)").chars().take(4).collect::<String>(),
+            "opcn"
+        );
+    }
+
+    #[test]
     fn hashes_with_seed_match_js_reference() {
         assert_eq!(hash_with_seed("namespace----cacheKey", 0), "11sab8f");
         assert_eq!(hash_with_seed("namespace----cacheKey", 5), "wqqrxw");
     }
+
 }

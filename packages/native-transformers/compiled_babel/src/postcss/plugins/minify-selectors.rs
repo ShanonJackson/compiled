@@ -7,9 +7,9 @@ use swc_core::css::ast::{
     RelativeSelector, RelativeSelectorList, Rule, SelectorList, SimpleBlock, Stylesheet, SubclassSelector,
     TypeSelector,
 };
-use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 
 use super::super::transform::{Plugin, TransformContext};
+use crate::postcss::utils::selector_stringifier;
 
 static PSEUDO_REPLACEMENTS: &[(&str, &str)] = &[
     ("nth-child", "first-child"),
@@ -483,7 +483,7 @@ fn convert_pseudo_element_to_class(pseudo: &PseudoElementSelector) -> Option<Pse
 fn dedupe_complex_selectors(selectors: &mut Vec<ComplexSelector>) {
     let mut seen = IndexSet::new();
     selectors.retain(|selector| {
-        let serialized = serialize_complex_selector(selector);
+        let serialized = selector_stringifier::serialize_complex_selector(selector);
         if seen.contains(&serialized) {
             false
         } else {
@@ -496,7 +496,7 @@ fn dedupe_complex_selectors(selectors: &mut Vec<ComplexSelector>) {
 fn dedupe_relative_selectors(selectors: &mut Vec<RelativeSelector>) {
     let mut seen = IndexSet::new();
     selectors.retain(|selector| {
-        let serialized = serialize_relative_selector(selector);
+        let serialized = selector_stringifier::serialize_relative_selector(selector);
         if seen.contains(&serialized) {
             false
         } else {
@@ -510,7 +510,7 @@ fn dedupe_forgiving_selectors(selectors: &mut Vec<swc_core::css::ast::ForgivingC
     let mut seen = IndexSet::new();
     selectors.retain(|selector| match selector {
         swc_core::css::ast::ForgivingComplexSelector::ComplexSelector(selector) => {
-            let serialized = serialize_complex_selector(selector);
+            let serialized = selector_stringifier::serialize_complex_selector(selector);
             if seen.contains(&serialized) {
                 false
             } else {
@@ -523,38 +523,17 @@ fn dedupe_forgiving_selectors(selectors: &mut Vec<swc_core::css::ast::ForgivingC
 }
 
 fn sort_complex_selectors(selectors: &mut Vec<ComplexSelector>) {
-    selectors.sort_by(|a, b| serialize_complex_selector(a).cmp(&serialize_complex_selector(b)));
+    selectors.sort_by(|a, b| {
+        selector_stringifier::serialize_complex_selector(a)
+            .cmp(&selector_stringifier::serialize_complex_selector(b))
+    });
 }
 
 fn sort_relative_selectors(selectors: &mut Vec<RelativeSelector>) {
-    selectors.sort_by(|a, b| serialize_relative_selector(a).cmp(&serialize_relative_selector(b)));
-}
-
-fn serialize_complex_selector(selector: &ComplexSelector) -> String {
-    let mut output = String::new();
-    {
-        let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        // Align with postcss-minify-selectors output where combinators and
-        // redundant spaces are minimized in the serialized selector.
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
-        generator
-            .emit(selector)
-            .expect("failed to serialize selector");
-    }
-    output
-}
-
-fn serialize_relative_selector(selector: &RelativeSelector) -> String {
-    let mut output = String::new();
-    {
-        let writer = BasicCssWriter::new(&mut output, None, Default::default());
-        // Match minified selector formatting from the JS plugin.
-        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
-        generator
-            .emit(selector)
-            .expect("failed to serialize relative selector");
-    }
-    output
+    selectors.sort_by(|a, b| {
+        selector_stringifier::serialize_relative_selector(a)
+            .cmp(&selector_stringifier::serialize_relative_selector(b))
+    });
 }
 
 fn can_unquote(value: &str) -> bool {
@@ -631,7 +610,10 @@ fn can_unquote(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::postcss::transform::{TransformContext, TransformCssOptions};
+    use crate::postcss::{
+        transform::{TransformContext, TransformCssOptions},
+        utils::selector_stringifier,
+    };
     use swc_core::common::{input::StringInput, FileName, SourceMap};
     use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
@@ -678,7 +660,7 @@ mod tests {
     fn selector_texts(list: &SelectorList) -> Vec<String> {
         list.children
             .iter()
-            .map(super::serialize_complex_selector)
+            .map(selector_stringifier::serialize_complex_selector)
             .collect()
     }
 
@@ -836,7 +818,7 @@ mod tests {
             .iter()
             .filter_map(|selector| match selector {
                 swc_core::css::ast::ForgivingComplexSelector::ComplexSelector(selector) => {
-                    Some(super::serialize_complex_selector(selector))
+                    Some(selector_stringifier::serialize_complex_selector(selector))
                 }
                 swc_core::css::ast::ForgivingComplexSelector::ListOfComponentValues(_) => None,
             })
