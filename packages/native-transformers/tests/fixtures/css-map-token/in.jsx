@@ -1,10 +1,9 @@
 import { cssMap } from '@compiled/react';
-import { token } from '@atlaskit/tokens';
 
 const styles = cssMap({
   root: {
-    paddingBlockStart: token('space.0'),
-    paddingBlockEnd: token('space.0'),
+    paddingBlockStart: "var(--space-0, 4px)",
+    paddingBlockEnd: "var(--space-0, 4px)",
   },
 });
 
