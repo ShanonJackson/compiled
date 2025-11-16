@@ -318,4 +318,3 @@ impl fmt::Debug for Result {
             .finish()
     }
 }
-

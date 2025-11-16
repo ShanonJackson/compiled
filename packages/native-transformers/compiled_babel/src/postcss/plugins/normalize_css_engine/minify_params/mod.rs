@@ -1,8 +1,12 @@
-use postcss as pc;
 use crate::postcss::value_parser as vp;
+use postcss as pc;
 
 fn gcd(mut a: i64, mut b: i64) -> i64 {
-    while b != 0 { let t = b; b = a % b; a = t; }
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
     a.abs()
 }
 
@@ -11,7 +15,9 @@ fn aspect_ratio(a: i64, b: i64) -> (i64, i64) {
     (a / d, b / d)
 }
 
-fn split_arg(arg: &[vp::Node]) -> String { vp::stringify(arg) }
+fn split_arg(arg: &[vp::Node]) -> String {
+    vp::stringify(arg)
+}
 
 pub fn plugin() -> pc::BuiltPlugin {
     // Default: no IE10/11 "all" bug handling (legacy=false). Browserslist gating can be added later.

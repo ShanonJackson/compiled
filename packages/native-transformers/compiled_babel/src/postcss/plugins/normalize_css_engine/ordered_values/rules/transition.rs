@@ -1,5 +1,5 @@
-use crate::postcss::value_parser as vp;
 use super::super::lib::{add_space::add_space, arguments::get_arguments, get_value::get_value};
+use crate::postcss::value_parser as vp;
 
 // Port of src/rules/transition.js
 pub fn normalize(parsed: &vp::ParsedValue) -> String {
@@ -20,26 +20,55 @@ fn normalize_args(args: Vec<Vec<vp::Node>>) -> Vec<Vec<vp::Node>> {
                 vp::Node::Space { .. } => {}
                 vp::Node::Function { value, .. } => {
                     let low = value.to_lowercase();
-                    if low == "steps" || low == "cubic-bezier" { timing.push(node.clone()); timing.push(add_space()); }
-                    else { property.push(node.clone()); property.push(add_space()); }
+                    if low == "steps" || low == "cubic-bezier" {
+                        timing.push(node.clone());
+                        timing.push(add_space());
+                    } else {
+                        property.push(node.clone());
+                        property.push(add_space());
+                    }
                 }
                 vp::Node::Word { value } => {
                     if vp::unit::unit(value).is_some() {
-                        if time1.is_empty() { time1.push(node.clone()); time1.push(add_space()); }
-                        else { time2.push(node.clone()); time2.push(add_space()); }
+                        if time1.is_empty() {
+                            time1.push(node.clone());
+                            time1.push(add_space());
+                        } else {
+                            time2.push(node.clone());
+                            time2.push(add_space());
+                        }
                     } else {
                         let low = value.to_lowercase();
-                        if matches!(low.as_str(), "ease"|"linear"|"ease-in"|"ease-out"|"ease-in-out"|"step-start"|"step-end") { timing.push(node.clone()); timing.push(add_space()); }
-                        else { property.push(node.clone()); property.push(add_space()); }
+                        if matches!(
+                            low.as_str(),
+                            "ease"
+                                | "linear"
+                                | "ease-in"
+                                | "ease-out"
+                                | "ease-in-out"
+                                | "step-start"
+                                | "step-end"
+                        ) {
+                            timing.push(node.clone());
+                            timing.push(add_space());
+                        } else {
+                            property.push(node.clone());
+                            property.push(add_space());
+                        }
                     }
                 }
-                _ => { property.push(node.clone()); property.push(add_space()); }
+                _ => {
+                    property.push(node.clone());
+                    property.push(add_space());
+                }
             }
         }
         let mut combined: Vec<vp::Node> = Vec::new();
-        combined.extend(property); combined.extend(time1); combined.extend(timing); combined.extend(time2);
+        combined.extend(property);
+        combined.extend(time1);
+        combined.extend(timing);
+        combined.extend(time2);
         list.push(combined);
     }
     list
 }
-

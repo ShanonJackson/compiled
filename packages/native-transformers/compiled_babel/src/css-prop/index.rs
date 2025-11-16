@@ -127,7 +127,10 @@ where
 
     let Some(index) = css_prop_index else {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[css-prop] no css attribute on element span={:?}", element.opening.span);
+            eprintln!(
+                "[css-prop] no css attribute on element span={:?}",
+                element.opening.span
+            );
         }
         return;
     };
@@ -139,7 +142,10 @@ where
 
     if attr_clone.value.is_none() {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[css-prop] css attribute has no value span={:?}", attr_clone.span);
+            eprintln!(
+                "[css-prop] css attribute has no value span={:?}",
+                attr_clone.span
+            );
         }
         return;
     }
@@ -148,7 +154,10 @@ where
         || is_css_prop_disabled(attr_clone.span, meta)
     {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[css-prop] css prop disabled via directive span_el={:?} span_attr={:?}", element.opening.span, attr_clone.span);
+            eprintln!(
+                "[css-prop] css prop disabled via directive span_el={:?} span_attr={:?}",
+                element.opening.span, attr_clone.span
+            );
         }
         return;
     }
@@ -163,7 +172,10 @@ where
 
     if css_output.css.is_empty() {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[css-prop] built empty css output span={:?}", element.opening.span);
+            eprintln!(
+                "[css-prop] built empty css output span={:?}",
+                element.opening.span
+            );
         }
         return;
     }

@@ -1,7 +1,7 @@
 #[cfg(feature = "postcss_engine")]
 pub fn plugin() -> postcss::BuiltPlugin {
-    use postcss::ast::nodes::as_declaration;
     use crate::postcss::plugins::expand_shorthands::index::expand_shorthand_pairs;
+    use postcss::ast::nodes::as_declaration;
 
     postcss::plugin("expand-shorthands")
         .rule(|rule, _| {

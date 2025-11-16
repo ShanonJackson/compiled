@@ -1,49 +1,146 @@
-use postcss as pc;
 use crate::postcss::value_parser as vp;
+use postcss as pc;
 
 fn strip_leading_dot(item: &str) -> String {
-    if item.starts_with('.') { item[1..].to_string() } else { item.to_string() }
+    if item.starts_with('.') {
+        item[1..].to_string()
+    } else {
+        item.to_string()
+    }
 }
 
 fn is_length_unit(u: &str) -> bool {
-    matches!(u, "em"|"ex"|"ch"|"rem"|"vw"|"vh"|"vmin"|"vmax"|"cm"|"mm"|"q"|"in"|"pt"|"pc"|"px")
+    matches!(
+        u,
+        "em" | "ex"
+            | "ch"
+            | "rem"
+            | "vw"
+            | "vh"
+            | "vmin"
+            | "vmax"
+            | "cm"
+            | "mm"
+            | "q"
+            | "in"
+            | "pt"
+            | "pc"
+            | "px"
+    )
 }
 
 fn drop_leading_zero(number: f64) -> String {
     let s = number.to_string();
     if number.fract() != 0.0 {
-        if s.starts_with('0') { return s.trim_start_matches('0').to_string(); }
-        if s.starts_with("-0") { return format!("-{}", &s[2..]); }
+        if s.starts_with('0') {
+            return s.trim_start_matches('0').to_string();
+        }
+        if s.starts_with("-0") {
+            return format!("-{}", &s[2..]);
+        }
     }
     s
 }
 
 fn convert_length(number: f64, unit: &str) -> String {
     // Only a subset: px, pt, pc, in
-    let factor = match unit { "in" => 96.0, "px" => 1.0, "pt" => 4.0/3.0, "pc" => 16.0, _ => return format!("{}{}", drop_leading_zero(number), unit) };
+    let factor = match unit {
+        "in" => 96.0,
+        "px" => 1.0,
+        "pt" => 4.0 / 3.0,
+        "pc" => 16.0,
+        _ => return format!("{}{}", drop_leading_zero(number), unit),
+    };
     let base = number * factor;
-    let candidates = ["in","px","pt","pc"]; let mut best = String::new();
-    for u in candidates { if u == unit { continue; } let val = base / match u { "in"=>96.0, "px"=>1.0, "pt"=>4.0/3.0, "pc"=>16.0, _=>1.0 }; let s = format!("{}{}", drop_leading_zero(val), u); if best.is_empty() || s.len() < best.len() { best = s; } }
+    let candidates = ["in", "px", "pt", "pc"];
+    let mut best = String::new();
+    for u in candidates {
+        if u == unit {
+            continue;
+        }
+        let val = base
+            / match u {
+                "in" => 96.0,
+                "px" => 1.0,
+                "pt" => 4.0 / 3.0,
+                "pc" => 16.0,
+                _ => 1.0,
+            };
+        let s = format!("{}{}", drop_leading_zero(val), u);
+        if best.is_empty() || s.len() < best.len() {
+            best = s;
+        }
+    }
     let current = format!("{}{}", drop_leading_zero(number), unit);
-    if !best.is_empty() && best.len() < current.len() { best } else { current }
+    if !best.is_empty() && best.len() < current.len() {
+        best
+    } else {
+        current
+    }
 }
 
 fn convert_time(number: f64, unit: &str) -> String {
-    let factor = match unit { "s" => 1000.0, "ms" => 1.0, _ => return format!("{}{}", drop_leading_zero(number), unit) };
+    let factor = match unit {
+        "s" => 1000.0,
+        "ms" => 1.0,
+        _ => return format!("{}{}", drop_leading_zero(number), unit),
+    };
     let base = number * factor;
-    let candidates = ["s","ms"]; let mut best = String::new();
-    for u in candidates { if u == unit { continue; } let val = base / match u { "s"=>1000.0, "ms"=>1.0, _=>1.0 }; let s = format!("{}{}", drop_leading_zero(val), u); if best.is_empty() || s.len() < best.len() { best = s; } }
+    let candidates = ["s", "ms"];
+    let mut best = String::new();
+    for u in candidates {
+        if u == unit {
+            continue;
+        }
+        let val = base
+            / match u {
+                "s" => 1000.0,
+                "ms" => 1.0,
+                _ => 1.0,
+            };
+        let s = format!("{}{}", drop_leading_zero(val), u);
+        if best.is_empty() || s.len() < best.len() {
+            best = s;
+        }
+    }
     let current = format!("{}{}", drop_leading_zero(number), unit);
-    if !best.is_empty() && best.len() < current.len() { best } else { current }
+    if !best.is_empty() && best.len() < current.len() {
+        best
+    } else {
+        current
+    }
 }
 
 fn convert_angle(number: f64, unit: &str) -> String {
-    let factor = match unit { "turn" => 360.0, "deg" => 1.0, _ => return format!("{}{}", drop_leading_zero(number), unit) };
+    let factor = match unit {
+        "turn" => 360.0,
+        "deg" => 1.0,
+        _ => return format!("{}{}", drop_leading_zero(number), unit),
+    };
     let base = number * factor;
-    let candidates = ["turn","deg"]; let mut best = String::new();
-    for u in candidates { if u == unit { continue; } let val = base / match u { "turn"=>360.0, "deg"=>1.0, _=>1.0 }; let s = format!("{}{}", drop_leading_zero(val), u); if best.is_empty() || s.len() < best.len() { best = s; } }
+    let candidates = ["turn", "deg"];
+    let mut best = String::new();
+    for u in candidates {
+        if u == unit {
+            continue;
+        }
+        let val = base
+            / match u {
+                "turn" => 360.0,
+                "deg" => 1.0,
+                _ => 1.0,
+            };
+        let s = format!("{}{}", drop_leading_zero(val), u);
+        if best.is_empty() || s.len() < best.len() {
+            best = s;
+        }
+    }
     let current = format!("{}{}", drop_leading_zero(number), unit);
-    if !best.is_empty() && best.len() < current.len() { best } else { current }
+    if !best.is_empty() && best.len() < current.len() {
+        best
+    } else {
+        current
+    }
 }
 
 fn parse_word(node: &mut vp::Node, keep_zero_unit: bool, precision_px: Option<usize>) {
@@ -57,10 +154,23 @@ fn parse_word(node: &mut vp::Node, keep_zero_unit: bool, precision_px: Option<us
             } else {
                 let mut out = value.clone();
                 let ul = u.to_lowercase();
-                if is_length_unit(&ul) { out = convert_length(num, &ul); }
-                else if ul == "s" || ul == "ms" { out = convert_time(num, &ul); }
-                else if ul == "turn" || ul == "deg" { out = convert_angle(num, &ul); }
-                if let Some(p) = precision_px { if ul == "px" && pair.number.contains('.') { let prec = 10f64.powi(p as i32); let rounded = (out.trim_end_matches("px").parse::<f64>().unwrap_or(num)*prec).round()/prec; out = format!("{}px", rounded); } }
+                if is_length_unit(&ul) {
+                    out = convert_length(num, &ul);
+                } else if ul == "s" || ul == "ms" {
+                    out = convert_time(num, &ul);
+                } else if ul == "turn" || ul == "deg" {
+                    out = convert_angle(num, &ul);
+                }
+                if let Some(p) = precision_px {
+                    if ul == "px" && pair.number.contains('.') {
+                        let prec = 10f64.powi(p as i32);
+                        let rounded = (out.trim_end_matches("px").parse::<f64>().unwrap_or(num)
+                            * prec)
+                            .round()
+                            / prec;
+                        out = format!("{}px", rounded);
+                    }
+                }
                 *value = out;
             }
         }
@@ -71,18 +181,35 @@ fn clamp_opacity(node: &mut vp::Node) {
     if let vp::Node::Word { value } = node {
         if let Some(pair) = vp::unit::unit(value) {
             let num: f64 = pair.number.parse().unwrap_or(0.0);
-            if num > 1.0 { *value = if pair.unit == "%" { format!("{}%", num) } else { format!("{}", 1) }; }
-            else if num < 0.0 { *value = format!("{}{}", 0, pair.unit); }
+            if num > 1.0 {
+                *value = if pair.unit == "%" {
+                    format!("{}%", num)
+                } else {
+                    format!("{}", 1)
+                };
+            } else if num < 0.0 {
+                *value = format!("{}{}", 0, pair.unit);
+            }
         }
     }
 }
 
-fn should_keep_zero_unit(prop: &str, value_has_percent: bool, in_keyframes: bool, parent_prop: Option<&str>, browsers: &[&str]) -> bool {
+fn should_keep_zero_unit(
+    prop: &str,
+    value_has_percent: bool,
+    in_keyframes: bool,
+    parent_prop: Option<&str>,
+    browsers: &[&str],
+) -> bool {
     // legacy IE11 percent keep for certain props
-    let keep_zero_percent_props = ["max-height","height","min-width"];
-    if value_has_percent && keep_zero_percent_props.contains(&prop) && browsers.contains(&"ie 11") { return true; }
-    if in_keyframes && parent_prop == Some("stroke-dasharray") { return true; }
-    let keep_when_zero = ["stroke-dashoffset","stroke-width","line-height"];
+    let keep_zero_percent_props = ["max-height", "height", "min-width"];
+    if value_has_percent && keep_zero_percent_props.contains(&prop) && browsers.contains(&"ie 11") {
+        return true;
+    }
+    if in_keyframes && parent_prop == Some("stroke-dasharray") {
+        return true;
+    }
+    let keep_when_zero = ["stroke-dashoffset", "stroke-width", "line-height"];
     keep_when_zero.contains(&prop)
 }
 
@@ -91,33 +218,69 @@ pub fn plugin() -> pc::BuiltPlugin {
     pc::plugin("postcss-convert-values")
         .decl(|decl, _| {
             let prop = decl.prop().to_lowercase();
-            if prop.contains("flex") || prop.starts_with("--") || matches!(prop.as_str(), "descent-override"|"ascent-override"|"font-stretch"|"size-adjust"|"line-gap-override") { return Ok(()); }
+            if prop.contains("flex")
+                || prop.starts_with("--")
+                || matches!(
+                    prop.as_str(),
+                    "descent-override"
+                        | "ascent-override"
+                        | "font-stretch"
+                        | "size-adjust"
+                        | "line-gap-override"
+                )
+            {
+                return Ok(());
+            }
             let mut parsed = vp::parse(&decl.value());
             let in_keyframes = false; // TODO: compute from context if needed
             let mut nodes = parsed.nodes.clone();
-            let browsers: [&str;0] = [];
-            let keep_zero_unit = should_keep_zero_unit(&prop, decl.value().contains('%'), in_keyframes, Some(&prop), &browsers);
-            vp::walk(&mut nodes[..], &mut |node| {
-                match node {
-                    vp::Node::Word { .. } => { parse_word(node, keep_zero_unit, None); if prop == "opacity" || prop == "shape-image-threshold" { clamp_opacity(node); } }
-                    vp::Node::Function { value, nodes: inner, .. } => {
-                        let low = value.to_lowercase();
-                        if matches!(low.as_str(), "calc"|"min"|"max"|"clamp"|"hsl"|"hsla") {
-                            // Only transform unit-like words inside supported math/color functions.
-                            for n in inner.iter_mut() {
-                                if let vp::Node::Word { .. } = n { parse_word(n, true, None); }
+            let browsers: [&str; 0] = [];
+            let keep_zero_unit = should_keep_zero_unit(
+                &prop,
+                decl.value().contains('%'),
+                in_keyframes,
+                Some(&prop),
+                &browsers,
+            );
+            vp::walk(
+                &mut nodes[..],
+                &mut |node| {
+                    match node {
+                        vp::Node::Word { .. } => {
+                            parse_word(node, keep_zero_unit, None);
+                            if prop == "opacity" || prop == "shape-image-threshold" {
+                                clamp_opacity(node);
                             }
-                            // Prevent walker from descending again into children we already handled.
+                        }
+                        vp::Node::Function {
+                            value,
+                            nodes: inner,
+                            ..
+                        } => {
+                            let low = value.to_lowercase();
+                            if matches!(
+                                low.as_str(),
+                                "calc" | "min" | "max" | "clamp" | "hsl" | "hsla"
+                            ) {
+                                // Only transform unit-like words inside supported math/color functions.
+                                for n in inner.iter_mut() {
+                                    if let vp::Node::Word { .. } = n {
+                                        parse_word(n, true, None);
+                                    }
+                                }
+                                // Prevent walker from descending again into children we already handled.
+                                return false;
+                            }
+                            // Do not traverse into var()/url()/unknown functions — cssnano convert-values does not
+                            // rewrite inside them, and walking into var() breaks custom property names like "--foo".
                             return false;
                         }
-                        // Do not traverse into var()/url()/unknown functions — cssnano convert-values does not
-                        // rewrite inside them, and walking into var() breaks custom property names like "--foo".
-                        return false;
+                        _ => {}
                     }
-                    _ => {}
-                }
-                true
-            }, false);
+                    true
+                },
+                false,
+            );
             parsed.nodes = nodes;
             decl.set_value(vp::stringify(&parsed.nodes));
             Ok(())

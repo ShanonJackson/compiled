@@ -3,4 +3,4 @@ import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 const shimmer = null;
 const styles = null;
-export const Component = () => <div className={ax(["_j7hqz3h7 _5sag9cwz"])} />;
+export const Component = () => <div className={ax(["_j7hq1en8 _5sag9cwz"])} />;

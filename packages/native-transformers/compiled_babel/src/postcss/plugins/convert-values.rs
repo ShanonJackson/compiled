@@ -48,7 +48,9 @@ fn convert_in_components(values: &mut Vec<ComponentValue>) {
                 }
             }
             ComponentValue::SimpleBlock(block) => convert_in_components(&mut block.value),
-            ComponentValue::ListOfComponentValues(list) => convert_in_components(&mut list.children),
+            ComponentValue::ListOfComponentValues(list) => {
+                convert_in_components(&mut list.children)
+            }
             ComponentValue::KeyframeBlock(block) => convert_in_components(&mut block.block.value),
             _ => {}
         }
@@ -68,10 +70,16 @@ fn convert_in_declaration(decl: &mut Declaration) {
         return;
     }
 
-    let Some(ComponentValue::Dimension(dim)) = decl.value.get_mut(0) else { return; };
-    let Dimension::Length(length) = &mut **dim else { return; };
+    let Some(ComponentValue::Dimension(dim)) = decl.value.get_mut(0) else {
+        return;
+    };
+    let Dimension::Length(length) = &mut **dim else {
+        return;
+    };
 
-    if !length.unit.value.as_ref().eq_ignore_ascii_case("px") { return; }
+    if !length.unit.value.as_ref().eq_ignore_ascii_case("px") {
+        return;
+    }
 
     let px_value = length.value.value;
     // For a subset of properties, convert px -> pt/pc when strictly shorter
@@ -81,7 +89,9 @@ fn convert_in_declaration(decl: &mut Declaration) {
             if ident.value.as_ref().eq_ignore_ascii_case("font-size")
             || ident.value.as_ref().eq_ignore_ascii_case("gap")
     );
-    if !convertible { return; }
+    if !convertible {
+        return;
+    }
 
     if let Some(unit) = choose_shorter_length(px_value) {
         let value_num = value_num_for_unit(unit, px_value);
@@ -90,7 +100,11 @@ fn convert_in_declaration(decl: &mut Declaration) {
         let candidate = format!("{}{}", value_str, unit);
         if candidate.len() < original.len() {
             length.unit.value = Atom::from(unit);
-            length.value = Number { value: value_num, raw: None, span: DUMMY_SP };
+            length.value = Number {
+                value: value_num,
+                raw: None,
+                span: DUMMY_SP,
+            };
         }
     }
 }
@@ -121,8 +135,12 @@ fn format_number(value: f64) -> String {
         // Trim trailing zeros where possible
         let mut s = format!("{}", value);
         if s.contains('.') {
-            while s.ends_with('0') { s.pop(); }
-            if s.ends_with('.') { s.pop(); }
+            while s.ends_with('0') {
+                s.pop();
+            }
+            if s.ends_with('.') {
+                s.pop();
+            }
         }
         s
     }

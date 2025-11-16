@@ -69,7 +69,13 @@ pub fn minify_value_whitespace(input: &str) -> String {
                 let is_punct = |ch: Option<char>| {
                     matches!(
                         ch,
-                        Some(':') | Some(',') | Some('/') | Some('=') | Some(')') | Some('(') | Some('!')
+                        Some(':')
+                            | Some(',')
+                            | Some('/')
+                            | Some('=')
+                            | Some(')')
+                            | Some('(')
+                            | Some('!')
                     )
                 };
                 if is_punct(prev) || is_punct(next) {

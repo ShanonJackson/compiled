@@ -1,17 +1,25 @@
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
-use swc_core::css::ast::{AtRuleName, ComponentValue, Declaration, DeclarationName, QualifiedRule, Rule, Stylesheet};
+use swc_core::css::ast::{
+    AtRuleName, ComponentValue, Declaration, DeclarationName, QualifiedRule, Rule, Stylesheet,
+};
 
-use crate::postcss::plugins::vendor_prefixing_lite::make_ident;
 use super::super::transform::{Plugin, TransformContext};
+use crate::postcss::plugins::vendor_prefixing_lite::make_ident;
 
 pub(crate) static PREFIXES_JSON: Lazy<Option<&'static str>> = Lazy::new(|| {
-    Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/autoprefixer_data/prefixes.json")))
+    Some(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/autoprefixer_data/prefixes.json"
+    )))
 });
 
 pub(crate) static AGENTS_JSON: Lazy<Option<&'static str>> = Lazy::new(|| {
-    Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/autoprefixer_data/agents.json")))
+    Some(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/autoprefixer_data/agents.json"
+    )))
 });
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +84,10 @@ impl PrefixDB {
         Some(format!("-{}-", agent.prefix))
     }
 
-    pub fn select_add_remove(&self, selected_browsers: &[String]) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+    pub fn select_add_remove(
+        &self,
+        selected_browsers: &[String],
+    ) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
         let mut add: HashMap<String, Vec<String>> = HashMap::new();
         let mut remove: HashMap<String, Vec<String>> = HashMap::new();
         let sel: BTreeSet<String> = selected_browsers.iter().cloned().collect();
@@ -84,17 +95,29 @@ impl PrefixDB {
         for (name, data) in &self.entries {
             let all_prefixes: BTreeSet<String> = {
                 let mut s: BTreeSet<String> = BTreeSet::new();
-                for br in &data.browsers { if let Some(pref) = self.prefix_for_browser(br) { s.insert(pref); } }
-                for m in &data.mistakes { s.insert(m.clone()); }
+                for br in &data.browsers {
+                    if let Some(pref) = self.prefix_for_browser(br) {
+                        s.insert(pref);
+                    }
+                }
+                for m in &data.mistakes {
+                    s.insert(m.clone());
+                }
                 s
             };
 
             let mut need: BTreeSet<String> = BTreeSet::new();
             for br in &data.browsers {
                 let parts: Vec<&str> = br.split(' ').collect();
-                let simple = if parts.len() >= 2 { format!("{} {}", parts[0], parts[1]) } else { br.clone() };
+                let simple = if parts.len() >= 2 {
+                    format!("{} {}", parts[0], parts[1])
+                } else {
+                    br.clone()
+                };
                 if sel.contains(&simple) {
-                    if let Some(pref) = self.prefix_for_browser(&simple) { need.insert(pref); }
+                    if let Some(pref) = self.prefix_for_browser(&simple) {
+                        need.insert(pref);
+                    }
                 }
             }
 
@@ -115,20 +138,28 @@ impl PrefixDB {
 #[derive(Debug, Default)]
 pub struct VendorAutoprefixer;
 
-pub fn vendor_autoprefixer() -> VendorAutoprefixer { VendorAutoprefixer }
+pub fn vendor_autoprefixer() -> VendorAutoprefixer {
+    VendorAutoprefixer
+}
 
 impl Plugin for VendorAutoprefixer {
-    fn name(&self) -> &'static str { "autoprefixer" }
+    fn name(&self) -> &'static str {
+        "autoprefixer"
+    }
 
     fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
-        let Some(db) = PrefixDB::load() else { return; };
+        let Some(db) = PrefixDB::load() else {
+            return;
+        };
         let targets = resolve_browserslist_targets();
         let (add, remove) = db.select_add_remove(&targets);
         let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
         if tracing {
             eprintln!(
                 "[autoprefixer] targets={} add_keys={} remove_keys={}",
-                targets.join(", "), add.len(), remove.len()
+                targets.join(", "),
+                add.len(),
+                remove.len()
             );
         }
 
@@ -142,7 +173,8 @@ impl Plugin for VendorAutoprefixer {
                             if let Some(prefixes) = add.get("@keyframes") {
                                 for pref in prefixes {
                                     let mut cloned = (*at.clone()).clone();
-                                    cloned.name = at_rule_name_from_str(&format!("{}keyframes", pref));
+                                    cloned.name =
+                                        at_rule_name_from_str(&format!("{}keyframes", pref));
                                     new_rules.push(Rule::AtRule(Box::new(cloned)));
                                 }
                             }
@@ -167,7 +199,9 @@ fn resolve_browserslist_targets() -> Vec<String> {
     let opts = oxc_browserslist::Opts::default();
     match oxc_browserslist::execute(&opts) {
         Ok(list) => {
-            for item in list { out.push(item.to_string()); }
+            for item in list {
+                out.push(item.to_string());
+            }
         }
         Err(_) => {}
     }
@@ -175,24 +209,42 @@ fn resolve_browserslist_targets() -> Vec<String> {
 }
 
 fn at_rule_name(name: &AtRuleName) -> Option<&str> {
-    match name { AtRuleName::Ident(i) => Some(&i.value), AtRuleName::DashedIdent(i) => Some(&i.value) }
+    match name {
+        AtRuleName::Ident(i) => Some(&i.value),
+        AtRuleName::DashedIdent(i) => Some(&i.value),
+    }
 }
 
 fn at_rule_name_from_str(name: &str) -> AtRuleName {
-    AtRuleName::Ident(swc_core::css::ast::Ident { value: name.into(), raw: None, span: Default::default() })
+    AtRuleName::Ident(swc_core::css::ast::Ident {
+        value: name.into(),
+        raw: None,
+        span: Default::default(),
+    })
 }
 
 fn decl_prop(name: &DeclarationName) -> &str {
-    match name { DeclarationName::Ident(i) => &i.value, DeclarationName::DashedIdent(i) => &i.value }
+    match name {
+        DeclarationName::Ident(i) => &i.value,
+        DeclarationName::DashedIdent(i) => &i.value,
+    }
 }
 
 fn clone_decl_with_prop(decl: &Declaration, prop: String) -> Declaration {
     let mut d = decl.clone();
-    d.name = DeclarationName::Ident(swc_core::css::ast::Ident { value: prop.into(), raw: None, span: Default::default() });
+    d.name = DeclarationName::Ident(swc_core::css::ast::Ident {
+        value: prop.into(),
+        raw: None,
+        span: Default::default(),
+    });
     d
 }
 
-fn apply_decl_prefixing(rule: &mut QualifiedRule, add: &HashMap<String, Vec<String>>, remove: &HashMap<String, Vec<String>>) {
+fn apply_decl_prefixing(
+    rule: &mut QualifiedRule,
+    add: &HashMap<String, Vec<String>>,
+    remove: &HashMap<String, Vec<String>>,
+) {
     let mut new_block: Vec<ComponentValue> = Vec::new();
     for node in std::mem::take(&mut rule.block.value) {
         if let ComponentValue::Declaration(decl_box) = &node {
@@ -206,33 +258,41 @@ fn apply_decl_prefixing(rule: &mut QualifiedRule, add: &HashMap<String, Vec<Stri
                     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
                         eprintln!("[autoprefixer] add-prop {}", prefixed_prop);
                     }
-                    new_block.push(ComponentValue::Declaration(Box::new(clone_decl_with_prop(decl, prefixed_prop))));
+                    new_block.push(ComponentValue::Declaration(Box::new(clone_decl_with_prop(
+                        decl,
+                        prefixed_prop,
+                    ))));
                 }
             }
 
             // Value-level: naive support for fit-content case and vendor functions
             // Inject value-level prefixes, but avoid duplicates if already present
             let value_prefixed = maybe_prefix_value(&prop, &decl.value, add);
-            'inject:
-            for v in value_prefixed {
+            'inject: for v in value_prefixed {
                 if let DeclarationName::Ident(id) = &v.name {
                     let target_prop = id.value.to_string();
                     // Serialize v.value to string for simple equality compare
                     let already = new_block.iter().any(|c| match c {
                         ComponentValue::Declaration(existing) => {
                             let ep = decl_prop(&existing.name);
-                            if ep != target_prop { return false; }
+                            if ep != target_prop {
+                                return false;
+                            }
                             // Look for -moz-fit-content exact ident
                             if existing.value.len() == 1 {
                                 if let ComponentValue::Ident(i2) = &existing.value[0] {
-                                    if i2.value.eq("-moz-fit-content") { return true; }
+                                    if i2.value.eq("-moz-fit-content") {
+                                        return true;
+                                    }
                                 }
                             }
                             false
                         }
                         _ => false,
                     });
-                    if already { continue 'inject; }
+                    if already {
+                        continue 'inject;
+                    }
                 }
                 new_block.push(ComponentValue::Declaration(Box::new(v)));
             }
@@ -254,17 +314,33 @@ fn apply_decl_prefixing(rule: &mut QualifiedRule, add: &HashMap<String, Vec<Stri
     rule.block.value = new_block;
 }
 
-fn maybe_prefix_value(prop: &str, value: &Vec<ComponentValue>, add: &HashMap<String, Vec<String>>) -> Vec<Declaration> {
+fn maybe_prefix_value(
+    prop: &str,
+    value: &Vec<ComponentValue>,
+    add: &HashMap<String, Vec<String>>,
+) -> Vec<Declaration> {
     let mut out: Vec<Declaration> = Vec::new();
     // Special-case: width/min/max fit-content -> -moz-fit-content
-    if matches!(prop, "width"|"min-width"|"max-width") {
-        if value.len() == 1 { if let ComponentValue::Ident(i) = &value[0] {
-            let low = i.value.to_ascii_lowercase();
-            if i.value.trim().eq_ignore_ascii_case("fit-content") || low.contains("fit-content") {
-                let d = Declaration { name: DeclarationName::Ident(swc_core::css::ast::Ident { value: prop.into(), raw: None, span: Default::default() }), value: vec![make_ident("-moz-fit-content")], important: None, span: Default::default() };
-                out.push(d);
+    if matches!(prop, "width" | "min-width" | "max-width") {
+        if value.len() == 1 {
+            if let ComponentValue::Ident(i) = &value[0] {
+                let low = i.value.to_ascii_lowercase();
+                if i.value.trim().eq_ignore_ascii_case("fit-content") || low.contains("fit-content")
+                {
+                    let d = Declaration {
+                        name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                            value: prop.into(),
+                            raw: None,
+                            span: Default::default(),
+                        }),
+                        value: vec![make_ident("-moz-fit-content")],
+                        important: None,
+                        span: Default::default(),
+                    };
+                    out.push(d);
+                }
             }
-        }}
+        }
     }
 
     // display:flex and inline-flex basic prefixes
@@ -272,14 +348,50 @@ fn maybe_prefix_value(prop: &str, value: &Vec<ComponentValue>, add: &HashMap<Str
         if let ComponentValue::Ident(i) = &value[0] {
             let v = i.value.to_ascii_lowercase();
             if v == "flex" {
-                let d = Declaration { name: DeclarationName::Ident(swc_core::css::ast::Ident { value: prop.into(), raw: None, span: Default::default() }), value: vec![make_ident("-webkit-flex")], important: None, span: Default::default() };
+                let d = Declaration {
+                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                        value: prop.into(),
+                        raw: None,
+                        span: Default::default(),
+                    }),
+                    value: vec![make_ident("-webkit-flex")],
+                    important: None,
+                    span: Default::default(),
+                };
                 out.push(d);
-                let d2 = Declaration { name: DeclarationName::Ident(swc_core::css::ast::Ident { value: prop.into(), raw: None, span: Default::default() }), value: vec![make_ident("-ms-flexbox")], important: None, span: Default::default() };
+                let d2 = Declaration {
+                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                        value: prop.into(),
+                        raw: None,
+                        span: Default::default(),
+                    }),
+                    value: vec![make_ident("-ms-flexbox")],
+                    important: None,
+                    span: Default::default(),
+                };
                 out.push(d2);
             } else if v == "inline-flex" {
-                let d = Declaration { name: DeclarationName::Ident(swc_core::css::ast::Ident { value: prop.into(), raw: None, span: Default::default() }), value: vec![make_ident("-webkit-inline-flex")], important: None, span: Default::default() };
+                let d = Declaration {
+                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                        value: prop.into(),
+                        raw: None,
+                        span: Default::default(),
+                    }),
+                    value: vec![make_ident("-webkit-inline-flex")],
+                    important: None,
+                    span: Default::default(),
+                };
                 out.push(d);
-                let d2 = Declaration { name: DeclarationName::Ident(swc_core::css::ast::Ident { value: prop.into(), raw: None, span: Default::default() }), value: vec![make_ident("-ms-inline-flexbox")], important: None, span: Default::default() };
+                let d2 = Declaration {
+                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                        value: prop.into(),
+                        raw: None,
+                        span: Default::default(),
+                    }),
+                    value: vec![make_ident("-ms-inline-flexbox")],
+                    important: None,
+                    span: Default::default(),
+                };
                 out.push(d2);
             }
         }

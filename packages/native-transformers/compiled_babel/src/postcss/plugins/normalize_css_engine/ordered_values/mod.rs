@@ -1,7 +1,7 @@
 use crate::postcss::value_parser as vp;
 use postcss as pc;
-pub mod lib;
 pub mod data;
+pub mod lib;
 pub mod rules;
 
 fn vendor_unprefixed(prop: &str) -> &str {
@@ -39,9 +39,15 @@ fn should_abort(parsed: &vp::ParsedValue) -> bool {
     abort
 }
 
-fn add_space() -> vp::Node { vp::Node::Space { value: " ".to_string() } }
+fn add_space() -> vp::Node {
+    vp::Node::Space {
+        value: " ".to_string(),
+    }
+}
 
-fn stringify(nodes: &[vp::Node]) -> String { vp::stringify(nodes) }
+fn stringify(nodes: &[vp::Node]) -> String {
+    vp::stringify(nodes)
+}
 
 fn vp_unit(word: &str) -> Option<(String, String)> {
     vp::unit::unit(word).map(|nu| (nu.number, nu.unit))
@@ -54,8 +60,17 @@ fn normalize_border(parsed: &vp::ParsedValue) -> String {
     fn is_style(v: &str) -> bool {
         matches!(
             v,
-            "none" | "auto" | "hidden" | "dotted" | "dashed" | "solid" | "double" | "groove" | "ridge"
-                | "inset" | "outset"
+            "none"
+                | "auto"
+                | "hidden"
+                | "dotted"
+                | "dashed"
+                | "solid"
+                | "double"
+                | "groove"
+                | "ridge"
+                | "inset"
+                | "outset"
         )
     }
     fn is_width(v: &str) -> bool {
@@ -70,7 +85,12 @@ fn normalize_border(parsed: &vp::ParsedValue) -> String {
                     return false;
                 }
                 if is_width(&low) {
-                    if !width.is_empty() { width.push(' '); width.push_str(value); } else { width = value.clone(); }
+                    if !width.is_empty() {
+                        width.push(' ');
+                        width.push_str(value);
+                    } else {
+                        width = value.clone();
+                    }
                     return false;
                 }
                 color = value.clone();
@@ -81,9 +101,15 @@ fn normalize_border(parsed: &vp::ParsedValue) -> String {
                 // mathfunctions -> width; else -> color
                 if matches!(low.as_str(), "calc" | "min" | "max" | "clamp") {
                     // stringify full node
-                    if let vp::Node::Function { nodes, .. } = node { width = stringify(nodes); } else {}
+                    if let vp::Node::Function { nodes, .. } = node {
+                        width = stringify(nodes);
+                    } else {
+                    }
                 } else {
-                    if let vp::Node::Function { nodes, .. } = node { color = stringify(nodes); } else {}
+                    if let vp::Node::Function { nodes, .. } = node {
+                        color = stringify(nodes);
+                    } else {
+                    }
                 }
                 return false;
             }
@@ -93,9 +119,17 @@ fn normalize_border(parsed: &vp::ParsedValue) -> String {
     let mut nodes = parsed.nodes.clone();
     vp::walk(&mut nodes[..], &mut visitor, false);
     let mut out = String::new();
-    if !width.is_empty() { out.push_str(&width); out.push(' '); }
-    if !style.is_empty() { out.push_str(&style); out.push(' '); }
-    if !color.is_empty() { out.push_str(&color); }
+    if !width.is_empty() {
+        out.push_str(&width);
+        out.push(' ');
+    }
+    if !style.is_empty() {
+        out.push_str(&style);
+        out.push(' ');
+    }
+    if !color.is_empty() {
+        out.push_str(&color);
+    }
     out.trim().to_string()
 }
 
@@ -103,9 +137,14 @@ fn get_arguments(parsed: &vp::ParsedValue) -> Vec<Vec<vp::Node>> {
     let mut list: Vec<Vec<vp::Node>> = vec![Vec::new()];
     for n in &parsed.nodes {
         if let vp::Node::Div { value, .. } = n {
-            if value == "," { list.push(Vec::new()); continue; }
+            if value == "," {
+                list.push(Vec::new());
+                continue;
+            }
         }
-        if let Some(cur) = list.last_mut() { cur.push(n.clone()); }
+        if let Some(cur) = list.last_mut() {
+            cur.push(n.clone());
+        }
     }
     list
 }
@@ -123,29 +162,53 @@ fn normalize_transition(args: Vec<Vec<vp::Node>>) -> Vec<Vec<vp::Node>> {
                 vp::Node::Function { value, .. } => {
                     let low = value.to_lowercase();
                     if low == "steps" || low == "cubic-bezier" {
-                        timing.push(node.clone()); timing.push(add_space());
+                        timing.push(node.clone());
+                        timing.push(add_space());
                     } else {
-                        property.push(node.clone()); property.push(add_space());
+                        property.push(node.clone());
+                        property.push(add_space());
                     }
                 }
                 vp::Node::Word { value } => {
                     if vp_unit(value).is_some() {
-                        if time1.is_empty() { time1.push(node.clone()); time1.push(add_space()); }
-                        else { time2.push(node.clone()); time2.push(add_space()); }
+                        if time1.is_empty() {
+                            time1.push(node.clone());
+                            time1.push(add_space());
+                        } else {
+                            time2.push(node.clone());
+                            time2.push(add_space());
+                        }
                     } else {
                         let low = value.to_lowercase();
-                        if matches!(low.as_str(), "ease"|"linear"|"ease-in"|"ease-out"|"ease-in-out"|"step-start"|"step-end") {
-                            timing.push(node.clone()); timing.push(add_space());
+                        if matches!(
+                            low.as_str(),
+                            "ease"
+                                | "linear"
+                                | "ease-in"
+                                | "ease-out"
+                                | "ease-in-out"
+                                | "step-start"
+                                | "step-end"
+                        ) {
+                            timing.push(node.clone());
+                            timing.push(add_space());
                         } else {
-                            property.push(node.clone()); property.push(add_space());
+                            property.push(node.clone());
+                            property.push(add_space());
                         }
                     }
                 }
-                _ => { property.push(node.clone()); property.push(add_space()); }
+                _ => {
+                    property.push(node.clone());
+                    property.push(add_space());
+                }
             }
         }
         let mut combined: Vec<vp::Node> = Vec::new();
-        combined.extend(property); combined.extend(time1); combined.extend(timing); combined.extend(time2);
+        combined.extend(property);
+        combined.extend(time1);
+        combined.extend(timing);
+        combined.extend(time2);
         list.push(combined);
     }
     list
@@ -160,23 +223,35 @@ fn get_value(lists: Vec<Vec<vp::Node>>) -> String {
         for (i, val) in arg.into_iter().enumerate() {
             // Drop trailing space at very end
             if idx + 1 == total && i == last_idx {
-                if let vp::Node::Space { .. } = val { continue; }
+                if let vp::Node::Space { .. } = val {
+                    continue;
+                }
             }
             nodes.push(val);
         }
         if idx + 1 != total {
             // Overwrite last node into a div comma if it exists; else push a comma
             if let Some(last) = nodes.last_mut() {
-                *last = vp::Node::Div { value: ",".to_string(), before: String::new(), after: String::new() };
+                *last = vp::Node::Div {
+                    value: ",".to_string(),
+                    before: String::new(),
+                    after: String::new(),
+                };
             } else {
-                nodes.push(vp::Node::Div { value: ",".to_string(), before: String::new(), after: String::new() });
+                nodes.push(vp::Node::Div {
+                    value: ",".to_string(),
+                    before: String::new(),
+                    after: String::new(),
+                });
             }
         }
     }
     vp::stringify(&nodes)
 }
 
-fn to_string(parsed: &vp::ParsedValue) -> String { vp::stringify(&parsed.nodes) }
+fn to_string(parsed: &vp::ParsedValue) -> String {
+    vp::stringify(&parsed.nodes)
+}
 
 fn normalize_list_style(parsed: &vp::ParsedValue) -> String {
     // Port of listStyle.js
@@ -185,36 +260,155 @@ fn normalize_list_style(parsed: &vp::ParsedValue) -> String {
         use once_cell::sync::Lazy;
         static TYPES: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
             [
-                "afar","amharic","amharic-abegede","arabic-indic","armenian","asterisks","bengali","binary","cambodian","circle","cjk-decimal","cjk-earthly-branch","cjk-heavenly-stem","cjk-ideographic","decimal","decimal-leading-zero","devanagari","disc","disclosure-closed","disclosure-open","ethiopic","ethiopic-abegede","ethiopic-abegede-am-et","ethiopic-abegede-gez","ethiopic-abegede-ti-er","ethiopic-abegede-ti-et","ethiopic-halehame","ethiopic-halehame-aa-er","ethiopic-halehame-aa-et","ethiopic-halehame-am","ethiopic-halehame-am-et","ethiopic-halehame-gez","ethiopic-halehame-om-et","ethiopic-halehame-sid-et","ethiopic-halehame-so-et","ethiopic-halehame-ti-er","ethiopic-halehame-ti-et","ethiopic-halehame-tig","ethiopic-numeric","footnotes","georgian","gujarati","gurmukhi","hangul","hangul-consonant","hebrew","hiragana","hiragana-iroha","japanese-formal","japanese-informal","kannada","katakana","katakana-iroha","khmer","korean-hangul-formal","korean-hanja-formal","korean-hanja-informal","lao","lower-alpha","lower-armenian","lower-greek","lower-hexadecimal","lower-latin","lower-norwegian","lower-roman","malayalam","mongolian","myanmar","octal","oriya","oromo","persian","sidama","simp-chinese-formal","simp-chinese-informal","somali","square","string","symbols","tamil","telugu","thai","tibetan","tigre","tigrinya-er","tigrinya-er-abegede","tigrinya-et","tigrinya-et-abegede","trad-chinese-formal","trad-chinese-informal","upper-alpha","upper-armenian","upper-greek","upper-hexadecimal","upper-latin","upper-norwegian","upper-roman","urdu"
-            ].into_iter().collect()
+                "afar",
+                "amharic",
+                "amharic-abegede",
+                "arabic-indic",
+                "armenian",
+                "asterisks",
+                "bengali",
+                "binary",
+                "cambodian",
+                "circle",
+                "cjk-decimal",
+                "cjk-earthly-branch",
+                "cjk-heavenly-stem",
+                "cjk-ideographic",
+                "decimal",
+                "decimal-leading-zero",
+                "devanagari",
+                "disc",
+                "disclosure-closed",
+                "disclosure-open",
+                "ethiopic",
+                "ethiopic-abegede",
+                "ethiopic-abegede-am-et",
+                "ethiopic-abegede-gez",
+                "ethiopic-abegede-ti-er",
+                "ethiopic-abegede-ti-et",
+                "ethiopic-halehame",
+                "ethiopic-halehame-aa-er",
+                "ethiopic-halehame-aa-et",
+                "ethiopic-halehame-am",
+                "ethiopic-halehame-am-et",
+                "ethiopic-halehame-gez",
+                "ethiopic-halehame-om-et",
+                "ethiopic-halehame-sid-et",
+                "ethiopic-halehame-so-et",
+                "ethiopic-halehame-ti-er",
+                "ethiopic-halehame-ti-et",
+                "ethiopic-halehame-tig",
+                "ethiopic-numeric",
+                "footnotes",
+                "georgian",
+                "gujarati",
+                "gurmukhi",
+                "hangul",
+                "hangul-consonant",
+                "hebrew",
+                "hiragana",
+                "hiragana-iroha",
+                "japanese-formal",
+                "japanese-informal",
+                "kannada",
+                "katakana",
+                "katakana-iroha",
+                "khmer",
+                "korean-hangul-formal",
+                "korean-hanja-formal",
+                "korean-hanja-informal",
+                "lao",
+                "lower-alpha",
+                "lower-armenian",
+                "lower-greek",
+                "lower-hexadecimal",
+                "lower-latin",
+                "lower-norwegian",
+                "lower-roman",
+                "malayalam",
+                "mongolian",
+                "myanmar",
+                "octal",
+                "oriya",
+                "oromo",
+                "persian",
+                "sidama",
+                "simp-chinese-formal",
+                "simp-chinese-informal",
+                "somali",
+                "square",
+                "string",
+                "symbols",
+                "tamil",
+                "telugu",
+                "thai",
+                "tibetan",
+                "tigre",
+                "tigrinya-er",
+                "tigrinya-er-abegede",
+                "tigrinya-et",
+                "tigrinya-et-abegede",
+                "trad-chinese-formal",
+                "trad-chinese-informal",
+                "upper-alpha",
+                "upper-armenian",
+                "upper-greek",
+                "upper-hexadecimal",
+                "upper-latin",
+                "upper-norwegian",
+                "upper-roman",
+                "urdu",
+            ]
+            .into_iter()
+            .collect()
         });
         &TYPES
     }
-    let positions: std::collections::HashSet<&'static str> = ["inside","outside"].into_iter().collect();
+    let positions: std::collections::HashSet<&'static str> =
+        ["inside", "outside"].into_iter().collect();
     let mut typ = String::new();
     let mut pos = String::new();
     let mut img = String::new();
     let mut nodes = parsed.nodes.clone();
-    vp::walk(&mut nodes[..], &mut |node| {
-        match node {
-            vp::Node::Word { value } => {
-                let v = value.as_str();
-                if defined_types().contains(v) { typ.push(' '); typ.push_str(v); }
-                else if positions.contains(v) { pos.push(' '); pos.push_str(v); }
-                else if v == "none" {
-                    // If 'none' already in type, treat as image
-                    if typ.split(' ').any(|e| e == "none") { img.push(' '); img.push_str(v); }
-                    else { typ.push(' '); typ.push_str(v); }
-                } else { typ.push(' '); typ.push_str(v); }
+    vp::walk(
+        &mut nodes[..],
+        &mut |node| {
+            match node {
+                vp::Node::Word { value } => {
+                    let v = value.as_str();
+                    if defined_types().contains(v) {
+                        typ.push(' ');
+                        typ.push_str(v);
+                    } else if positions.contains(v) {
+                        pos.push(' ');
+                        pos.push_str(v);
+                    } else if v == "none" {
+                        // If 'none' already in type, treat as image
+                        if typ.split(' ').any(|e| e == "none") {
+                            img.push(' ');
+                            img.push_str(v);
+                        } else {
+                            typ.push(' ');
+                            typ.push_str(v);
+                        }
+                    } else {
+                        typ.push(' ');
+                        typ.push_str(v);
+                    }
+                }
+                vp::Node::Function { .. } => {
+                    img.push(' ');
+                    img.push_str(&stringify(&[node.clone()]));
+                }
+                _ => {}
             }
-            vp::Node::Function { .. } => {
-                img.push(' '); img.push_str(&stringify(&[node.clone()]));
-            }
-            _ => {}
-        }
-        true
-    }, false);
-    format!("{} {} {}", typ.trim(), pos.trim(), img.trim()).trim().to_string()
+            true
+        },
+        false,
+    );
+    format!("{} {} {}", typ.trim(), pos.trim(), img.trim())
+        .trim()
+        .to_string()
 }
 
 fn normalize_columns(parsed: &vp::ParsedValue) -> String {
@@ -222,13 +416,24 @@ fn normalize_columns(parsed: &vp::ParsedValue) -> String {
     let mut widths: Vec<String> = Vec::new();
     let mut other: Vec<String> = Vec::new();
     let mut nodes = parsed.nodes.clone();
-    vp::walk(&mut nodes[..], &mut |node| {
-        if let vp::Node::Word { value } = node {
-            if let Some(u) = vp::unit::unit(value) { if !u.unit.is_empty() { widths.push(value.clone()); } else { other.push(value.clone()); } }
-            else { other.push(value.clone()); }
-        }
-        true
-    }, false);
+    vp::walk(
+        &mut nodes[..],
+        &mut |node| {
+            if let vp::Node::Word { value } = node {
+                if let Some(u) = vp::unit::unit(value) {
+                    if !u.unit.is_empty() {
+                        widths.push(value.clone());
+                    } else {
+                        other.push(value.clone());
+                    }
+                } else {
+                    other.push(value.clone());
+                }
+            }
+            true
+        },
+        false,
+    );
     if other.len() == 1 && widths.len() == 1 {
         return format!("{} {}", widths[0].trim_start(), other[0].trim_start());
     }
@@ -236,25 +441,37 @@ fn normalize_columns(parsed: &vp::ParsedValue) -> String {
 }
 
 fn normalize_flex_flow(parsed: &vp::ParsedValue) -> String {
-    let directions: std::collections::HashSet<&'static str> = ["row","row-reverse","column","column-reverse"].into_iter().collect();
-    let wraps: std::collections::HashSet<&'static str> = ["nowrap","wrap","wrap-reverse"].into_iter().collect();
+    let directions: std::collections::HashSet<&'static str> =
+        ["row", "row-reverse", "column", "column-reverse"]
+            .into_iter()
+            .collect();
+    let wraps: std::collections::HashSet<&'static str> =
+        ["nowrap", "wrap", "wrap-reverse"].into_iter().collect();
     let mut direction = String::new();
     let mut wrap = String::new();
     let mut nodes = parsed.nodes.clone();
-    vp::walk(&mut nodes[..], &mut |node| {
-        if let vp::Node::Word { value } = node {
-            let low = value.to_lowercase();
-            if directions.contains(low.as_str()) { direction = value.clone(); }
-            else if wraps.contains(low.as_str()) { wrap = value.clone(); }
-        }
-        true
-    }, false);
+    vp::walk(
+        &mut nodes[..],
+        &mut |node| {
+            if let vp::Node::Word { value } = node {
+                let low = value.to_lowercase();
+                if directions.contains(low.as_str()) {
+                    direction = value.clone();
+                } else if wraps.contains(low.as_str()) {
+                    wrap = value.clone();
+                }
+            }
+            true
+        },
+        false,
+    );
     format!("{} {}", direction, wrap).trim().to_string()
 }
 
 fn math_functions_set() -> &'static std::collections::HashSet<&'static str> {
     use once_cell::sync::Lazy;
-    static SET_: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| ["calc","clamp","max","min"].into_iter().collect());
+    static SET_: Lazy<std::collections::HashSet<&'static str>> =
+        Lazy::new(|| ["calc", "clamp", "max", "min"].into_iter().collect());
     &SET_
 }
 
@@ -270,43 +487,74 @@ fn normalize_box_shadow(parsed: &vp::ParsedValue) -> Result<String, ()> {
             match &node {
                 vp::Node::Function { value, .. } => {
                     let low = vendor_unprefixed(value.to_lowercase().as_str()).to_string();
-                    if math_functions_set().contains(low.as_str()) { abort = true; break; }
-                    color.push(node.clone()); color.push(add_space());
+                    if math_functions_set().contains(low.as_str()) {
+                        abort = true;
+                        break;
+                    }
+                    color.push(node.clone());
+                    color.push(add_space());
                 }
                 vp::Node::Space { .. } => {}
                 vp::Node::Word { value } => {
-                    if vp_unit(value).is_some() { val.push(node.clone()); val.push(add_space()); }
-                    else if value.to_lowercase() == "inset" { inset.push(node.clone()); inset.push(add_space()); }
-                    else { color.push(node.clone()); color.push(add_space()); }
+                    if vp_unit(value).is_some() {
+                        val.push(node.clone());
+                        val.push(add_space());
+                    } else if value.to_lowercase() == "inset" {
+                        inset.push(node.clone());
+                        inset.push(add_space());
+                    } else {
+                        color.push(node.clone());
+                        color.push(add_space());
+                    }
                 }
                 _ => {}
             }
         }
-        if abort { return Err(()); }
+        if abort {
+            return Err(());
+        }
         let mut combined: Vec<vp::Node> = Vec::new();
-        combined.extend(inset); combined.extend(val); combined.extend(color);
+        combined.extend(inset);
+        combined.extend(val);
+        combined.extend(color);
         list.push(combined);
     }
     Ok(get_value(list))
 }
 
-fn join_grid_value(parts: Vec<String>) -> String { parts.join(" / ").trim().to_string() }
+fn join_grid_value(parts: Vec<String>) -> String {
+    parts.join(" / ").trim().to_string()
+}
 
 fn normalize_grid_auto_flow(parsed: &vp::ParsedValue) -> String {
     let mut front = String::new();
     let mut back = String::new();
     let mut should = false;
     let mut nodes = parsed.nodes.clone();
-    vp::walk(&mut nodes[..], &mut |node| {
-        if let vp::Node::Word { value } = node {
-            let v = value.trim().to_lowercase();
-            if v == "dense" { should = true; back = value.clone(); }
-            else if v == "row" || v == "column" { should = true; front = value.clone(); }
-            else { should = false; }
-        }
-        true
-    }, false);
-    if should { format!("{} {}", front.trim(), back.trim()) } else { to_string(parsed) }
+    vp::walk(
+        &mut nodes[..],
+        &mut |node| {
+            if let vp::Node::Word { value } = node {
+                let v = value.trim().to_lowercase();
+                if v == "dense" {
+                    should = true;
+                    back = value.clone();
+                } else if v == "row" || v == "column" {
+                    should = true;
+                    front = value.clone();
+                } else {
+                    should = false;
+                }
+            }
+            true
+        },
+        false,
+    );
+    if should {
+        format!("{} {}", front.trim(), back.trim())
+    } else {
+        to_string(parsed)
+    }
 }
 
 fn normalize_grid_gap(parsed: &vp::ParsedValue) -> String {
@@ -314,14 +562,27 @@ fn normalize_grid_gap(parsed: &vp::ParsedValue) -> String {
     let mut back = String::new();
     let mut should = false;
     let mut nodes = parsed.nodes.clone();
-    vp::walk(&mut nodes[..], &mut |node| {
-        if let vp::Node::Word { value } = node {
-            if value == "normal" { should = true; front = value.clone(); }
-            else { back.push(' '); back.push_str(value); }
-        }
-        true
-    }, false);
-    if should { format!("{} {}", front.trim(), back.trim()) } else { to_string(parsed) }
+    vp::walk(
+        &mut nodes[..],
+        &mut |node| {
+            if let vp::Node::Word { value } = node {
+                if value == "normal" {
+                    should = true;
+                    front = value.clone();
+                } else {
+                    back.push(' ');
+                    back.push_str(value);
+                }
+            }
+            true
+        },
+        false,
+    );
+    if should {
+        format!("{} {}", front.trim(), back.trim())
+    } else {
+        to_string(parsed)
+    }
 }
 
 fn normalize_grid_line(parsed: &vp::ParsedValue) -> String {
@@ -329,16 +590,23 @@ fn normalize_grid_line(parsed: &vp::ParsedValue) -> String {
     let s = to_string(parsed);
     let grid_value: Vec<String> = s.split('/').map(|p| p.to_string()).collect();
     if grid_value.len() > 1 {
-        let mapped: Vec<String> = grid_value.into_iter().map(|grid_line| {
-            let mut front = String::new();
-            let mut back = String::new();
-            let gl = grid_line.trim().to_string();
-            for token in gl.split(' ') {
-                if token == "span" { front = token.to_string(); }
-                else { back.push(' '); back.push_str(token); }
-            }
-            format!("{} {}", front.trim(), back.trim())
-        }).collect();
+        let mapped: Vec<String> = grid_value
+            .into_iter()
+            .map(|grid_line| {
+                let mut front = String::new();
+                let mut back = String::new();
+                let gl = grid_line.trim().to_string();
+                for token in gl.split(' ') {
+                    if token == "span" {
+                        front = token.to_string();
+                    } else {
+                        back.push(' ');
+                        back.push_str(token);
+                    }
+                }
+                format!("{} {}", front.trim(), back.trim())
+            })
+            .collect();
         return join_grid_value(mapped);
     }
     let mut out: Vec<String> = Vec::new();
@@ -347,8 +615,12 @@ fn normalize_grid_line(parsed: &vp::ParsedValue) -> String {
         let mut front = String::new();
         let mut back = String::new();
         for token in gl.split(' ') {
-            if token == "span" { front = token.to_string(); }
-            else { back.push(' '); back.push_str(token); }
+            if token == "span" {
+                front = token.to_string();
+            } else {
+                back.push(' ');
+                back.push_str(token);
+            }
         }
         out.push(format!("{} {}", front.trim(), back.trim()));
     }
@@ -365,36 +637,70 @@ pub fn plugin() -> pc::BuiltPlugin {
                 let normalized_prop = vendor_unprefixed(&lower_prop).to_string();
                 let supported = matches!(
                     normalized_prop.as_str(),
-                    "animation" | "outline" | "box-shadow" | "flex-flow" | "list-style" | "transition"
-                        | "border" | "border-top" | "border-right" | "border-bottom" | "border-left"
-                        | "border-block" | "border-inline" | "border-block-start" | "border-block-end"
-                        | "border-inline-start" | "border-inline-end" | "columns" | "column-rule"
+                    "animation"
+                        | "outline"
+                        | "box-shadow"
+                        | "flex-flow"
+                        | "list-style"
+                        | "transition"
+                        | "border"
+                        | "border-top"
+                        | "border-right"
+                        | "border-bottom"
+                        | "border-left"
+                        | "border-block"
+                        | "border-inline"
+                        | "border-block-start"
+                        | "border-block-end"
+                        | "border-inline-start"
+                        | "border-inline-end"
+                        | "columns"
+                        | "column-rule"
                 );
-                if !supported { return; }
+                if !supported {
+                    return;
+                }
                 let value = decl.value();
-                if let Some(cached) = cache.lock().unwrap().get(&value).cloned() { decl.set_value(cached); return; }
+                if let Some(cached) = cache.lock().unwrap().get(&value).cloned() {
+                    decl.set_value(cached);
+                    return;
+                }
                 let parsed = vp::parse(&value);
                 if parsed.nodes.len() < 2 || should_abort(&parsed) {
                     cache.lock().unwrap().insert(value.clone(), value.clone());
                     return;
                 }
                 let output = match normalized_prop.as_str() {
-                    "border" | "outline" | "border-top" | "border-right" | "border-bottom" | "border-left"
-                    | "border-block" | "border-inline" | "border-block-start" | "border-block-end"
-                    | "border-inline-start" | "border-inline-end" | "column-rule" => {
-                        rules::border::normalize(&parsed)
-                    }
-                    "transition" => { rules::transition::normalize(&parsed) }
+                    "border"
+                    | "outline"
+                    | "border-top"
+                    | "border-right"
+                    | "border-bottom"
+                    | "border-left"
+                    | "border-block"
+                    | "border-inline"
+                    | "border-block-start"
+                    | "border-block-end"
+                    | "border-inline-start"
+                    | "border-inline-end"
+                    | "column-rule" => rules::border::normalize(&parsed),
+                    "transition" => rules::transition::normalize(&parsed),
                     "list-style" => rules::list_style::normalize(&parsed),
                     "columns" => rules::columns::normalize(&parsed),
                     "flex-flow" => rules::flex_flow::normalize(&parsed),
                     "animation" => {
                         lib::get_value::get_value(lib::arguments::get_arguments(&parsed))
                     }
-                    "box-shadow" => match rules::box_shadow::normalize(&parsed) { Ok(s) => s, Err(()) => vp::stringify(&parsed.nodes) },
+                    "box-shadow" => match rules::box_shadow::normalize(&parsed) {
+                        Ok(s) => s,
+                        Err(()) => vp::stringify(&parsed.nodes),
+                    },
                     "grid-auto-flow" => rules::grid::normalize_auto_flow(&parsed),
                     "grid-column-gap" | "grid-row-gap" => rules::grid::normalize_gap(&parsed),
-                    "grid-column" | "grid-row" | "grid-row-start" | "grid-row-end" | "grid-column-start" | "grid-column-end" => rules::grid::normalize_line(&parsed),
+                    "grid-column" | "grid-row" | "grid-row-start" | "grid-row-end"
+                    | "grid-column-start" | "grid-column-end" => {
+                        rules::grid::normalize_line(&parsed)
+                    }
                     _ => value.clone(),
                 };
                 cache.lock().unwrap().insert(value.clone(), output.clone());
@@ -403,13 +709,17 @@ pub fn plugin() -> pc::BuiltPlugin {
             match css {
                 pc::ast::nodes::RootLike::Root(root) => {
                     root.walk_decls(|node, _| {
-                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) { process_decl(decl); }
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                            process_decl(decl);
+                        }
                         true
                     });
                 }
                 pc::ast::nodes::RootLike::Document(doc) => {
                     doc.walk_decls(|node, _| {
-                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) { process_decl(decl); }
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                            process_decl(decl);
+                        }
                         true
                     });
                 }

@@ -10,8 +10,8 @@ use swc_core::common::comments::{Comment, SingleThreadedComments};
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast::{
-    EsVersion, Expr, Program, Prop, PropName, PropOrSpread, ModuleItem, ModuleDecl,
-    ExportSpecifier, ModuleExportName,
+    EsVersion, ExportSpecifier, Expr, ModuleDecl, ModuleExportName, ModuleItem, Program, Prop,
+    PropName, PropOrSpread,
 };
 use swc_ecma_parser::lexer::Lexer;
 use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax};
@@ -32,7 +32,9 @@ use crate::utils_types::{
 
 fn parse_current_module(meta: &Metadata) -> Option<Program> {
     let state = meta.state();
-    let Some(path) = state.filename.clone() else { return None; };
+    let Some(path) = state.filename.clone() else {
+        return None;
+    };
     let options = state.opts.clone();
     drop(state);
 
@@ -43,7 +45,9 @@ fn parse_current_module(meta: &Metadata) -> Option<Program> {
 
 fn find_local_name_for_named_export(meta: &Metadata, export_name: &str) -> Option<String> {
     let program = parse_current_module(meta)?;
-    let Program::Module(module) = program else { return None; };
+    let Program::Module(module) = program else {
+        return None;
+    };
 
     for item in module.body.iter() {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named)) = item {
@@ -53,8 +57,14 @@ fn find_local_name_for_named_export(meta: &Metadata, export_name: &str) -> Optio
                         let exported_matches = n
                             .exported
                             .as_ref()
-                            .map(|e| match e { ModuleExportName::Ident(i) => i.sym.as_ref() == export_name, ModuleExportName::Str(s) => s.value.as_ref() == export_name })
-                            .unwrap_or_else(|| match &n.orig { ModuleExportName::Ident(i) => i.sym.as_ref() == export_name, ModuleExportName::Str(s) => s.value.as_ref() == export_name });
+                            .map(|e| match e {
+                                ModuleExportName::Ident(i) => i.sym.as_ref() == export_name,
+                                ModuleExportName::Str(s) => s.value.as_ref() == export_name,
+                            })
+                            .unwrap_or_else(|| match &n.orig {
+                                ModuleExportName::Ident(i) => i.sym.as_ref() == export_name,
+                                ModuleExportName::Str(s) => s.value.as_ref() == export_name,
+                            });
 
                         if exported_matches {
                             return Some(match &n.orig {
@@ -617,7 +627,10 @@ pub fn resolve_binding(
     // resolve that local instead.
     if binding.node.is_none() {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[resolve_binding] placeholder for '{}', checking local export alias", reference_name);
+            eprintln!(
+                "[resolve_binding] placeholder for '{}', checking local export alias",
+                reference_name
+            );
         }
         if let Some(local_name) = find_local_name_for_named_export(&meta, reference_name) {
             if std::env::var("COMPILED_CLI_TRACE").is_ok() {
@@ -626,7 +639,8 @@ pub fn resolve_binding(
                     reference_name, local_name
                 );
             }
-            if let Some(resolved) = resolve_binding(&local_name, meta.clone(), evaluate_expression) {
+            if let Some(resolved) = resolve_binding(&local_name, meta.clone(), evaluate_expression)
+            {
                 return Some(resolved);
             }
         }

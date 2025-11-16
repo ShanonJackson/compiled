@@ -2,10 +2,10 @@ use indexmap::IndexSet;
 use swc_atoms::Atom;
 use swc_core::css::ast::{
     AnPlusB, AttributeSelector, AttributeSelectorValue, ComplexSelector, ComplexSelectorChildren,
-    ComponentValue, CompoundSelector, Ident, KeyframeSelector, Number, Percentage, PseudoClassSelector,
-    PseudoClassSelectorChildren, PseudoElementSelector, QualifiedRule, QualifiedRulePrelude,
-    RelativeSelector, RelativeSelectorList, Rule, SelectorList, SimpleBlock, Stylesheet, SubclassSelector,
-    TypeSelector,
+    ComponentValue, CompoundSelector, Ident, KeyframeSelector, Number, Percentage,
+    PseudoClassSelector, PseudoClassSelectorChildren, PseudoElementSelector, QualifiedRule,
+    QualifiedRulePrelude, RelativeSelector, RelativeSelectorList, Rule, SelectorList, SimpleBlock,
+    Stylesheet, SubclassSelector, TypeSelector,
 };
 
 use super::super::transform::{Plugin, TransformContext};
@@ -107,7 +107,11 @@ fn normalize_keyframe_selector(selector: &mut KeyframeSelector) {
             if ident.value.eq_ignore_ascii_case("from") {
                 *selector = KeyframeSelector::Percentage(Percentage {
                     span: ident.span,
-                    value: Number { span: ident.span, value: 0.0, raw: None },
+                    value: Number {
+                        span: ident.span,
+                        value: 0.0,
+                        raw: None,
+                    },
                 });
             }
         }

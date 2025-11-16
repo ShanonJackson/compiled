@@ -1,5 +1,5 @@
-use postcss as pc;
 use once_cell::sync::Lazy;
+use postcss as pc;
 use std::collections::HashMap;
 
 static TO_INITIAL: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
@@ -352,19 +352,40 @@ pub fn plugin() -> pc::BuiltPlugin {
         .once_exit(move |css, _| {
             let process_decl = |decl: postcss::ast::nodes::Declaration| {
                 let prop = decl.prop().to_lowercase();
-                if ignore_default.contains(&prop.as_str()) { return; }
+                if ignore_default.contains(&prop.as_str()) {
+                    return;
+                }
                 let value_l = decl.value().to_lowercase();
                 if initial_support {
-                    if let Some(&ti) = TO_INITIAL.get(prop.as_str()) { if value_l == ti { decl.set_value("initial".to_string()); return; } }
+                    if let Some(&ti) = TO_INITIAL.get(prop.as_str()) {
+                        if value_l == ti {
+                            decl.set_value("initial".to_string());
+                            return;
+                        }
+                    }
                 }
-                if value_l == "initial" { if let Some(&from) = FROM_INITIAL.get(prop.as_str()) { decl.set_value(from.to_string()); } }
+                if value_l == "initial" {
+                    if let Some(&from) = FROM_INITIAL.get(prop.as_str()) {
+                        decl.set_value(from.to_string());
+                    }
+                }
             };
             match css {
                 pc::ast::nodes::RootLike::Root(root) => {
-                    root.walk_decls(|node, _| { if let Some(decl)=postcss::ast::nodes::as_declaration(&node){ process_decl(decl);} true });
+                    root.walk_decls(|node, _| {
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                            process_decl(decl);
+                        }
+                        true
+                    });
                 }
                 pc::ast::nodes::RootLike::Document(doc) => {
-                    doc.walk_decls(|node, _| { if let Some(decl)=postcss::ast::nodes::as_declaration(&node){ process_decl(decl);} true });
+                    doc.walk_decls(|node, _| {
+                        if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                            process_decl(decl);
+                        }
+                        true
+                    });
                 }
             }
             Ok(())

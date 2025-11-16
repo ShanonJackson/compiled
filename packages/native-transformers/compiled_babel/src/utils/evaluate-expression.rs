@@ -170,7 +170,7 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
 
     // Evaluate simple Math.* calls when all arguments reduce to numbers.
     if let Expr::Call(call) = expr {
-        use swc_core::ecma::ast::{Callee, Expr, MemberExpr, MemberProp, Ident};
+        use swc_core::ecma::ast::{Callee, Expr, Ident, MemberExpr, MemberProp};
         let mut callee_member: Option<(String, String)> = None;
         if let Callee::Expr(callee_expr) = &call.callee {
             if let Expr::Member(MemberExpr { obj, prop, .. }) = &**callee_expr {
@@ -178,7 +178,8 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
                 if let Expr::Ident(Ident { sym: obj_sym, .. }) = &**obj {
                     if obj_sym.as_ref() == "Math" {
                         if let MemberProp::Ident(name) = prop {
-                            callee_member = Some(("Math".to_string(), name.sym.as_ref().to_string()));
+                            callee_member =
+                                Some(("Math".to_string(), name.sym.as_ref().to_string()));
                         }
                     }
                 }
@@ -198,7 +199,9 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
                 // Prefer full evaluation (resolving identifiers) before static folding
                 let evaluated = evaluate_expression(&arg.expr, meta.clone());
                 let mut val_expr = evaluated.value;
-                if let Some(ev2) = try_static_evaluate(&val_expr, &evaluated.meta) { val_expr = ev2; }
+                if let Some(ev2) = try_static_evaluate(&val_expr, &evaluated.meta) {
+                    val_expr = ev2;
+                }
                 if let Value::Known(n) = val_expr.as_pure_number(ctx) {
                     nums.push(n);
                 } else {

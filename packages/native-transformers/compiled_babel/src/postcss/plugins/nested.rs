@@ -550,13 +550,17 @@ fn first_pseudo_then_nesting(prelude: &QualifiedRulePrelude) -> Option<String> {
     match prelude {
         Q::SelectorList(list) => {
             for complex in &list.children {
-                if let Some(pseudo) = inspect_complex(complex) { return Some(pseudo); }
+                if let Some(pseudo) = inspect_complex(complex) {
+                    return Some(pseudo);
+                }
             }
             None
         }
         Q::RelativeSelectorList(list) => {
             for relative in &list.children {
-                if let Some(pseudo) = inspect_complex(&relative.selector) { return Some(pseudo); }
+                if let Some(pseudo) = inspect_complex(&relative.selector) {
+                    return Some(pseudo);
+                }
             }
             None
         }

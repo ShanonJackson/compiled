@@ -102,7 +102,10 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
         Some(converter) => converter,
         None => {
             if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                eprintln!("[expand-shorthands:SWC] skip prop='{}' (no converter)", property);
+                eprintln!(
+                    "[expand-shorthands:SWC] skip prop='{}' (no converter)",
+                    property
+                );
             }
             return None;
         }
@@ -117,7 +120,10 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
     }
     if values_root.contains_var_function() {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[expand-shorthands:SWC] skip prop='{}' (contains var())", property);
+            eprintln!(
+                "[expand-shorthands:SWC] skip prop='{}' (contains var())",
+                property
+            );
         }
         return None;
     }
@@ -129,7 +135,10 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
     let expanded = converter(&values_root);
     if expanded.is_empty() {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[expand-shorthands:SWC] expanded prop='{}' -> <empty>", property);
+            eprintln!(
+                "[expand-shorthands:SWC] expanded prop='{}' -> <empty>",
+                property
+            );
         }
         return Some(Vec::new());
     }
@@ -154,7 +163,10 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
             }
             LonghandDeclaration::KeepOriginal => {
                 if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                    eprintln!("[expand-shorthands:SWC] keep original prop='{}' (seen later)", property);
+                    eprintln!(
+                        "[expand-shorthands:SWC] keep original prop='{}' (seen later)",
+                        property
+                    );
                 }
                 return None;
             }
@@ -167,13 +179,22 @@ pub fn expand_declaration(declaration: &Declaration) -> Option<Vec<Declaration>>
 /// Engine helper: expand a (prop, value) pair into longhand (prop, value) string pairs
 /// using the same conversion logic as the SWC plugin.
 pub fn expand_shorthand_pairs(prop: &str, value: &str) -> Option<Vec<(String, String)>> {
-    let converter = match conversion_for_property(prop) { Some(c) => c, None => return None };
+    let converter = match conversion_for_property(prop) {
+        Some(c) => c,
+        None => return None,
+    };
     let components = super::types::parse_value_to_components(value);
     let values_root = ValuesRoot::from_components(&components);
-    if values_root.is_empty() || values_root.contains_var_function() { return None; }
+    if values_root.is_empty() || values_root.contains_var_function() {
+        return None;
+    }
     let expanded = converter(&values_root);
-    if expanded.is_empty() { return Some(Vec::new()); }
-    if expanded.len() == 1 && matches!(expanded[0], LonghandDeclaration::KeepOriginal) { return None; }
+    if expanded.is_empty() {
+        return Some(Vec::new());
+    }
+    if expanded.len() == 1 && matches!(expanded[0], LonghandDeclaration::KeepOriginal) {
+        return None;
+    }
     let mut out: Vec<(String, String)> = Vec::new();
     for entry in expanded {
         if let LonghandDeclaration::Replace { prop, value } = entry {

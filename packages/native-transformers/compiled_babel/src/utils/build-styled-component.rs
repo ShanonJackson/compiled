@@ -475,24 +475,70 @@ fn shorthand_bucket(prop: &str) -> Option<u32> {
     match prop {
         "all" => Some(0),
         // Level 1
-        "animation"|"animation-range"|"background"|"border"|"border-image"|"border-radius"|
-        "column-rule"|"columns"|"contain-intrinsic-size"|"container"|"flex"|"flex-flow"|
-        "font"|"font-synthesis"|"gap"|"grid"|"grid-area"|"inset"|"list-style"|"mask"|
-        "mask-border"|"offset"|"outline"|"overflow"|"overscroll-behavior"|"padding"|
-        "place-content"|"place-items"|"place-self"|"position-try"|"scroll-margin"|
-        "scroll-padding"|"scroll-timeline"|"text-decoration"|"text-emphasis"|"text-wrap"|
-        "transition"|"view-timeline" => Some(1),
+        "animation"
+        | "animation-range"
+        | "background"
+        | "border"
+        | "border-image"
+        | "border-radius"
+        | "column-rule"
+        | "columns"
+        | "contain-intrinsic-size"
+        | "container"
+        | "flex"
+        | "flex-flow"
+        | "font"
+        | "font-synthesis"
+        | "gap"
+        | "grid"
+        | "grid-area"
+        | "inset"
+        | "list-style"
+        | "mask"
+        | "mask-border"
+        | "offset"
+        | "outline"
+        | "overflow"
+        | "overscroll-behavior"
+        | "padding"
+        | "place-content"
+        | "place-items"
+        | "place-self"
+        | "position-try"
+        | "scroll-margin"
+        | "scroll-padding"
+        | "scroll-timeline"
+        | "text-decoration"
+        | "text-emphasis"
+        | "text-wrap"
+        | "transition"
+        | "view-timeline" => Some(1),
         // Level 2
-        "border-color"|"border-style"|"border-width"|"font-variant"|"grid-column"|"grid-row"|
-        "grid-template"|"inset-block"|"inset-inline"|"margin-block"|"margin-inline"|
-        "padding-block"|"padding-inline"|"scroll-margin-block"|"scroll-margin-inline"|
-        "scroll-padding-block"|"scroll-padding-inline" => Some(2),
+        "border-color"
+        | "border-style"
+        | "border-width"
+        | "font-variant"
+        | "grid-column"
+        | "grid-row"
+        | "grid-template"
+        | "inset-block"
+        | "inset-inline"
+        | "margin-block"
+        | "margin-inline"
+        | "padding-block"
+        | "padding-inline"
+        | "scroll-margin-block"
+        | "scroll-margin-inline"
+        | "scroll-padding-block"
+        | "scroll-padding-inline" => Some(2),
         // Level 3
-        "border-block"|"border-inline" => Some(3),
+        "border-block" | "border-inline" => Some(3),
         // Level 4
-        "border-top"|"border-right"|"border-bottom"|"border-left" => Some(4),
+        "border-top" | "border-right" | "border-bottom" | "border-left" => Some(4),
         // Level 5
-        "border-block-start"|"border-block-end"|"border-inline-start"|"border-inline-end" => Some(5),
+        "border-block-start" | "border-block-end" | "border-inline-start" | "border-inline-end" => {
+            Some(5)
+        }
         _ => None,
     }
 }
@@ -500,23 +546,44 @@ fn shorthand_bucket(prop: &str) -> Option<u32> {
 fn parent_shorthand(prop: &str) -> Option<&'static str> {
     match prop {
         // padding
-        "padding-top"|"padding-right"|"padding-bottom"|"padding-left" => Some("padding"),
-        "padding-block-start"|"padding-block-end" => Some("padding-block"),
-        "padding-inline-start"|"padding-inline-end" => Some("padding-inline"),
+        "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => Some("padding"),
+        "padding-block-start" | "padding-block-end" => Some("padding-block"),
+        "padding-inline-start" | "padding-inline-end" => Some("padding-inline"),
         // margin
-        "margin-top"|"margin-right"|"margin-bottom"|"margin-left" => Some("margin"),
-        "margin-block-start"|"margin-block-end" => Some("margin-block"),
-        "margin-inline-start"|"margin-inline-end" => Some("margin-inline"),
+        "margin-top" | "margin-right" | "margin-bottom" | "margin-left" => Some("margin"),
+        "margin-block-start" | "margin-block-end" => Some("margin-block"),
+        "margin-inline-start" | "margin-inline-end" => Some("margin-inline"),
         // border
-        "border-bottom-color"|"border-top-color"|"border-left-color"|"border-right-color"|
-        "border-inline-color"|"border-block-color"|"border-inline-start-color"|"border-inline-end-color"|
-        "border-block-start-color"|"border-block-end-color" => Some("border-color"),
-        "border-bottom-style"|"border-top-style"|"border-left-style"|"border-right-style"|
-        "border-inline-style"|"border-block-style"|"border-inline-start-style"|"border-inline-end-style"|
-        "border-block-start-style"|"border-block-end-style" => Some("border-style"),
-        "border-bottom-width"|"border-top-width"|"border-left-width"|"border-right-width"|
-        "border-inline-width"|"border-block-width"|"border-inline-start-width"|"border-inline-end-width"|
-        "border-block-start-width"|"border-block-end-width" => Some("border-width"),
+        "border-bottom-color"
+        | "border-top-color"
+        | "border-left-color"
+        | "border-right-color"
+        | "border-inline-color"
+        | "border-block-color"
+        | "border-inline-start-color"
+        | "border-inline-end-color"
+        | "border-block-start-color"
+        | "border-block-end-color" => Some("border-color"),
+        "border-bottom-style"
+        | "border-top-style"
+        | "border-left-style"
+        | "border-right-style"
+        | "border-inline-style"
+        | "border-block-style"
+        | "border-inline-start-style"
+        | "border-inline-end-style"
+        | "border-block-start-style"
+        | "border-block-end-style" => Some("border-style"),
+        "border-bottom-width"
+        | "border-top-width"
+        | "border-left-width"
+        | "border-right-width"
+        | "border-inline-width"
+        | "border-block-width"
+        | "border-inline-start-width"
+        | "border-inline-end-width"
+        | "border-block-start-width"
+        | "border-block-end-width" => Some("border-width"),
         _ => None,
     }
 }
@@ -526,7 +593,10 @@ fn order_class_names_by_bucket(class_names: &[String], sheets: &[String]) -> Vec
     use std::collections::HashMap;
     let mut prop_map: HashMap<&str, String> = HashMap::new();
     for sheet in sheets {
-        if let (Some(class), Some(prop)) = (extract_first_class_from_sheet(sheet), first_property_from_sheet(sheet)) {
+        if let (Some(class), Some(prop)) = (
+            extract_first_class_from_sheet(sheet),
+            first_property_from_sheet(sheet),
+        ) {
             prop_map.insert(Box::leak(class.into_boxed_str()), prop);
         }
     }
@@ -535,7 +605,9 @@ fn order_class_names_by_bucket(class_names: &[String], sheets: &[String]) -> Vec
     with_index.sort_by_key(|(idx, name)| {
         let prop = prop_map.get(name.as_str()).map(|s| s.as_str());
         let bucket = prop
-            .and_then(|p| shorthand_bucket(p).or_else(|| parent_shorthand(p).and_then(shorthand_bucket)))
+            .and_then(|p| {
+                shorthand_bucket(p).or_else(|| parent_shorthand(p).and_then(shorthand_bucket))
+            })
             .unwrap_or(u32::MAX);
         let family_rank: u32 = match prop {
             Some(p) if p == "gap" => 0,
@@ -556,7 +628,6 @@ fn compress_class_names(
     let compressed = compress_class_names_for_runtime(class_names, compression_map);
     compressed.join(" ")
 }
-
 
 /// Builds the styled component wrapper mirroring the Babel helper.
 pub fn build_styled_component(tag: Tag, css_output: CssOutput, meta: &Metadata) -> Expr {
@@ -894,5 +965,3 @@ mod tests {
         std::env::remove_var("NODE_ENV");
     }
 }
-
-

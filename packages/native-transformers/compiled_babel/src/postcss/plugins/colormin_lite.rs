@@ -1,14 +1,18 @@
-use swc_core::css::ast::{ComponentValue, Declaration, Rule, Stylesheet, Token};
 use crate::postcss::plugins::expand_shorthands::types::parse_value_to_components;
 use crate::postcss::transform::{Plugin, TransformContext};
+use swc_core::css::ast::{ComponentValue, Declaration, Rule, Stylesheet, Token};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ColorMinLite;
 
-pub fn colormin_lite() -> ColorMinLite { ColorMinLite }
+pub fn colormin_lite() -> ColorMinLite {
+    ColorMinLite
+}
 
 impl Plugin for ColorMinLite {
-    fn name(&self) -> &'static str { "postcss-colormin-lite" }
+    fn name(&self) -> &'static str {
+        "postcss-colormin-lite"
+    }
 
     fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
         for rule in &mut stylesheet.rules {
@@ -21,7 +25,9 @@ fn minimize_rule(rule: &mut Rule) {
     match rule {
         Rule::QualifiedRule(rule) => minimize_values(&mut rule.block.value),
         Rule::AtRule(at) => {
-            if let Some(block) = &mut at.block { minimize_values(&mut block.value); }
+            if let Some(block) = &mut at.block {
+                minimize_values(&mut block.value);
+            }
         }
         Rule::ListOfComponentValues(list) => minimize_components(&mut list.children),
     }
@@ -33,7 +39,9 @@ fn minimize_components(values: &mut [ComponentValue]) {
             ComponentValue::Declaration(decl) => minimize_declaration(decl),
             ComponentValue::QualifiedRule(rule) => minimize_values(&mut rule.block.value),
             ComponentValue::AtRule(at) => {
-                if let Some(block) = &mut at.block { minimize_values(&mut block.value); }
+                if let Some(block) = &mut at.block {
+                    minimize_values(&mut block.value);
+                }
             }
             ComponentValue::SimpleBlock(block) => minimize_values(&mut block.value),
             ComponentValue::ListOfComponentValues(list) => minimize_components(&mut list.children),
@@ -49,7 +57,9 @@ fn minimize_values(values: &mut Vec<ComponentValue>) {
             ComponentValue::Declaration(decl) => minimize_declaration(decl),
             ComponentValue::QualifiedRule(rule) => minimize_values(&mut rule.block.value),
             ComponentValue::AtRule(at) => {
-                if let Some(block) = &mut at.block { minimize_values(&mut block.value); }
+                if let Some(block) = &mut at.block {
+                    minimize_values(&mut block.value);
+                }
             }
             ComponentValue::SimpleBlock(block) => minimize_values(&mut block.value),
             ComponentValue::ListOfComponentValues(list) => minimize_components(&mut list.children),
@@ -60,7 +70,9 @@ fn minimize_values(values: &mut Vec<ComponentValue>) {
 }
 
 fn minimize_declaration(decl: &mut Declaration) {
-    if decl.value.len() != 1 { return; }
+    if decl.value.len() != 1 {
+        return;
+    }
     // Handle both preserved token and direct ident
     let mut name_opt: Option<String> = None;
     match &decl.value[0] {

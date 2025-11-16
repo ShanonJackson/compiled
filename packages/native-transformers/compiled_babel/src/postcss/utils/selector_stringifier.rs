@@ -2,13 +2,15 @@ use std::sync::Arc;
 
 use swc_core::common::{input::StringInput, FileName, SourceMap};
 use swc_core::css::ast::{
-    AnPlusB, AttributeSelector, AttributeSelectorMatcherValue, AttributeSelectorValue, ClassSelector,
-    Combinator, CombinatorValue, ComponentValue, CompoundSelector, ComplexSelector,
-    ComplexSelectorChildren, CustomHighlightName, Delimiter, DelimiterValue, ForgivingComplexSelector,
-    ForgivingRelativeSelector, ForgivingRelativeSelectorList, ForgivingSelectorList, Ident, ListOfComponentValues,
-    Namespace, NamespacePrefix, PseudoClassSelector, PseudoClassSelectorChildren, PseudoElementSelector,
-    PseudoElementSelectorChildren, QualifiedRulePrelude, RelativeSelector, RelativeSelectorList, Rule, SelectorList,
-    Str, SubclassSelector, TokenAndSpan, TypeSelector, UniversalSelector, WqName,
+    AnPlusB, AttributeSelector, AttributeSelectorMatcherValue, AttributeSelectorValue,
+    ClassSelector, Combinator, CombinatorValue, ComplexSelector, ComplexSelectorChildren,
+    ComponentValue, CompoundSelector, CustomHighlightName, Delimiter, DelimiterValue,
+    ForgivingComplexSelector, ForgivingRelativeSelector, ForgivingRelativeSelectorList,
+    ForgivingSelectorList, Ident, ListOfComponentValues, Namespace, NamespacePrefix,
+    PseudoClassSelector, PseudoClassSelectorChildren, PseudoElementSelector,
+    PseudoElementSelectorChildren, QualifiedRulePrelude, RelativeSelector, RelativeSelectorList,
+    Rule, SelectorList, Str, SubclassSelector, TokenAndSpan, TypeSelector, UniversalSelector,
+    WqName,
 };
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
@@ -48,9 +50,7 @@ pub fn serialize_forgiving_selector_list(list: &ForgivingSelectorList) -> String
 }
 
 /// Serialize a forgiving relative selector list.
-pub fn serialize_forgiving_relative_selector_list(
-    list: &ForgivingRelativeSelectorList,
-) -> String {
+pub fn serialize_forgiving_relative_selector_list(list: &ForgivingRelativeSelectorList) -> String {
     list.children
         .iter()
         .filter_map(|selector| match selector {
@@ -354,7 +354,8 @@ fn serialize_string(value: &Str) -> String {
 }
 
 fn serialize_ident(ident: &Ident) -> String {
-    ident.raw
+    ident
+        .raw
         .as_ref()
         .map(|raw| raw.to_string())
         .unwrap_or_else(|| ident.value.to_string())
@@ -397,7 +398,9 @@ pub fn serialize_list_of_component_values(list: &ListOfComponentValues) -> Optio
     serialize_component_values(&list.children)
 }
 
-pub fn parse_selector_list_from_component_values(list: &ListOfComponentValues) -> Option<SelectorList> {
+pub fn parse_selector_list_from_component_values(
+    list: &ListOfComponentValues,
+) -> Option<SelectorList> {
     let raw = serialize_list_of_component_values(list)?;
     parse_selector_list_from_str(&raw)
 }

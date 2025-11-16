@@ -1,35 +1,69 @@
-use postcss as pc;
 use crate::postcss::plugins::normalize_css_engine::ordered_values::lib::arguments::get_arguments;
-use std::str::FromStr;
 use crate::postcss::value_parser as vp;
+use postcss as pc;
 use regex::Regex;
+use std::str::FromStr;
 
 fn split_args_indices(nodes: &Vec<vp::Node>) -> Vec<Vec<usize>> {
     let mut args: Vec<Vec<usize>> = vec![Vec::new()];
     let mut depth = 0i32;
     for (i, n) in nodes.iter().enumerate() {
         match n {
-            vp::Node::Function { .. } => { args.last_mut().unwrap().push(i); depth += 1; }
-            vp::Node::Div { value, .. } if depth == 0 && value == "," => { args.push(Vec::new()); }
-            _ => { args.last_mut().unwrap().push(i); if matches!(n, vp::Node::Function{..}) { depth -= 1; } }
+            vp::Node::Function { .. } => {
+                args.last_mut().unwrap().push(i);
+                depth += 1;
+            }
+            vp::Node::Div { value, .. } if depth == 0 && value == "," => {
+                args.push(Vec::new());
+            }
+            _ => {
+                args.last_mut().unwrap().push(i);
+                if matches!(n, vp::Node::Function { .. }) {
+                    depth -= 1;
+                }
+            }
         }
     }
     args
 }
 
-fn unit_of(value: &str) -> Option<(String,String)> { vp::unit::unit(value).map(|u| (u.number, u.unit.to_lowercase())) }
+fn unit_of(value: &str) -> Option<(String, String)> {
+    vp::unit::unit(value).map(|u| (u.number, u.unit.to_lowercase()))
+}
 
-fn is_css_length_unit(unit: &str) -> bool { matches!(unit.to_uppercase().as_str(), "PX"|"IN"|"CM"|"MM"|"EM"|"REM"|"POINTS"|"PC"|"EX"|"CH"|"VW"|"VH"|"VMIN"|"VMAX"|"%") }
+fn is_css_length_unit(unit: &str) -> bool {
+    matches!(
+        unit.to_uppercase().as_str(),
+        "PX" | "IN"
+            | "CM"
+            | "MM"
+            | "EM"
+            | "REM"
+            | "POINTS"
+            | "PC"
+            | "EX"
+            | "CH"
+            | "VW"
+            | "VH"
+            | "VMIN"
+            | "VMAX"
+            | "%"
+    )
+}
 
 fn is_stop(stop: Option<&str>) -> bool {
     if let Some(s) = stop {
-        if let Some((num, uni)) = unit_of(s) { return num == "0" || is_css_length_unit(&uni); }
+        if let Some((num, uni)) = unit_of(s) {
+            return num == "0" || is_css_length_unit(&uni);
+        }
         return Regex::new(r"^calc\(\S+\)$").unwrap().is_match(s);
     }
     true
 }
 
-fn is_color_stop(color: &str, stop: Option<&str>) -> bool { csscolorparser::Color::from_str(color).is_ok() && is_stop(stop) }
+fn is_color_stop(color: &str, stop: Option<&str>) -> bool {
+    csscolorparser::Color::from_str(color).is_ok() && is_stop(stop)
+}
 
 pub fn plugin() -> pc::BuiltPlugin {
     pc::plugin("postcss-minify-gradients")

@@ -4,21 +4,20 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
-    ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, ObjectLit, Prop, PropName, PropOrSpread,
-    SpreadElement, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
+    ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Prop, PropName,
+    PropOrSpread, SpreadElement, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
 };
-use swc_core::ecma::ast::MemberProp;
+use swc_core::ecma::utils::ExprExt;
 use swc_ecma_codegen::text_writer::JsWriter;
 use swc_ecma_codegen::{Config, Emitter, Node};
-use swc_core::ecma::utils::ExprExt;
 
 use crate::css_map::{visit_css_map_path_with_builder, CssMapUsage};
 use crate::types::{Metadata, MetadataContext};
 use crate::utils_ast::build_code_frame_error;
+use crate::utils_create_result_pair::create_result_pair;
 use crate::utils_css::{add_unit_if_needed, css_affix_interpolation, kebab_case, CssValue};
 use crate::utils_css_map::{create_error_message, ErrorMessages};
 use crate::utils_evaluate_expression::evaluate_expression;
-use crate::utils_create_result_pair::create_result_pair;
 use crate::utils_hash::hash;
 use crate::utils_is_compiled::{
     is_compiled_css_call_expression, is_compiled_css_map_call_expression,
@@ -65,15 +64,18 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
     // appear in keyframes hashing. This serializer purposefully does not fall
     // back to SWC codegen to avoid drift from Babel formatting.
 
-    fn escape_string(value: &str) -> String {
+    fn escape_string(value: &str, quote: char) -> String {
         let mut out = String::with_capacity(value.len() + 8);
         for ch in value.chars() {
             match ch {
-                '"' => out.push_str("\\\""),
                 '\\' => out.push_str("\\\\"),
                 '\n' => out.push_str("\\n"),
                 '\r' => out.push_str("\\r"),
                 '\t' => out.push_str("\\t"),
+                c if c == quote => {
+                    out.push('\\');
+                    out.push(quote);
+                }
                 _ => out.push(ch),
             }
         }
@@ -88,10 +90,14 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
                 if let Prop::KeyValue(kv) = p.as_ref() {
                     let key = match &kv.key {
                         PropName::Ident(i) => i.sym.as_ref().to_string(),
-                        PropName::Str(s) => s.value.as_ref().to_string(),
+                        PropName::Str(s) => {
+                            format!("'{}'", escape_string(s.value.as_ref(), '\''))
+                        }
                         PropName::Num(n) => {
                             let mut s = n.value.to_string();
-                            if s.ends_with(".0") { s.truncate(s.len()-2); }
+                            if s.ends_with(".0") {
+                                s.truncate(s.len() - 2);
+                            }
                             s
                         }
                         PropName::Computed(c) => print_expr(&c.expr),
@@ -121,9 +127,13 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
                 }
                 s
             }
-            Expr::Lit(Lit::Str(s)) => format!("\"{}\"", escape_string(s.value.as_ref())),
+            Expr::Lit(Lit::Str(s)) => format!("'{}'", escape_string(s.value.as_ref(), '\'')),
             Expr::Lit(Lit::Bool(b)) => {
-                if b.value { "true".to_string() } else { "false".to_string() }
+                if b.value {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
             }
             Expr::Lit(Lit::Null(_)) => "null".to_string(),
             Expr::Lit(Lit::BigInt(bi)) => format!("{}n", bi.value),
@@ -187,9 +197,9 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
                 match &member.prop {
                     MemberProp::Ident(prop) => format!("{}.{}", obj, prop.sym.as_ref()),
                     MemberProp::Computed(c) => format!("{}[{}]", obj, print_expr(&c.expr)),
-                    MemberProp::PrivateName(_) => panic!(
-                        "unsupported private name in member expression for keyframes hash"
-                    ),
+                    MemberProp::PrivateName(_) => {
+                        panic!("unsupported private name in member expression for keyframes hash")
+                    }
                 }
             }
             Expr::Paren(p) => format!("({})", print_expr(&p.expr)),
@@ -694,7 +704,9 @@ where
             }
             Expr::Call(call) => {
                 // Inline simple Math.* calls when arguments are numeric after evaluation
-                use swc_core::ecma::ast::{Callee, Expr as E2, MemberExpr as M2, MemberProp as P2, Ident as I2};
+                use swc_core::ecma::ast::{
+                    Callee, Expr as E2, Ident as I2, MemberExpr as M2, MemberProp as P2,
+                };
                 if let Callee::Expr(callee_expr) = &call.callee {
                     if let E2::Member(M2 { obj, prop, .. }) = &**callee_expr {
                         if let E2::Ident(I2 { sym: obj_sym, .. }) = &**obj {
@@ -709,22 +721,38 @@ where
                                     };
                                     let mut nums: Vec<f64> = Vec::new();
                                     for arg in &call.args {
-                                        let ev = evaluate_expression(&arg.expr, evaluated.meta.clone());
+                                        let ev =
+                                            evaluate_expression(&arg.expr, evaluated.meta.clone());
                                         let arg_expr = ev.value;
                                         // We don't have direct access to the internal try_static_evaluate here;
                                         // rely on ExprExt as_pure_number on the evaluated form.
-                                        if let swc_core::ecma::utils::Value::Known(n) = arg_expr.as_pure_number(ctx) {
+                                        if let swc_core::ecma::utils::Value::Known(n) =
+                                            arg_expr.as_pure_number(ctx)
+                                        {
                                             nums.push(n);
-                                        } else { nums.clear(); break; }
+                                        } else {
+                                            nums.clear();
+                                            break;
+                                        }
                                     }
                                     if !nums.is_empty() {
                                         let result = match method {
-                                            "max" => nums.into_iter().fold(f64::NEG_INFINITY, f64::max),
+                                            "max" => {
+                                                nums.into_iter().fold(f64::NEG_INFINITY, f64::max)
+                                            }
                                             "min" => nums.into_iter().fold(f64::INFINITY, f64::min),
-                                            "abs" => nums.get(0).copied().map(f64::abs).unwrap_or(0.0),
-                                            "ceil" => nums.get(0).copied().map(f64::ceil).unwrap_or(0.0),
-                                            "floor" => nums.get(0).copied().map(f64::floor).unwrap_or(0.0),
-                                            "round" => nums.get(0).copied().map(f64::round).unwrap_or(0.0),
+                                            "abs" => {
+                                                nums.get(0).copied().map(f64::abs).unwrap_or(0.0)
+                                            }
+                                            "ceil" => {
+                                                nums.get(0).copied().map(f64::ceil).unwrap_or(0.0)
+                                            }
+                                            "floor" => {
+                                                nums.get(0).copied().map(f64::floor).unwrap_or(0.0)
+                                            }
+                                            "round" => {
+                                                nums.get(0).copied().map(f64::round).unwrap_or(0.0)
+                                            }
                                             _ => f64::NAN,
                                         };
                                         if result.is_finite() || result.is_nan() {

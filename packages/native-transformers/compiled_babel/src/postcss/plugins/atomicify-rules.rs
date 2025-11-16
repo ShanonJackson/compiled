@@ -274,14 +274,12 @@ fn atomic_class_name(
     if declaration.important.is_some() {
         value_seed.push_str("!important");
     }
-    let minified_seed = crate::postcss::utils::value_minifier::minify_value_whitespace(&value_seed);
-    if std::env::var("COMPILED_CLI_TRACE").is_ok() && declaration_name(&declaration.name) == "margin-left" {
-        eprintln!(
-            "[atomicify.hash] raw='{}' min='{}'",
-            value_seed, minified_seed
-        );
+    if std::env::var("COMPILED_CLI_TRACE").is_ok()
+        && declaration_name(&declaration.name) == "margin-left"
+    {
+        eprintln!("[atomicify.hash] raw='{}'", value_seed);
     }
-    let value_hash = hash(&minified_seed);
+    let value_hash = hash(&value_seed);
     let value = value_hash.chars().take(4).collect::<String>();
 
     format!("_{}{}", group, value)

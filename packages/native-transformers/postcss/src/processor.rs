@@ -1965,5 +1965,3 @@ pub fn plugin(name: impl Into<String>) -> PluginBuilder {
 
     PluginBuilder::new(name_string)
 }
-
-

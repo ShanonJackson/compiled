@@ -1,14 +1,20 @@
-use swc_core::css::ast::{ComponentValue, Declaration, DeclarationName, Ident, QualifiedRule, Rule, Stylesheet};
+use swc_core::css::ast::{
+    ComponentValue, Declaration, DeclarationName, Ident, QualifiedRule, Rule, Stylesheet,
+};
 
 use super::super::transform::{Plugin, TransformContext};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct VendorPrefixingLite;
 
-pub fn vendor_prefixing_lite() -> VendorPrefixingLite { VendorPrefixingLite }
+pub fn vendor_prefixing_lite() -> VendorPrefixingLite {
+    VendorPrefixingLite
+}
 
 impl Plugin for VendorPrefixingLite {
-    fn name(&self) -> &'static str { "vendor-prefixing-lite" }
+    fn name(&self) -> &'static str {
+        "vendor-prefixing-lite"
+    }
 
     fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
         let mut out: Vec<Rule> = Vec::with_capacity(stylesheet.rules.len());
@@ -20,7 +26,8 @@ impl Plugin for VendorPrefixingLite {
                 }
                 Rule::AtRule(mut ar) => {
                     if let Some(mut block) = ar.block.take() {
-                        let mut new_children: Vec<ComponentValue> = Vec::with_capacity(block.value.len());
+                        let mut new_children: Vec<ComponentValue> =
+                            Vec::with_capacity(block.value.len());
                         for child in block.value.into_iter() {
                             match child {
                                 ComponentValue::QualifiedRule(mut qr) => {
@@ -43,7 +50,10 @@ impl Plugin for VendorPrefixingLite {
 }
 
 fn decl_name(name: &DeclarationName) -> &str {
-    match name { DeclarationName::Ident(i) => &i.value, DeclarationName::DashedIdent(i) => &i.value }
+    match name {
+        DeclarationName::Ident(i) => &i.value,
+        DeclarationName::DashedIdent(i) => &i.value,
+    }
 }
 
 fn is_min_max_width_like(name: &str) -> bool {
@@ -51,7 +61,9 @@ fn is_min_max_width_like(name: &str) -> bool {
 }
 
 fn value_is_ident(list: &Vec<ComponentValue>, expected: &str) -> bool {
-    if list.len() != 1 { return false; }
+    if list.len() != 1 {
+        return false;
+    }
     match &list[0] {
         ComponentValue::Ident(i) => i.value.eq_ignore_ascii_case(expected),
         _ => false,
@@ -59,7 +71,11 @@ fn value_is_ident(list: &Vec<ComponentValue>, expected: &str) -> bool {
 }
 
 pub fn make_ident(value: &str) -> ComponentValue {
-    ComponentValue::Ident(Box::new(Ident { value: value.into(), raw: None, span: Default::default() }))
+    ComponentValue::Ident(Box::new(Ident {
+        value: value.into(),
+        raw: None,
+        span: Default::default(),
+    }))
 }
 
 fn clone_with_value(decl: &Declaration, new_value: ComponentValue) -> Declaration {

@@ -102,7 +102,10 @@ impl<'a> TransformContext<'a> {
     }
 
     pub fn push_sheet(&mut self, sheet: impl Into<String>) {
-        self.sheets.push(sheet.into());
+        let raw = sheet.into();
+        let normalized =
+            crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing(&raw);
+        self.sheets.push(normalized);
     }
 
     pub fn set_preserved_comments(&mut self, comments: Vec<String>) {
@@ -121,7 +124,11 @@ impl<'a> TransformContext<'a> {
             .find(|c: char| c == '{' || c == ' ' || c == ',')
             .unwrap_or(rest.len());
         let name = &rest[..end];
-        if name.is_empty() { None } else { Some(name.to_string()) }
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
     }
 
     fn reorder_class_names_by_sheets(
@@ -169,7 +176,10 @@ impl<'a> TransformContext<'a> {
         let sheets = self.sheets;
         let encountered: Vec<String> = self.class_names.into_iter().collect();
         let class_names = Self::reorder_class_names_by_sheets(encountered, &sheets);
-        TransformCssResult { sheets, class_names }
+        TransformCssResult {
+            sheets,
+            class_names,
+        }
     }
 }
 
@@ -274,8 +284,13 @@ pub(crate) fn transform_css_via_swc_pipeline(
     // Autoprefixer-equivalent vendor prefixing must run after
     // sort-atomic-style-sheet and before whitespace/extract to match Babel.
     // Full Autoprefixer port (wired to browserslist and caniuse data)
-    if std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true) {
-        pipeline.push(Box::new(super::plugins::vendor_autoprefixer::vendor_autoprefixer()));
+    if std::env::var("AUTOPREFIXER")
+        .map(|v| v != "off")
+        .unwrap_or(true)
+    {
+        pipeline.push(Box::new(
+            super::plugins::vendor_autoprefixer::vendor_autoprefixer(),
+        ));
     }
     pipeline.push(Box::new(normalize_whitespace()));
     pipeline.push(Box::new(extract_stylesheets()));
@@ -322,9 +337,13 @@ pub fn transform_css(
     // Default to the PostCSS engine-backed pipeline when available.
     #[cfg(feature = "postcss_engine")]
     {
-        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss begin"); }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[postcss] via-postcss begin");
+        }
         let r = transform_css_via_postcss(css, options);
-        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss end"); }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[postcss] via-postcss end");
+        }
         return r;
     }
     #[cfg(not(feature = "postcss_engine"))]
@@ -336,4 +355,3 @@ pub fn transform_css(
 /// Legacy Babel plugin name used in error reporting.
 #[allow(dead_code)]
 const FALLBACK_PLUGIN_NAME: &str = "@compiled/postcss";
-

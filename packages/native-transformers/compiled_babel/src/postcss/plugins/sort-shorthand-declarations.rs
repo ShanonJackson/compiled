@@ -45,12 +45,14 @@ pub(crate) fn sort_rules(rules: &mut Vec<Rule>) {
     if std::env::var("COMPILED_CSS_TRACE").is_ok() {
         let summary: Vec<String> = rules
             .iter()
-            .map(|r| first_declaration_in_rule(r)
-                .map(|d| match &d.name {
-                    DeclarationName::Ident(i) => i.value.to_string(),
-                    DeclarationName::DashedIdent(i) => i.value.to_string(),
-                })
-                .unwrap_or_else(|| "<none>".to_string()))
+            .map(|r| {
+                first_declaration_in_rule(r)
+                    .map(|d| match &d.name {
+                        DeclarationName::Ident(i) => i.value.to_string(),
+                        DeclarationName::DashedIdent(i) => i.value.to_string(),
+                    })
+                    .unwrap_or_else(|| "<none>".to_string())
+            })
             .collect();
         eprintln!("[sort-shorthand] order=[{}]", summary.join(", "));
     }
@@ -569,4 +571,3 @@ mod tests {
         assert_eq!(original, sorted);
     }
 }
-

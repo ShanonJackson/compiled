@@ -6,4 +6,3 @@ pub fn vendor_unprefixed(prop: &str) -> &str {
         .or_else(|| prop.strip_prefix("-o-"))
         .unwrap_or(prop)
 }
-

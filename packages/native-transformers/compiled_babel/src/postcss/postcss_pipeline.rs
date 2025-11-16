@@ -1,14 +1,18 @@
 #[cfg(feature = "postcss_engine")]
 use postcss as pc;
+use postcss::ast::nodes::{
+    as_at_rule, as_declaration, as_rule, Declaration as PcDeclaration, Rule as PcRule,
+};
 #[cfg(feature = "postcss_engine")]
 #[allow(unused_imports)]
 use postcss::ast::NodeAccess;
-use postcss::ast::nodes::{as_at_rule, as_declaration, as_rule, Declaration as PcDeclaration, Rule as PcRule};
 
-use super::transform::{transform_css_via_swc_pipeline, CssTransformError, TransformCssOptions, TransformCssResult};
-use std::sync::{Arc, Mutex};
+use super::transform::{
+    transform_css_via_swc_pipeline, CssTransformError, TransformCssOptions, TransformCssResult,
+};
 #[cfg(feature = "postcss_engine")]
 use crate::postcss::utils::{selector_stringifier, value_minifier::minify_value_whitespace};
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "postcss_engine")]
 #[derive(Clone, Default)]
@@ -131,10 +135,12 @@ fn discard_empty_in_container(container: &pc::RootLike) {
 
 #[cfg(feature = "postcss_engine")]
 fn discard_empty_rules_plugin() -> pc::BuiltPlugin {
-    pc::plugin("discard-empty-rules").once_exit(|root, _result| {
-        discard_empty_in_container(root);
-        Ok(())
-    }).build()
+    pc::plugin("discard-empty-rules")
+        .once_exit(|root, _result| {
+            discard_empty_in_container(root);
+            Ok(())
+        })
+        .build()
 }
 
 #[cfg(feature = "postcss_engine")]
@@ -195,7 +201,14 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
         pc::plugin("increase-specificity").build(),
         sort_atomic_style_sheet_plugin(),
         // Insert full vendor prefixing at the same stage as JS pipeline
-        if std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true) { vendor_autoprefixer_plugin() } else { pc::plugin("noop-autoprefixer").build() },
+        if std::env::var("AUTOPREFIXER")
+            .map(|v| v != "off")
+            .unwrap_or(true)
+        {
+            vendor_autoprefixer_plugin()
+        } else {
+            pc::plugin("noop-autoprefixer").build()
+        },
         normalize_whitespace_plugin(),
         // Collect keyframes as sheets to match Babel output
         extract_stylesheets_plugin(collector.clone(), options.clone()),
@@ -205,23 +218,36 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
 
 #[cfg(feature = "postcss_engine")]
 fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
-    use postcss::ast::nodes::{as_at_rule, as_declaration, as_rule};
     use crate::postcss::value_parser as vp;
+    use postcss::ast::nodes::{as_at_rule, as_declaration, as_rule};
 
     fn is_variable_function(name: &str) -> bool {
-        matches!(name.to_ascii_lowercase().as_str(), "var"|"env"|"constant")
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "var" | "env" | "constant"
+        )
     }
 
     fn reduce_calc_whitespace(node: &mut vp::Node) {
         match node {
-            vp::Node::Space { value } => { *value = " ".to_string(); }
-            vp::Node::Function { value, before, after, nodes, .. } => {
+            vp::Node::Space { value } => {
+                *value = " ".to_string();
+            }
+            vp::Node::Function {
+                value,
+                before,
+                after,
+                nodes,
+                ..
+            } => {
                 if !is_variable_function(value) {
                     *before = String::new();
                     *after = String::new();
                 }
                 if value.eq_ignore_ascii_case("calc") {
-                    for n in nodes.iter_mut() { reduce_calc_whitespace(n); }
+                    for n in nodes.iter_mut() {
+                        reduce_calc_whitespace(n);
+                    }
                 }
             }
             _ => {}
@@ -230,15 +256,28 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
 
     fn reduce_whitespace(node: &mut vp::Node) -> bool {
         match node {
-            vp::Node::Space { value } => { *value = " ".to_string(); }
-            vp::Node::Div { before, after, .. } => { *before = String::new(); *after = String::new(); }
-            vp::Node::Function { value, before, after, nodes, .. } => {
+            vp::Node::Space { value } => {
+                *value = " ".to_string();
+            }
+            vp::Node::Div { before, after, .. } => {
+                *before = String::new();
+                *after = String::new();
+            }
+            vp::Node::Function {
+                value,
+                before,
+                after,
+                nodes,
+                ..
+            } => {
                 if !is_variable_function(value) {
                     *before = String::new();
                     *after = String::new();
                 }
                 if value.eq_ignore_ascii_case("calc") {
-                    for n in nodes.iter_mut() { reduce_calc_whitespace(n); }
+                    for n in nodes.iter_mut() {
+                        reduce_calc_whitespace(n);
+                    }
                     return false; // do not re-walk children
                 }
             }
@@ -250,7 +289,10 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
     pc::plugin("normalize-whitespace")
         .once_exit(|root, _| {
             // Walk the full tree and mirror postcss-normalize-whitespace behaviour
-            let container = match root { pc::RootLike::Root(r) => r.raw().clone(), pc::RootLike::Document(d) => d.to_node() };
+            let container = match root {
+                pc::RootLike::Root(r) => r.raw().clone(),
+                pc::RootLike::Document(d) => d.to_node(),
+            };
 
             // Helper to strip all whitespace characters from a raws text field if present
             fn strip_raw_before(node: &postcss::ast::NodeRef) {
@@ -258,7 +300,11 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
                 if let Some(before) = borrowed.raws.get_text("before") {
                     if before.chars().any(|c| c.is_whitespace()) {
                         let mut s = String::with_capacity(before.len());
-                        for ch in before.chars() { if !ch.is_whitespace() { s.push(ch); } }
+                        for ch in before.chars() {
+                            if !ch.is_whitespace() {
+                                s.push(ch);
+                            }
+                        }
                         borrowed.raws.set_text("before", &s);
                     }
                 }
@@ -270,10 +316,17 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
                 let borrowed = parent.borrow();
                 let mut idx = None;
                 for (i, child) in borrowed.nodes.iter().enumerate() {
-                    if std::ptr::eq(child, node) { idx = Some(i); break; }
+                    if std::ptr::eq(child, node) {
+                        idx = Some(i);
+                        break;
+                    }
                 }
                 let i = idx?;
-                if i == 0 { None } else { Some(borrowed.nodes[i-1].clone()) }
+                if i == 0 {
+                    None
+                } else {
+                    Some(borrowed.nodes[i - 1].clone())
+                }
             }
 
             // Depth-first traversal
@@ -354,114 +407,146 @@ fn normalize_whitespace_plugin() -> pc::BuiltPlugin {
 #[cfg(feature = "postcss_engine")]
 fn vendor_prefixing_lite_plugin() -> pc::BuiltPlugin {
     use postcss::ast::nodes::{as_declaration, as_rule};
-    pc::plugin("vendor-prefixing-lite").once_exit(|root, _| {
-        match root {
-            pc::RootLike::Root(r) => {
-                r.walk_rules(|rule_ref, _| {
-                    if let Some(rule) = as_rule(&rule_ref) {
-                        let mut to_prepend: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
-                        let children = rule.nodes();
-                        for (idx, child) in children.iter().enumerate() {
-                            if let Some(decl) = as_declaration(child) {
-                                let prop = decl.prop().to_lowercase();
-                                let value = decl.value();
-                                if matches!(prop.as_str(), "width" | "min-width" | "max-width") && value.eq_ignore_ascii_case("fit-content") {
-                                    let mut raws = postcss::ast::RawData::default();
-                                    raws.set_text("between", ":");
-                                    let new_decl = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-moz-fit-content".to_string(), decl.important(), raws);
-                                    to_prepend.push((idx, new_decl));
+    pc::plugin("vendor-prefixing-lite")
+        .once_exit(|root, _| {
+            match root {
+                pc::RootLike::Root(r) => {
+                    r.walk_rules(|rule_ref, _| {
+                        if let Some(rule) = as_rule(&rule_ref) {
+                            let mut to_prepend: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
+                            let children = rule.nodes();
+                            for (idx, child) in children.iter().enumerate() {
+                                if let Some(decl) = as_declaration(child) {
+                                    let prop = decl.prop().to_lowercase();
+                                    let value = decl.value();
+                                    if matches!(prop.as_str(), "width" | "min-width" | "max-width")
+                                        && value.eq_ignore_ascii_case("fit-content")
+                                    {
+                                        let mut raws = postcss::ast::RawData::default();
+                                        raws.set_text("between", ":");
+                                        let new_decl = postcss::ast::nodes::declaration_with_raws(
+                                            prop.clone(),
+                                            "-moz-fit-content".to_string(),
+                                            decl.important(),
+                                            raws,
+                                        );
+                                        to_prepend.push((idx, new_decl));
+                                    }
                                 }
                             }
-                        }
-                        // Insert in order before originals
-                        let mut inserted = 0usize;
-                        for (idx, new_decl) in to_prepend.into_iter() {
-                            postcss::ast::Node::insert(&rule.to_node(), idx + inserted, new_decl);
-                            inserted += 1;
-                        }
-                    }
-                    true
-                });
-            }
-            pc::RootLike::Document(d) => {
-                d.walk_rules(|rule_ref, _| {
-                    if let Some(rule) = as_rule(&rule_ref) {
-                        let mut to_prepend: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
-                        let children = rule.nodes();
-                        for (idx, child) in children.iter().enumerate() {
-                            if let Some(decl) = as_declaration(child) {
-                                let prop = decl.prop().to_lowercase();
-                                let value = decl.value();
-                                if matches!(prop.as_str(), "width" | "min-width" | "max-width") && value.eq_ignore_ascii_case("fit-content") {
-                                    let mut raws = postcss::ast::RawData::default();
-                                    raws.set_text("between", ":");
-                                    let new_decl = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-moz-fit-content".to_string(), decl.important(), raws);
-                                    to_prepend.push((idx, new_decl));
-                                }
+                            // Insert in order before originals
+                            let mut inserted = 0usize;
+                            for (idx, new_decl) in to_prepend.into_iter() {
+                                postcss::ast::Node::insert(
+                                    &rule.to_node(),
+                                    idx + inserted,
+                                    new_decl,
+                                );
+                                inserted += 1;
                             }
                         }
-                        let mut inserted = 0usize;
-                        for (idx, new_decl) in to_prepend.into_iter() {
-                            postcss::ast::Node::insert(&rule.to_node(), idx + inserted, new_decl);
-                            inserted += 1;
+                        true
+                    });
+                }
+                pc::RootLike::Document(d) => {
+                    d.walk_rules(|rule_ref, _| {
+                        if let Some(rule) = as_rule(&rule_ref) {
+                            let mut to_prepend: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
+                            let children = rule.nodes();
+                            for (idx, child) in children.iter().enumerate() {
+                                if let Some(decl) = as_declaration(child) {
+                                    let prop = decl.prop().to_lowercase();
+                                    let value = decl.value();
+                                    if matches!(prop.as_str(), "width" | "min-width" | "max-width")
+                                        && value.eq_ignore_ascii_case("fit-content")
+                                    {
+                                        let mut raws = postcss::ast::RawData::default();
+                                        raws.set_text("between", ":");
+                                        let new_decl = postcss::ast::nodes::declaration_with_raws(
+                                            prop.clone(),
+                                            "-moz-fit-content".to_string(),
+                                            decl.important(),
+                                            raws,
+                                        );
+                                        to_prepend.push((idx, new_decl));
+                                    }
+                                }
+                            }
+                            let mut inserted = 0usize;
+                            for (idx, new_decl) in to_prepend.into_iter() {
+                                postcss::ast::Node::insert(
+                                    &rule.to_node(),
+                                    idx + inserted,
+                                    new_decl,
+                                );
+                                inserted += 1;
+                            }
                         }
-                    }
-                    true
-                });
+                        true
+                    });
+                }
             }
-        }
-        Ok(())
-    }).build()
+            Ok(())
+        })
+        .build()
 }
 
 #[cfg(feature = "postcss_engine")]
 fn discard_duplicates_plugin() -> pc::BuiltPlugin {
-    use std::collections::HashMap;
     use postcss::ast::nodes::as_declaration;
+    use std::collections::HashMap;
 
     // Mirrors packages/css/src/plugins/discard-duplicates.ts: remove earlier
     // duplicate declarations that exist directly under the root.
-    pc::plugin("discard-duplicates").once(|root_like, _result| {
-        fn process_root(root: &postcss::ast::nodes::Root) {
-            let mut by_prop: HashMap<String, Vec<postcss::ast::NodeRef>> = HashMap::new();
-            for child in root.nodes() {
-                if let Some(decl) = as_declaration(&child) {
-                    let prop = decl.prop();
-                    by_prop.entry(prop.to_string()).or_default().push(child.clone());
-                }
-            }
-            for (_prop, nodes) in by_prop.into_iter() {
-                if nodes.len() > 1 {
-                    for i in 0..nodes.len() - 1 {
-                        root.remove_child(nodes[i].clone());
-                    }
-                }
-            }
-        }
-
-        match root_like {
-            pc::RootLike::Root(root) => process_root(root),
-            pc::RootLike::Document(document) => {
-                // Documents can also contain top-level declarations; handle similarly.
+    pc::plugin("discard-duplicates")
+        .once(|root_like, _result| {
+            fn process_root(root: &postcss::ast::nodes::Root) {
                 let mut by_prop: HashMap<String, Vec<postcss::ast::NodeRef>> = HashMap::new();
-                for child in document.nodes() {
+                for child in root.nodes() {
                     if let Some(decl) = as_declaration(&child) {
                         let prop = decl.prop();
-                        by_prop.entry(prop.to_string()).or_default().push(child.clone());
+                        by_prop
+                            .entry(prop.to_string())
+                            .or_default()
+                            .push(child.clone());
                     }
                 }
                 for (_prop, nodes) in by_prop.into_iter() {
                     if nodes.len() > 1 {
                         for i in 0..nodes.len() - 1 {
-                            document.remove_child(nodes[i].clone());
+                            root.remove_child(nodes[i].clone());
                         }
                     }
                 }
             }
-        }
 
-        Ok(())
-    }).build()
+            match root_like {
+                pc::RootLike::Root(root) => process_root(root),
+                pc::RootLike::Document(document) => {
+                    // Documents can also contain top-level declarations; handle similarly.
+                    let mut by_prop: HashMap<String, Vec<postcss::ast::NodeRef>> = HashMap::new();
+                    for child in document.nodes() {
+                        if let Some(decl) = as_declaration(&child) {
+                            let prop = decl.prop();
+                            by_prop
+                                .entry(prop.to_string())
+                                .or_default()
+                                .push(child.clone());
+                        }
+                    }
+                    for (_prop, nodes) in by_prop.into_iter() {
+                        if nodes.len() > 1 {
+                            for i in 0..nodes.len() - 1 {
+                                document.remove_child(nodes[i].clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(())
+        })
+        .build()
 }
 
 // minify_selectors_plugin and minify_params_plugin now live under plugins::normalize_css
@@ -536,7 +621,9 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
         use std::cmp::Ordering;
         // 1. by at-rule name
         let name_cmp = a.name.cmp(&b.name);
-        if name_cmp != Ordering::Equal { return name_cmp; }
+        if name_cmp != Ordering::Equal {
+            return name_cmp;
+        }
 
         // 2. by parsed components
         let limit = a.parsed.len().min(b.parsed.len());
@@ -544,13 +631,19 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
             let pa = &a.parsed[i];
             let pb = &b.parsed[i];
             let key_cmp = pa.sort_key().cmp(&pb.sort_key());
-            if key_cmp != Ordering::Equal { return key_cmp; }
+            if key_cmp != Ordering::Equal {
+                return key_cmp;
+            }
             if (pa.length - pb.length).abs() > f64::EPSILON {
                 // If includes '>' then ascending by length, else descending by length
                 if pa.comparison_operator.includes_greater() {
-                    if let Some(ord) = pa.length.partial_cmp(&pb.length) { return ord; }
+                    if let Some(ord) = pa.length.partial_cmp(&pb.length) {
+                        return ord;
+                    }
                 } else {
-                    if let Some(ord) = pb.length.partial_cmp(&pa.length) { return ord; }
+                    if let Some(ord) = pb.length.partial_cmp(&pa.length) {
+                        return ord;
+                    }
                 }
             }
         }
@@ -582,8 +675,17 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
                 } else if let Some(at) = as_at_rule(&node) {
                     let name = at.name();
                     let query = at.params();
-                    let parsed = if name == "media" { parse_media_query(&query) } else { Vec::new() };
-                    at_rules.push(AtInfo { name, query, parsed, node: at.to_node() });
+                    let parsed = if name == "media" {
+                        parse_media_query(&query)
+                    } else {
+                        Vec::new()
+                    };
+                    at_rules.push(AtInfo {
+                        name,
+                        query,
+                        parsed,
+                        node: at.to_node(),
+                    });
                 } else {
                     catch_all.push(node);
                 }
@@ -620,13 +722,24 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
 }
 
 #[cfg(feature = "postcss_engine")]
-fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCssOptions) -> pc::BuiltPlugin {
-    use postcss::list::comma;
+fn extract_stylesheets_plugin(
+    collector: AtomicCollector,
+    _options: TransformCssOptions,
+) -> pc::BuiltPlugin {
     use postcss::ast::nodes::as_at_rule;
+    use postcss::list::comma;
 
     fn can_atomicify_at_rule(name: &str) -> bool {
-        matches!(name,
-            "container" | "-moz-document" | "else" | "layer" | "media" | "starting-style" | "supports" | "when"
+        matches!(
+            name,
+            "container"
+                | "-moz-document"
+                | "else"
+                | "layer"
+                | "media"
+                | "starting-style"
+                | "supports"
+                | "when"
         )
     }
 
@@ -657,41 +770,69 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
 
     fn combine_selectors(parent: &[String], child: &str) -> Vec<String> {
         let child_parts = comma(child);
-        let parents = if parent.is_empty() { vec!["&".to_string()] } else { parent.to_vec() };
+        let parents = if parent.is_empty() {
+            vec!["&".to_string()]
+        } else {
+            parent.to_vec()
+        };
         let mut out = Vec::new();
         for p in parents {
             for c in &child_parts {
                 let trimmed = c.trim();
-                if trimmed.contains('&') { out.push(trimmed.replace('&', &p)); }
-                else if p == "&" { out.push(trimmed.to_string()); }
-                else if trimmed.is_empty() { out.push(p.clone()); }
-                else { out.push(format!("{} {}", p, trimmed)); }
+                if trimmed.contains('&') {
+                    out.push(trimmed.replace('&', &p));
+                } else if p == "&" {
+                    out.push(trimmed.to_string());
+                } else if trimmed.is_empty() {
+                    out.push(p.clone());
+                } else {
+                    out.push(format!("{} {}", p, trimmed));
+                }
             }
         }
         out
     }
 
     fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
-        if at_chain.is_empty() { return rule_css.to_string(); }
+        if at_chain.is_empty() {
+            return rule_css.to_string();
+        }
         let mut out = String::new();
         for (n, p) in at_chain {
-            if p.is_empty() { out.push_str(&format!("@{}{{", n)); }
-            else { out.push_str(&format!("@{} {}{{", n, p)); }
+            if p.is_empty() {
+                out.push_str(&format!("@{}{{", n));
+            } else {
+                out.push_str(&format!("@{} {}{{", n, p));
+            }
         }
         out.push_str(rule_css);
-        for _ in at_chain { out.push('}'); }
+        for _ in at_chain {
+            out.push('}');
+        }
         out
     }
 
     fn minify_color_value(value: &str) -> String {
         let trimmed = value.trim();
-        if trimmed.is_empty() { return value.to_string(); }
+        if trimmed.is_empty() {
+            return value.to_string();
+        }
         let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
         let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
-        if min.len() < trimmed.len() { min } else { trimmed.to_string() }
+        if min.len() < trimmed.len() {
+            min
+        } else {
+            trimmed.to_string()
+        }
     }
 
-    fn walk_and_emit(node: &postcss::ast::NodeRef, selectors: &[String], at_chain: &[(String, String)], collector: &AtomicCollector, opts: &TransformCssOptions) {
+    fn walk_and_emit(
+        node: &postcss::ast::NodeRef,
+        selectors: &[String],
+        at_chain: &[(String, String)],
+        collector: &AtomicCollector,
+        opts: &TransformCssOptions,
+    ) {
         let borrowed = node.borrow();
         let children = borrowed.nodes.clone();
         drop(borrowed);
@@ -699,7 +840,11 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
             if let Some(rule) = as_rule(&child) {
                 let raw_selector = rule.selector();
                 let sels = if let Some(ph) = &opts.declaration_placeholder {
-                    if raw_selector == *ph { selectors.to_vec() } else { combine_selectors(selectors, &raw_selector) }
+                    if raw_selector == *ph {
+                        selectors.to_vec()
+                    } else {
+                        combine_selectors(selectors, &raw_selector)
+                    }
                 } else {
                     combine_selectors(selectors, &raw_selector)
                 };
@@ -707,25 +852,49 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                 for gc in rule.nodes() {
                     if let Some(decl) = as_declaration(&gc) {
                         let prop = decl.prop();
-                        let mut value_full = decl.value();
-                value_full = minify_color_value(&value_full);
-                if decl.important() { value_full.push_str("!important"); }
-                value_full = minify_value_whitespace(&value_full);
+                        let raw_value = decl.value();
+                        let mut hash_seed = raw_value.clone();
+                        if decl.important() {
+                            hash_seed.push_str("!important");
+                        }
+                        let mut value_full = raw_value;
+                        value_full = minify_color_value(&value_full);
+                        if decl.important() {
+                            value_full.push_str("!important");
+                        }
+                        value_full = minify_value_whitespace(&value_full);
                         let mut replaced_selectors: Vec<String> = Vec::new();
                         for sel in &sels {
                             let norm = normalized_selector(sel);
                             let mut group_seed = String::new();
-                            if let Some(prefix) = &opts.class_hash_prefix { group_seed.push_str(prefix); }
-                            for (n, p) in at_chain { group_seed.push_str(n); group_seed.push_str(p); }
+                            if let Some(prefix) = &opts.class_hash_prefix {
+                                group_seed.push_str(prefix);
+                            }
+                            for (n, p) in at_chain {
+                                group_seed.push_str(n);
+                                group_seed.push_str(p);
+                            }
                             group_seed.push_str(&norm);
                             group_seed.push_str(&prop);
-                            let group = crate::utils_hash::hash(&group_seed).chars().take(4).collect::<String>();
-                            let value_hash = crate::utils_hash::hash(&value_full).chars().take(4).collect::<String>();
+                            let group = crate::utils_hash::hash(&group_seed)
+                                .chars()
+                                .take(4)
+                                .collect::<String>();
+                            let value_hash = crate::utils_hash::hash(&hash_seed)
+                                .chars()
+                                .take(4)
+                                .collect::<String>();
                             let full_class = format!("_{}{}", group, value_hash);
                             let used_class = if let Some(map) = &opts.class_name_compression_map {
                                 let key = full_class.trim_start_matches('_');
-                                if let Some(compressed) = map.get(key) { compressed.clone() } else { full_class.clone() }
-                            } else { full_class.clone() };
+                                if let Some(compressed) = map.get(key) {
+                                    compressed.clone()
+                                } else {
+                                    full_class.clone()
+                                }
+                            } else {
+                                full_class.clone()
+                            };
                             let replaced = norm.replace('&', &format!(".{}", used_class));
                             replaced_selectors.push(replaced);
                         }
@@ -748,21 +917,29 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                         // IMPORTANT: Do not descend into @keyframes — JS atomicify never emits
                         // atomic rules for keyframe steps (e.g. `0%`, `to`).
                         let name = nested_at.name();
-                    if name.eq_ignore_ascii_case("keyframes") {
-                        // Skip atomic emission inside keyframes entirely
-                        continue;
+                        if name.eq_ignore_ascii_case("keyframes") {
+                            // Skip atomic emission inside keyframes entirely
+                            continue;
+                        }
+                        // Preserve ignored at-rules (e.g., @property) as full blocks – do not emit atomic rules
+                        if matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            "color-profile"
+                                | "counter-style"
+                                | "font-face"
+                                | "font-palette-values"
+                                | "page"
+                                | "property"
+                        ) {
+                            continue;
+                        }
+                        let mut next_chain = at_chain.to_vec();
+                        let params = nested_at.params();
+                        if can_atomicify_at_rule(&name) {
+                            next_chain.push((name, params));
+                        }
+                        walk_and_emit(&nested_at.to_node(), &sels, &next_chain, collector, opts);
                     }
-                    // Preserve ignored at-rules (e.g., @property) as full blocks – do not emit atomic rules
-                    if matches!(name.to_ascii_lowercase().as_str(),
-                        "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"
-                    ) {
-                        continue;
-                    }
-                    let mut next_chain = at_chain.to_vec();
-                    let params = nested_at.params();
-                    if can_atomicify_at_rule(&name) { next_chain.push((name, params)); }
-                    walk_and_emit(&nested_at.to_node(), &sels, &next_chain, collector, opts);
-                }
                 }
             } else if let Some(at) = as_at_rule(&child) {
                 let name = at.name();
@@ -772,14 +949,22 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
                     continue;
                 }
                 // Preserve ignored at-rules (e.g., @property) as full blocks – do not emit atomic rules
-                if matches!(name.to_ascii_lowercase().as_str(),
-                    "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "color-profile"
+                        | "counter-style"
+                        | "font-face"
+                        | "font-palette-values"
+                        | "page"
+                        | "property"
                 ) {
                     continue;
                 }
                 let params = at.params();
                 let mut next = at_chain.to_vec();
-                if can_atomicify_at_rule(&name) { next.push((name, params)); }
+                if can_atomicify_at_rule(&name) {
+                    next.push((name, params));
+                }
                 walk_and_emit(&at.to_node(), selectors, &next, collector, opts);
             } else {
                 walk_and_emit(&child, selectors, at_chain, collector, opts);
@@ -794,36 +979,60 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
             // by the atomicify_rules plugin earlier in the pipeline.
             match root {
                 pc::RootLike::Root(r) => {
-                    r.walk_at_rules_if(|name| {
-                        let n = name.to_ascii_lowercase();
-                        matches!(n.as_str(), "keyframes"|"color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property")
-                    }, |node_ref, _| {
-                        if let Some(at) = as_at_rule(&node_ref) {
-                            let tmp = postcss::ast::nodes::Root::new();
-                            tmp.append(at.to_node());
-                            if let Ok(mut res) = tmp.to_result() {
-                                let css = res.css().to_string();
-                                collector.push_sheet(css);
+                    r.walk_at_rules_if(
+                        |name| {
+                            let n = name.to_ascii_lowercase();
+                            matches!(
+                                n.as_str(),
+                                "keyframes"
+                                    | "color-profile"
+                                    | "counter-style"
+                                    | "font-face"
+                                    | "font-palette-values"
+                                    | "page"
+                                    | "property"
+                            )
+                        },
+                        |node_ref, _| {
+                            if let Some(at) = as_at_rule(&node_ref) {
+                                let tmp = postcss::ast::nodes::Root::new();
+                                tmp.append(at.to_node());
+                                if let Ok(mut res) = tmp.to_result() {
+                                    let css = res.css().to_string();
+                                    collector.push_sheet(css);
+                                }
                             }
-                        }
-                        true
-                    });
+                            true
+                        },
+                    );
                 }
                 pc::RootLike::Document(d) => {
-                    d.walk_at_rules_if(|name| {
-                        let n = name.to_ascii_lowercase();
-                        matches!(n.as_str(), "keyframes"|"color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property")
-                    }, |node_ref, _| {
-                        if let Some(at) = as_at_rule(&node_ref) {
-                            let tmp = postcss::ast::nodes::Root::new();
-                            tmp.append(at.to_node());
-                            if let Ok(mut res) = tmp.to_result() {
-                                let css = res.css().to_string();
-                                collector.push_sheet(css);
+                    d.walk_at_rules_if(
+                        |name| {
+                            let n = name.to_ascii_lowercase();
+                            matches!(
+                                n.as_str(),
+                                "keyframes"
+                                    | "color-profile"
+                                    | "counter-style"
+                                    | "font-face"
+                                    | "font-palette-values"
+                                    | "page"
+                                    | "property"
+                            )
+                        },
+                        |node_ref, _| {
+                            if let Some(at) = as_at_rule(&node_ref) {
+                                let tmp = postcss::ast::nodes::Root::new();
+                                tmp.append(at.to_node());
+                                if let Ok(mut res) = tmp.to_result() {
+                                    let css = res.css().to_string();
+                                    collector.push_sheet(css);
+                                }
                             }
-                        }
-                        true
-                    });
+                            true
+                        },
+                    );
                 }
             }
             Ok(())
@@ -832,9 +1041,12 @@ fn extract_stylesheets_plugin(collector: AtomicCollector, _options: TransformCss
 }
 
 #[cfg(feature = "postcss_engine")]
-fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollector) -> pc::BuiltPlugin {
-    use postcss::list::comma;
+fn atomicify_rules_plugin(
+    options: TransformCssOptions,
+    collector: AtomicCollector,
+) -> pc::BuiltPlugin {
     use crate::utils_hash::hash;
+    use postcss::list::comma;
 
     #[derive(Clone)]
     struct Ctx<'a> {
@@ -845,14 +1057,26 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
     }
 
     fn can_atomicify_at_rule(name: &str) -> bool {
-        matches!(name,
-            "container" | "-moz-document" | "else" | "layer" | "media" | "starting-style" | "supports" | "when"
+        matches!(
+            name,
+            "container"
+                | "-moz-document"
+                | "else"
+                | "layer"
+                | "media"
+                | "starting-style"
+                | "supports"
+                | "when"
         )
     }
 
     fn combine_selectors(parent: &[String], child: &str) -> Vec<String> {
         let child_parts = comma(child);
-        let parents = if parent.is_empty() { vec!["&".to_string()] } else { parent.to_vec() };
+        let parents = if parent.is_empty() {
+            vec!["&".to_string()]
+        } else {
+            parent.to_vec()
+        };
         let mut out = Vec::new();
         for p in parents {
             for c in &child_parts {
@@ -924,7 +1148,9 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
     }
 
     fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
-        if at_chain.is_empty() { return rule_css.to_string(); }
+        if at_chain.is_empty() {
+            return rule_css.to_string();
+        }
         let mut out = String::new();
         for (n, p) in at_chain {
             if p.is_empty() {
@@ -934,7 +1160,9 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
             }
         }
         out.push_str(rule_css);
-        for _ in at_chain { out.push('}'); }
+        for _ in at_chain {
+            out.push('}');
+        }
         out
     }
 
@@ -943,7 +1171,9 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
         let mut cur = Some(node.clone());
         while let Some(n) = cur {
             if let Some(at) = as_at_rule(&n) {
-                if at.name().eq_ignore_ascii_case("keyframes") { return true; }
+                if at.name().eq_ignore_ascii_case("keyframes") {
+                    return true;
+                }
             }
             let borrowed = n.borrow();
             cur = borrowed.parent();
@@ -953,23 +1183,34 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
 
     fn process_rule(rule: &PcRule, ctx: &mut Ctx) {
         // Do not emit atomic rules when nested under ignored at-rules like @property.
-        if ctx
-            .at_chain
-            .iter()
-            .any(|(n, _)| matches!(n.to_ascii_lowercase().as_str(),
-                "color-profile"|"counter-style"|"font-face"|"font-palette-values"|"page"|"property"))
-        {
+        if ctx.at_chain.iter().any(|(n, _)| {
+            matches!(
+                n.to_ascii_lowercase().as_str(),
+                "color-profile"
+                    | "counter-style"
+                    | "font-face"
+                    | "font-palette-values"
+                    | "page"
+                    | "property"
+            )
+        }) {
             return;
         }
         // Emit atomic rules for each declaration in this rule
-                let children = rule.nodes();
-                for child in children {
-                    if let Some(decl) = as_declaration(&child) {
+        let children = rule.nodes();
+        for child in children {
+            if let Some(decl) = as_declaration(&child) {
                 let prop = decl.prop();
                 let orig_value = decl.value();
                 let has_important = decl.important();
                 let mut value_full = orig_value.clone();
-                if has_important { value_full.push_str("!important"); }
+                let mut hash_seed = value_full.clone();
+                if has_important {
+                    hash_seed.push_str("!important");
+                }
+                if has_important {
+                    value_full.push_str("!important");
+                }
                 value_full = minify_value_whitespace(&value_full);
 
                 // JS uses selectors.join("") for group seed
@@ -978,16 +1219,23 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     .iter()
                     .map(|s| normalized_selector(s))
                     .collect();
-                let selectors_joined_for_hash = if normalized_list.len() == 1 && normalized_list[0] == "&" {
-                    // JS atomicify receives `undefined` for selectors in this path; template literal coerces to 'undefined'
-                    "undefined".to_string()
-                } else {
-                    normalized_list.join("")
-                };
+                let selectors_joined_for_hash =
+                    if normalized_list.len() == 1 && normalized_list[0] == "&" {
+                        // JS atomicify receives `undefined` for selectors in this path; template literal coerces to 'undefined'
+                        "undefined".to_string()
+                    } else {
+                        normalized_list.join("")
+                    };
                 let mut group_seed = String::new();
-                if let Some(prefix) = &ctx.opts.class_hash_prefix { group_seed.push_str(prefix); }
+                if let Some(prefix) = &ctx.opts.class_hash_prefix {
+                    group_seed.push_str(prefix);
+                }
                 let at_label2 = at_chain_label(&ctx.at_chain);
-                let at_seg = if at_label2.is_empty() { "undefined" } else { at_label2.as_str() };
+                let at_seg = if at_label2.is_empty() {
+                    "undefined"
+                } else {
+                    at_label2.as_str()
+                };
                 group_seed.push_str(at_seg);
                 group_seed.push_str(&selectors_joined_for_hash);
                 group_seed.push_str(&prop);
@@ -996,14 +1244,10 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                     let at_dbg = at_chain_label(&ctx.at_chain);
                     eprintln!(
                         "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
-                        at_dbg,
-                        selectors_joined_for_hash,
-                        prop,
-                        group_seed,
-                        group
+                        at_dbg, selectors_joined_for_hash, prop, group_seed, group
                     );
                 }
-                let value_hash = hash(&value_full).chars().take(4).collect::<String>();
+                let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
                 let class = format!("_{}{}", group, value_hash);
                 ctx.collector.push_class(class.clone());
                 // Replace '&' with class selector for each normalized selector
@@ -1028,13 +1272,15 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 let mut decls = String::new();
                 // Known case: fit-content needs -moz-fit-content for width-like properties
                 let lower_val_plain = orig_value.to_ascii_lowercase();
-                if matches!(prop.as_str(), "width"|"min-width"|"max-width")
+                if matches!(prop.as_str(), "width" | "min-width" | "max-width")
                     && lower_val_plain.trim() == "fit-content"
                 {
                     decls.push_str(&prop);
                     decls.push(':');
                     decls.push_str("-moz-fit-content");
-                    if has_important { decls.push_str("!important"); }
+                    if has_important {
+                        decls.push_str("!important");
+                    }
                     decls.push(';');
                 }
                 // Future: additional value-level vendor insertions can be added here to match Autoprefixer
@@ -1099,8 +1345,11 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 let at_label = at_chain_label(&at_chain);
 
                 let prop = decl.prop();
-                let mut value_full = decl.value();
-                // Normalize color values pre-hash like the original pipeline.
+                let raw_value = decl.value();
+                let mut hash_seed = raw_value.clone();
+                if decl.important() { hash_seed.push_str("!important"); }
+                let mut value_full = raw_value;
+                // Normalize color values before serialization, but keep hash_seed untouched.
                 fn minify_color_value(value: &str) -> String {
                     let trimmed = value.trim();
                     if trimmed.is_empty() { return value.to_string(); }
@@ -1131,11 +1380,11 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                         group_seed,
                         group
                     );
-                    if prop == "margin-left" {
-                        eprintln!("[atomicify.hash.postcss] value='{}'", value_full);
-                    }
+                        if prop == "margin-left" {
+                            eprintln!("[atomicify.hash.postcss] value='{}'", hash_seed);
+                        }
                 }
-                let value_hash = hash(&value_full).chars().take(4).collect::<String>();
+                let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
                 let full_class = format!("_{}{}", group, value_hash);
                 collector.push_class(full_class.clone());
                 let used_class = if let Some(map) = &opts.class_name_compression_map {
@@ -1241,7 +1490,10 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                 for child in rule.nodes() {
                     if let Some(decl) = as_declaration(&child) {
                         let prop = decl.prop();
-                        let mut value_full = decl.value();
+                        let raw_value = decl.value();
+                        let mut hash_seed = raw_value.clone();
+                        if decl.important() { hash_seed.push_str("!important"); }
+                        let mut value_full = raw_value;
                         value_full = minify_color_value(&value_full);
                         if decl.important() { value_full.push_str("!important"); }
                         value_full = minify_value_whitespace(&value_full);
@@ -1266,7 +1518,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                                 group
                             );
                         }
-                        let value_hash = hash(&value_full).chars().take(4).collect::<String>();
+                        let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
                         let full_class = format!("_{}{}", group, value_hash);
                         collector.push_class(full_class.clone());
                         // Replace using compressed class if map provided.
@@ -1296,7 +1548,10 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                         for gc in nested.nodes() {
                             if let Some(nested_decl) = as_declaration(&gc) {
                                 let prop = nested_decl.prop();
-                                let mut value_full = nested_decl.value();
+                                let raw_value = nested_decl.value();
+                                let mut hash_seed = raw_value.clone();
+                                if nested_decl.important() { hash_seed.push_str("!important"); }
+                                let mut value_full = raw_value;
                                 value_full = minify_color_value(&value_full);
                                 if nested_decl.important() { value_full.push_str("!important"); }
                                 value_full = minify_value_whitespace(&value_full);
@@ -1318,7 +1573,7 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                                         group
                                     );
                                 }
-                                let value_hash = hash(&value_full).chars().take(4).collect::<String>();
+                                let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
                                 let full_class = format!("_{}{}", group, value_hash);
                                 collector.push_class(full_class.clone());
                                 let used_class = if let Some(map) = &opts.class_name_compression_map {
@@ -1331,17 +1586,17 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
                                 for norm in &normalized_list {
                                     replaced.push(norm.replace('&', &format!(".{}", used_class)));
                                 }
-                        let mut selector_joined = replaced.join(", ");
-                        if let Some(ph) = &opts.class_hash_prefix { let _ = ph; }
-                        if let Some(ph) = &opts.declaration_placeholder {
-                            if !ph.is_empty() {
-                                let needle = format!(" {}", ph);
-                                selector_joined = selector_joined.replace(&needle, "");
-                                selector_joined = selector_joined.replace(ph, "");
-                                selector_joined = selector_joined.trim().to_string();
-                            }
-                        }
-                        let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
+                                let mut selector_joined = replaced.join(", ");
+                                if let Some(ph) = &opts.class_hash_prefix { let _ = ph; }
+                                if let Some(ph) = &opts.declaration_placeholder {
+                                    if !ph.is_empty() {
+                                        let needle = format!(" {}", ph);
+                                        selector_joined = selector_joined.replace(&needle, "");
+                                        selector_joined = selector_joined.replace(ph, "");
+                                        selector_joined = selector_joined.trim().to_string();
+                                    }
+                                }
+                                let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
                                 collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
                             }
                         }
@@ -1363,12 +1618,13 @@ fn atomicify_rules_plugin(options: TransformCssOptions, collector: AtomicCollect
 pub fn transform_css_via_postcss(
     css: &str,
     mut options: TransformCssOptions,
-)
--> Result<TransformCssResult, CssTransformError> {
+) -> Result<TransformCssResult, CssTransformError> {
     if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
         eprintln!("[postcss-pipeline] input css: {}", css.replace('\n', "\\n"));
     }
-    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss begin"); }
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[postcss] via-postcss begin");
+    }
     // Do not string-wrap bare declarations here; the engine plugin 'wrap-bare-decls'
     // promotes them into an empty-selector rule before other plugins run.
     let input_css: String = css.to_string();
@@ -1378,7 +1634,9 @@ pub fn transform_css_via_postcss(
     let mut processor = build_processor(&options, &collector);
 
     // First attempt to process the CSS directly.
-    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process initial"); }
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[postcss] process initial");
+    }
     let mut result = match processor.process(&input_css) {
         Ok(res) => res,
         Err(err) => {
@@ -1390,34 +1648,52 @@ pub fn transform_css_via_postcss(
             let collector = AtomicCollector::default();
             processor = build_processor(&options, &collector);
             // Retry with wrapped input; if this fails, surface the original error.
-            if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process wrapped"); }
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                eprintln!("[postcss] process wrapped");
+            }
             match processor.process(&wrapped) {
                 Ok(res) => res,
-                Err(_) => return Err(CssTransformError::from_message(format!("postcss error: {err}"))),
+                Err(_) => {
+                    return Err(CssTransformError::from_message(format!(
+                        "postcss error: {err}"
+                    )))
+                }
             }
         }
     };
     // Force evaluation so plugin visitors run (PostCSS is lazy),
     // but avoid full stringification for performance.
-    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] ensure visitors run"); }
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[postcss] ensure visitors run");
+    }
     let _ = result.result();
 
     // Collect atomic outputs from the plugin.
-    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] take collector"); }
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[postcss] take collector");
+    }
     let (mut sheets, mut class_names) = collector.take();
     // Minimal post-process to guarantee -moz-fit-content is present for width-like properties
     // when emitting via the engine path. Guarded to avoid duplicates.
-    if std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true) {
+    if std::env::var("AUTOPREFIXER")
+        .map(|v| v != "off")
+        .unwrap_or(true)
+    {
         for sheet in &mut sheets {
             let keys = ["min-width", "max-width", "width"];
             for key in keys.iter() {
                 // Skip if already has -moz-fit-content for this key
                 let moz_sig = format!("{}:-moz-fit-content", key);
-                if sheet.contains(&moz_sig) { continue; }
+                if sheet.contains(&moz_sig) {
+                    continue;
+                }
                 // Important form first
                 let needle_imp = format!("{}:fit-content!important", key);
                 if sheet.contains(&needle_imp) {
-                    let repl = format!("{}:-moz-fit-content!important;{}:fit-content!important", key, key);
+                    let repl = format!(
+                        "{}:-moz-fit-content!important;{}:fit-content!important",
+                        key, key
+                    );
                     *sheet = sheet.replace(&needle_imp, &repl);
                     continue;
                 }
@@ -1440,13 +1716,19 @@ pub fn transform_css_via_postcss(
         options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
         let collector2 = AtomicCollector::default();
         let processor2 = build_processor(&options, &collector2);
-        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] process wrapped 2"); }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[postcss] process wrapped 2");
+        }
         match processor2.process(&wrapped) {
             Ok(mut res2) => {
                 // Force evaluation without stringifying output
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] ensure visitors run 2"); }
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    eprintln!("[postcss] ensure visitors run 2");
+                }
                 let _ = res2.result();
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] take collector 2"); }
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    eprintln!("[postcss] take collector 2");
+                }
                 let (s2, mut c2) = collector2.take();
                 if !s2.is_empty() {
                     sheets = s2;
@@ -1469,14 +1751,19 @@ pub fn transform_css_via_postcss(
     }
     fn pseudo_score(selector: &str) -> usize {
         let s = selector.trim();
-        for (idx, pseudo) in crate::postcss::utils::style_ordering::STYLE_ORDER.iter().enumerate() {
-            if s.ends_with(pseudo) { return idx + 1; }
+        for (idx, pseudo) in crate::postcss::utils::style_ordering::STYLE_ORDER
+            .iter()
+            .enumerate()
+        {
+            if s.ends_with(pseudo) {
+                return idx + 1;
+            }
         }
         0
     }
     fn first_property(sheet: &str) -> Option<String> {
         if let Some(open) = sheet.find('{') {
-            let after = &sheet[open+1..];
+            let after = &sheet[open + 1..];
             if let Some(colon) = after.find(':') {
                 return Some(after[..colon].trim().to_string());
             }
@@ -1484,11 +1771,20 @@ pub fn transform_css_via_postcss(
         None
     }
     #[derive(Clone)]
-    struct SheetInfo { idx: usize, text: String }
+    struct SheetInfo {
+        idx: usize,
+        text: String,
+    }
     #[derive(Clone)]
     enum SheetKind {
-        CatchAll { score: usize },
-        AtRule { name: String, query: String, parsed: Vec<crate::postcss::plugins::at_rules::types::ParsedAtRule> },
+        CatchAll {
+            score: usize,
+        },
+        AtRule {
+            name: String,
+            query: String,
+            parsed: Vec<crate::postcss::plugins::at_rules::types::ParsedAtRule>,
+        },
     }
     fn classify(sheet: &str) -> SheetKind {
         if sheet.starts_with('@') {
@@ -1498,54 +1794,96 @@ pub fn transform_css_via_postcss(
             let name = parts.next().unwrap_or("").to_string();
             let rest = parts.next().unwrap_or("");
             let query = rest.split('{').next().unwrap_or("").trim().to_string();
-            let parsed = if name == "media" { crate::postcss::plugins::at_rules::parse_media_query::parse_media_query(&query) } else { Vec::new() };
-            SheetKind::AtRule { name, query, parsed }
+            let parsed = if name == "media" {
+                crate::postcss::plugins::at_rules::parse_media_query::parse_media_query(&query)
+            } else {
+                Vec::new()
+            };
+            SheetKind::AtRule {
+                name,
+                query,
+                parsed,
+            }
         } else {
-            SheetKind::CatchAll { score: pseudo_score(&first_selector_text(sheet)) }
+            SheetKind::CatchAll {
+                score: pseudo_score(&first_selector_text(sheet)),
+            }
         }
     }
     fn cmp_at(a: &SheetKind, b: &SheetKind) -> std::cmp::Ordering {
         use std::cmp::Ordering;
         match (a, b) {
-            (SheetKind::CatchAll{..}, SheetKind::AtRule{..}) => Ordering::Less,
-            (SheetKind::AtRule{..}, SheetKind::CatchAll{..}) => Ordering::Greater,
-            (SheetKind::CatchAll{score: sa}, SheetKind::CatchAll{score: sb}) => sa.cmp(sb),
-            (SheetKind::AtRule{name: na, query: qa, parsed: pa}, SheetKind::AtRule{name: nb, query: qb, parsed: pb}) => {
+            (SheetKind::CatchAll { .. }, SheetKind::AtRule { .. }) => Ordering::Less,
+            (SheetKind::AtRule { .. }, SheetKind::CatchAll { .. }) => Ordering::Greater,
+            (SheetKind::CatchAll { score: sa }, SheetKind::CatchAll { score: sb }) => sa.cmp(sb),
+            (
+                SheetKind::AtRule {
+                    name: na,
+                    query: qa,
+                    parsed: pa,
+                },
+                SheetKind::AtRule {
+                    name: nb,
+                    query: qb,
+                    parsed: pb,
+                },
+            ) => {
                 // Same comparator as sort_at_rules
                 let name_cmp = na.cmp(nb);
-                if name_cmp != Ordering::Equal { return name_cmp; }
+                if name_cmp != Ordering::Equal {
+                    return name_cmp;
+                }
                 let limit = pa.len().min(pb.len());
                 for i in 0..limit {
-                    let a = &pa[i]; let b = &pb[i];
-                    let key_cmp = a.sort_key().cmp(&b.sort_key()); if key_cmp != Ordering::Equal { return key_cmp; }
+                    let a = &pa[i];
+                    let b = &pb[i];
+                    let key_cmp = a.sort_key().cmp(&b.sort_key());
+                    if key_cmp != Ordering::Equal {
+                        return key_cmp;
+                    }
                     if (a.length - b.length).abs() > f64::EPSILON {
                         if a.comparison_operator.includes_greater() {
-                            if let Some(ord) = a.length.partial_cmp(&b.length) { return ord; }
+                            if let Some(ord) = a.length.partial_cmp(&b.length) {
+                                return ord;
+                            }
                         } else {
-                            if let Some(ord) = b.length.partial_cmp(&a.length) { return ord; }
+                            if let Some(ord) = b.length.partial_cmp(&a.length) {
+                                return ord;
+                            }
                         }
                     }
                 }
-                if (pa.len() + pb.len() > 0) && pa.len() != pb.len() { return pa.len().cmp(&pb.len()); }
+                if (pa.len() + pb.len() > 0) && pa.len() != pb.len() {
+                    return pa.len().cmp(&pb.len());
+                }
                 qa.cmp(qb)
             }
         }
     }
-    let mut paired: Vec<(SheetKind, SheetInfo)> = sheets.iter().cloned().enumerate().map(|(i, s)| (classify(&s), SheetInfo{ idx: i, text: s })).collect();
+    let mut paired: Vec<(SheetKind, SheetInfo)> = sheets
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, s)| (classify(&s), SheetInfo { idx: i, text: s }))
+        .collect();
     paired.sort_by(|(ka, ia), (kb, ib)| {
         use std::cmp::Ordering;
         let mut ord = match (ka, kb) {
-            (SheetKind::CatchAll{score: sa}, SheetKind::CatchAll{score: sb}) => {
+            (SheetKind::CatchAll { score: sa }, SheetKind::CatchAll { score: sb }) => {
                 let mut o = sa.cmp(sb);
                 if o == Ordering::Equal {
                     // Fallback to shorthand bucket ordering for identical pseudo score
                     let ba = first_property(&ia.text).and_then(|p| {
-                        use crate::postcss::plugins::sort_shorthand_declarations::{shorthand_bucket, parent_shorthand_for};
+                        use crate::postcss::plugins::sort_shorthand_declarations::{
+                            parent_shorthand_for, shorthand_bucket,
+                        };
                         shorthand_bucket(&p)
                             .or_else(|| parent_shorthand_for(&p).and_then(shorthand_bucket))
                     });
                     let bb = first_property(&ib.text).and_then(|p| {
-                        use crate::postcss::plugins::sort_shorthand_declarations::{shorthand_bucket, parent_shorthand_for};
+                        use crate::postcss::plugins::sort_shorthand_declarations::{
+                            parent_shorthand_for, shorthand_bucket,
+                        };
                         shorthand_bucket(&p)
                             .or_else(|| parent_shorthand_for(&p).and_then(shorthand_bucket))
                     });
@@ -1560,7 +1898,9 @@ pub fn transform_css_via_postcss(
             }
             _ => cmp_at(ka, kb),
         };
-        if ord == Ordering::Equal { ord = ia.idx.cmp(&ib.idx); }
+        if ord == Ordering::Equal {
+            ord = ia.idx.cmp(&ib.idx);
+        }
         ord
     });
     // Group identical at-rules into a single sheet with concatenated inner rules, preserving first appearance order.
@@ -1575,8 +1915,13 @@ pub fn transform_css_via_postcss(
             if let Some(brace_pos) = s.find('{') {
                 let key = s[..brace_pos].to_string();
                 let inner = &s[brace_pos + 1..s.rfind('}').unwrap_or(s.len())];
-                group_map.entry(key.clone()).or_default().push(inner.to_string());
-                if !group_order.contains(&key) { group_order.push(key); }
+                group_map
+                    .entry(key.clone())
+                    .or_default()
+                    .push(inner.to_string());
+                if !group_order.contains(&key) {
+                    group_order.push(key);
+                }
             }
         } else {
             non_at_indices.push((idx, s.clone()));
@@ -1594,7 +1939,9 @@ pub fn transform_css_via_postcss(
                 if produced_at.insert(key.clone()) {
                     if let Some(parts) = group_map.get(&key) {
                         let mut joined = String::new();
-                        for part in parts { joined.push_str(part); }
+                        for part in parts {
+                            joined.push_str(part);
+                        }
                         output.push(format!("{}{{{}}}", key, joined));
                     } else {
                         output.push(info.text);
@@ -1613,9 +1960,13 @@ pub fn transform_css_via_postcss(
     fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
         if let Some(dot) = sheet.find('.') {
             let rest = &sheet[dot + 1..];
-            let end = rest.find(|c: char| c == '{' || c == ' ' || c == ',').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == '{' || c == ' ' || c == ',')
+                .unwrap_or(rest.len());
             let name = &rest[..end];
-            if !name.is_empty() { return Some(name.to_string()); }
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
         }
         None
     }
@@ -1629,12 +1980,19 @@ pub fn transform_css_via_postcss(
 
     if sheets.is_empty() {
         // Final fallback: run the SWC-backed pipeline to mirror Babel output exactly.
-        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] fallback to swc"); }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[postcss] fallback to swc");
+        }
         return transform_css_via_swc_pipeline(css, options);
     }
 
-    if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[postcss] via-postcss end"); }
-    Ok(TransformCssResult { sheets, class_names })
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[postcss] via-postcss end");
+    }
+    Ok(TransformCssResult {
+        sheets,
+        class_names,
+    })
 }
 fn expand_shorthands_plugin() -> pc::BuiltPlugin {
     // Deprecated shim; real expansion is handled by expand_shorthands_engine::plugin()
@@ -1693,14 +2051,10 @@ fn wrap_bare_declarations_plugin(options: TransformCssOptions) -> pc::BuiltPlugi
                             let _ = d.clone();
                             d.borrow();
                             // Remove using low-level Node::remove by index
-                            if let Some(idx) = d
-                                .borrow()
-                                .parent()
-                                .and_then(|p| {
-                                    let b = p.borrow();
-                                    b.nodes.iter().position(|n| std::ptr::eq(n, &d))
-                                })
-                            {
+                            if let Some(idx) = d.borrow().parent().and_then(|p| {
+                                let b = p.borrow();
+                                b.nodes.iter().position(|n| std::ptr::eq(n, &d))
+                            }) {
                                 postcss::ast::Node::remove(&d.borrow().parent().unwrap(), idx);
                             }
                             wrapper.append(d);

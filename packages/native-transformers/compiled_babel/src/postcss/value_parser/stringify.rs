@@ -16,12 +16,22 @@ pub fn stringify(nodes: &[Node]) -> String {
                 out.push_str("*/");
             }
             Node::Word { value } => out.push_str(value),
-            Node::Div { value, before, after } => {
+            Node::Div {
+                value,
+                before,
+                after,
+            } => {
                 out.push_str(before);
                 out.push_str(value);
                 out.push_str(after);
             }
-            Node::Function { value, nodes, before, after, .. } => {
+            Node::Function {
+                value,
+                nodes,
+                before,
+                after,
+                ..
+            } => {
                 out.push_str(value);
                 out.push('(');
                 out.push_str(before);
@@ -33,4 +43,3 @@ pub fn stringify(nodes: &[Node]) -> String {
     }
     out
 }
-

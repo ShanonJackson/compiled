@@ -6,7 +6,9 @@ fn first_property_from_sheet(sheet: &str) -> Option<String> {
         if let Some(colon) = rest.find(':') {
             let prop = &rest[..colon];
             let trimmed = prop.trim();
-            if !trimmed.is_empty() { return Some(trimmed.to_string()); }
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
         }
     }
     None
@@ -15,41 +17,108 @@ fn first_property_from_sheet(sheet: &str) -> Option<String> {
 fn shorthand_bucket(prop: &str) -> Option<u32> {
     match prop {
         "all" => Some(0),
-        "animation"|"animation-range"|"background"|"border"|"border-image"|"border-radius"|
-        "column-rule"|"columns"|"contain-intrinsic-size"|"container"|"flex"|"flex-flow"|
-        "font"|"font-synthesis"|"gap"|"grid"|"grid-area"|"inset"|"list-style"|"mask"|
-        "mask-border"|"offset"|"outline"|"overflow"|"overscroll-behavior"|"padding"|
-        "place-content"|"place-items"|"place-self"|"position-try"|"scroll-margin"|
-        "scroll-padding"|"scroll-timeline"|"text-decoration"|"text-emphasis"|"text-wrap"|
-        "transition"|"view-timeline" => Some(1),
-        "border-color"|"border-style"|"border-width"|"font-variant"|"grid-column"|"grid-row"|
-        "grid-template"|"inset-block"|"inset-inline"|"margin-block"|"margin-inline"|
-        "padding-block"|"padding-inline"|"scroll-margin-block"|"scroll-margin-inline"|
-        "scroll-padding-block"|"scroll-padding-inline" => Some(2),
-        "border-block"|"border-inline" => Some(3),
-        "border-top"|"border-right"|"border-bottom"|"border-left" => Some(4),
-        "border-block-start"|"border-block-end"|"border-inline-start"|"border-inline-end" => Some(5),
+        "animation"
+        | "animation-range"
+        | "background"
+        | "border"
+        | "border-image"
+        | "border-radius"
+        | "column-rule"
+        | "columns"
+        | "contain-intrinsic-size"
+        | "container"
+        | "flex"
+        | "flex-flow"
+        | "font"
+        | "font-synthesis"
+        | "gap"
+        | "grid"
+        | "grid-area"
+        | "inset"
+        | "list-style"
+        | "mask"
+        | "mask-border"
+        | "offset"
+        | "outline"
+        | "overflow"
+        | "overscroll-behavior"
+        | "padding"
+        | "place-content"
+        | "place-items"
+        | "place-self"
+        | "position-try"
+        | "scroll-margin"
+        | "scroll-padding"
+        | "scroll-timeline"
+        | "text-decoration"
+        | "text-emphasis"
+        | "text-wrap"
+        | "transition"
+        | "view-timeline" => Some(1),
+        "border-color"
+        | "border-style"
+        | "border-width"
+        | "font-variant"
+        | "grid-column"
+        | "grid-row"
+        | "grid-template"
+        | "inset-block"
+        | "inset-inline"
+        | "margin-block"
+        | "margin-inline"
+        | "padding-block"
+        | "padding-inline"
+        | "scroll-margin-block"
+        | "scroll-margin-inline"
+        | "scroll-padding-block"
+        | "scroll-padding-inline" => Some(2),
+        "border-block" | "border-inline" => Some(3),
+        "border-top" | "border-right" | "border-bottom" | "border-left" => Some(4),
+        "border-block-start" | "border-block-end" | "border-inline-start" | "border-inline-end" => {
+            Some(5)
+        }
         _ => None,
     }
 }
 
 fn parent_shorthand(prop: &str) -> Option<&'static str> {
     match prop {
-        "padding-top"|"padding-right"|"padding-bottom"|"padding-left" => Some("padding"),
-        "padding-block-start"|"padding-block-end" => Some("padding-block"),
-        "padding-inline-start"|"padding-inline-end" => Some("padding-inline"),
-        "margin-top"|"margin-right"|"margin-bottom"|"margin-left" => Some("margin"),
-        "margin-block-start"|"margin-block-end" => Some("margin-block"),
-        "margin-inline-start"|"margin-inline-end" => Some("margin-inline"),
-        "border-bottom-color"|"border-top-color"|"border-left-color"|"border-right-color"|
-        "border-inline-color"|"border-block-color"|"border-inline-start-color"|"border-inline-end-color"|
-        "border-block-start-color"|"border-block-end-color" => Some("border-color"),
-        "border-bottom-style"|"border-top-style"|"border-left-style"|"border-right-style"|
-        "border-inline-style"|"border-block-style"|"border-inline-start-style"|"border-inline-end-style"|
-        "border-block-start-style"|"border-block-end-style" => Some("border-style"),
-        "border-bottom-width"|"border-top-width"|"border-left-width"|"border-right-width"|
-        "border-inline-width"|"border-block-width"|"border-inline-start-width"|"border-inline-end-width"|
-        "border-block-start-width"|"border-block-end-width" => Some("border-width"),
+        "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => Some("padding"),
+        "padding-block-start" | "padding-block-end" => Some("padding-block"),
+        "padding-inline-start" | "padding-inline-end" => Some("padding-inline"),
+        "margin-top" | "margin-right" | "margin-bottom" | "margin-left" => Some("margin"),
+        "margin-block-start" | "margin-block-end" => Some("margin-block"),
+        "margin-inline-start" | "margin-inline-end" => Some("margin-inline"),
+        "border-bottom-color"
+        | "border-top-color"
+        | "border-left-color"
+        | "border-right-color"
+        | "border-inline-color"
+        | "border-block-color"
+        | "border-inline-start-color"
+        | "border-inline-end-color"
+        | "border-block-start-color"
+        | "border-block-end-color" => Some("border-color"),
+        "border-bottom-style"
+        | "border-top-style"
+        | "border-left-style"
+        | "border-right-style"
+        | "border-inline-style"
+        | "border-block-style"
+        | "border-inline-start-style"
+        | "border-inline-end-style"
+        | "border-block-start-style"
+        | "border-block-end-style" => Some("border-style"),
+        "border-bottom-width"
+        | "border-top-width"
+        | "border-left-width"
+        | "border-right-width"
+        | "border-inline-width"
+        | "border-block-width"
+        | "border-inline-start-width"
+        | "border-inline-end-width"
+        | "border-block-start-width"
+        | "border-block-end-width" => Some("border-width"),
         _ => None,
     }
 }
@@ -58,7 +127,10 @@ fn order_class_names_by_bucket(class_names: &[String], sheets: &[String]) -> Vec
     use std::collections::HashMap;
     let mut prop_map: HashMap<&str, String> = HashMap::new();
     for sheet in sheets {
-        if let (Some(class), Some(prop)) = (extract_first_class_from_sheet(sheet), first_property_from_sheet(sheet)) {
+        if let (Some(class), Some(prop)) = (
+            extract_first_class_from_sheet(sheet),
+            first_property_from_sheet(sheet),
+        ) {
             prop_map.insert(Box::leak(class.into_boxed_str()), prop);
         }
     }
@@ -66,7 +138,9 @@ fn order_class_names_by_bucket(class_names: &[String], sheets: &[String]) -> Vec
     with_index.sort_by_key(|(idx, name)| {
         let prop = prop_map.get(name.as_str()).map(|s| s.as_str());
         let bucket = prop
-            .and_then(|p| shorthand_bucket(p).or_else(|| parent_shorthand(p).and_then(shorthand_bucket)))
+            .and_then(|p| {
+                shorthand_bucket(p).or_else(|| parent_shorthand(p).and_then(shorthand_bucket))
+            })
             .unwrap_or(u32::MAX);
         (bucket, *idx)
     });
@@ -150,7 +224,7 @@ fn extract_first_class_from_sheet(sheet: &str) -> Option<String> {
         // class name runs until next '{' or whitespace/comma
         let rest = &sheet[dot + 1..];
         let end = rest
-            .find(|c: char| c == '{' || c == ' ' || c == ',' )
+            .find(|c: char| c == '{' || c == ' ' || c == ',')
             .unwrap_or(rest.len());
         let name = &rest[..end];
         if !name.is_empty() {
@@ -236,7 +310,9 @@ fn record_style_rules(sheets: &[String], meta: &Metadata) {
 
     let mut state = meta.state_mut();
     for sheet in sheets {
-        state.style_rules.insert(sheet.clone());
+        let normalized =
+            crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing(sheet);
+        state.style_rules.insert(normalized);
     }
 }
 
@@ -309,8 +385,7 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let css_result =
                 transform_css(&logical.css, options).unwrap_or_else(|err| panic!("{err}"));
             let ordered = css_result.class_names.clone();
-            let compressed =
-                compress_class_names_for_runtime(&ordered, compression_map.as_ref());
+            let compressed = compress_class_names_for_runtime(&ordered, compression_map.as_ref());
             let class_name_literal = string_literal(compressed.join(" "));
 
             TransformCssItemResult {
@@ -340,8 +415,7 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
             let ordered = css_result.class_names.clone();
-            let compressed =
-                compress_class_names_for_runtime(&ordered, compression_map.as_ref());
+            let compressed = compress_class_names_for_runtime(&ordered, compression_map.as_ref());
             let class_name = compressed.join(" ");
             let class_expression = if class_name.trim().is_empty() {
                 None
@@ -543,6 +617,3 @@ mod tests {
         }
     }
 }
-
-
-

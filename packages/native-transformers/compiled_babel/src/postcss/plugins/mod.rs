@@ -7,6 +7,10 @@ pub mod atomicify_rules;
 // colormin is not yet enabled; when parity requires it we can add it back.
 // #[path = "colormin.rs"]
 // pub mod colormin;
+#[path = "colormin_lite.rs"]
+pub mod colormin_lite;
+#[path = "convert-values.rs"]
+pub mod convert_values;
 #[path = "discard-comments.rs"]
 pub mod discard_comments;
 #[path = "discard-duplicates.rs"]
@@ -33,31 +37,27 @@ pub mod nested;
 pub mod normalize_css;
 #[path = "normalize_css_engine/mod.rs"]
 pub mod normalize_css_engine;
-#[path = "colormin_lite.rs"]
-pub mod colormin_lite;
-#[path = "convert-values.rs"]
-pub mod convert_values;
 #[path = "normalize-current-color.rs"]
 pub mod normalize_current_color;
 #[path = "normalize-whitespace.rs"]
 pub mod normalize_whitespace;
 // #[path = "ordered-values.rs"]
 // pub mod ordered_values;
+#[cfg(feature = "postcss_engine")]
+#[path = "expand_shorthands_engine.rs"]
+pub mod expand_shorthands_engine;
 #[path = "parent-orphaned-pseudos.rs"]
 pub mod parent_orphaned_pseudos;
 #[path = "reduce-initial/mod.rs"]
 pub mod reduce_initial;
 #[path = "sort-atomic-style-sheet.rs"]
 pub mod sort_atomic_style_sheet;
-#[cfg(feature = "postcss_engine")]
-#[path = "expand_shorthands_engine.rs"]
-pub mod expand_shorthands_engine;
 #[path = "sort-shorthand-declarations.rs"]
 pub mod sort_shorthand_declarations;
-#[path = "vendor_prefixing_lite.rs"]
-pub mod vendor_prefixing_lite;
 #[path = "vendor_autoprefixer/mod.rs"]
 pub mod vendor_autoprefixer;
+#[path = "vendor_prefixing_lite.rs"]
+pub mod vendor_prefixing_lite;
 #[allow(unused_imports)]
 pub use atomicify_rules::*;
 

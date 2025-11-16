@@ -21,6 +21,7 @@ use crate::class_names::visit_class_names;
 use crate::constants::COMPILED_IMPORT;
 use crate::css_map::{visit_css_map_path, CssMapUsage};
 use crate::css_prop::visit_css_prop;
+use crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing;
 use crate::styled::{visit_styled, StyledVisitResult};
 use crate::types::{
     CleanupAction, CompiledImports, Metadata, PathCleanup, PluginOptions, SharedTransformState,
@@ -116,11 +117,19 @@ impl CompiledBabelTransform {
 
         if metadata.style_rules.is_empty() {
             if !state.style_rules.is_empty() {
-                metadata.style_rules = state.style_rules.iter().cloned().collect();
+                metadata.style_rules = state
+                    .style_rules
+                    .iter()
+                    .map(|rule| normalize_block_value_spacing(rule))
+                    .collect();
             } else if !state.sheets.is_empty() {
                 // Fallback: when the explicit style_rules set has not been populated,
                 // derive style rules from the hoisted sheets map (preserves insertion order).
-                metadata.style_rules = state.sheets.keys().cloned().collect();
+                metadata.style_rules = state
+                    .sheets
+                    .keys()
+                    .map(|rule| normalize_block_value_spacing(rule))
+                    .collect();
             }
         }
 
