@@ -4,8 +4,8 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
-    ExprOrSpread, Ident, Lit, MemberExpr, ObjectLit, Prop, PropName, PropOrSpread, SpreadElement,
-    TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
+    ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, ObjectLit, Prop, PropName, PropOrSpread,
+    SpreadElement, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
 };
 use swc_core::ecma::ast::MemberProp;
 use swc_ecma_codegen::text_writer::JsWriter;
@@ -1168,8 +1168,14 @@ where
     for property in &object.props {
         match property {
             PropOrSpread::Prop(prop) => {
-                let Prop::KeyValue(key_value) = prop.as_ref() else {
-                    continue;
+                let mut synthesized: Option<KeyValueProp> = None;
+                let key_value: &KeyValueProp = match prop.as_ref() {
+                    Prop::KeyValue(key_value) => key_value,
+                    Prop::Shorthand(ident) => synthesized.insert(KeyValueProp {
+                        key: PropName::Ident(ident.clone().into()),
+                        value: Box::new(Expr::Ident(ident.clone())),
+                    }),
+                    _ => continue,
                 };
 
                 let key = object_property_to_string(key_value, meta.clone());

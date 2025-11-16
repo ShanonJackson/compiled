@@ -3,4 +3,4 @@ import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 import { color } from "./tokens";
 const styles = null;
-export const Component = () => <div>Hello</div>;
+export const Component = () => <div className={ax(["_syaz5scu"])}>Hello</div>;
