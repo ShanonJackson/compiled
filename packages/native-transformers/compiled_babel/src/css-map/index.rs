@@ -69,7 +69,12 @@ where
             };
 
             let mut total_sheets: Vec<String> = Vec::new();
-            let mut new_properties: Vec<PropOrSpread> = Vec::with_capacity(object_lit.props.len());
+            let mut new_properties: Vec<PropOrSpread> =
+                Vec::with_capacity(object_lit.props.len());
+            let previous_extract = meta.state().opts.extract;
+            let initial_style_rules = meta.state().style_rules.clone();
+            let initial_sheets = meta.state().sheets.clone();
+            meta.state_mut().opts.extract = Some(false);
 
             for property in &object_lit.props {
                 error_if_not_valid_object_property(property, meta);
@@ -139,6 +144,12 @@ where
             meta.state_mut()
                 .css_map
                 .insert(binding_identifier.sym.to_string(), total_sheets);
+            {
+                let mut state = meta.state_mut();
+                state.opts.extract = previous_extract;
+                state.style_rules = initial_style_rules;
+                state.sheets = initial_sheets;
+            }
 
             ObjectLit {
                 span: object_lit.span,

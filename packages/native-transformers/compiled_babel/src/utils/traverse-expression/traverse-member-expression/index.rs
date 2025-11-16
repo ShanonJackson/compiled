@@ -42,13 +42,19 @@ fn collect_member_expression_meta(expression: &MemberExpr, meta: &mut MemberExpr
             ident.span,
             SyntaxContext::empty(),
         )),
-        MemberProp::Computed(computed) => {
-            if let Expr::Call(call) = &*computed.expr {
+        MemberProp::Computed(computed) => match &*computed.expr {
+            Expr::Ident(ident) => meta.access_path.push(Ident::new(
+                ident.sym.clone(),
+                ident.span,
+                SyntaxContext::empty(),
+            )),
+            Expr::Call(call) => {
                 if let Some(ident) = callee_ident_from_call(call) {
                     meta.access_path.push(ident);
                 }
             }
-        }
+            _ => {}
+        },
         MemberProp::PrivateName(_) => {}
     }
 
@@ -97,13 +103,6 @@ pub fn traverse_member_expression(
     meta: Metadata,
     evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
-    // COMPAT: Do not attempt to resolve computed member expressions (e.g. colors[2]).
-    // Babels evaluateExpression path does not fold these and keeps them dynamic,
-    // which later results in CSS variables for template interpolations instead
-    // of inlining literals or collapsing to the container value.
-    if matches!(expression.prop, MemberProp::Computed(_)) {
-        return create_result_pair(Expr::Member(expression.clone()), meta);
-    }
     traverse_member_expression_with_arguments(expression, meta, None, evaluate_expression)
 }
 
