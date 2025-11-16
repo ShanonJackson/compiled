@@ -137,6 +137,7 @@ mod tests {
     use super::traverse_member_expression;
     use crate::types::{Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_create_result_pair::{create_result_pair, ResultPair};
+    use crate::utils_evaluate_expression::evaluate_expression as real_evaluate_expression;
     use crate::utils_traverse_expression_traverse_call_expression::traverse_call_expression;
     use crate::utils_traverse_expression_traverse_function::traverse_function;
     use crate::utils_traverse_expression_traverse_identifier::traverse_identifier;
@@ -148,7 +149,7 @@ mod tests {
     use swc_core::common::sync::Lrc;
     use swc_core::common::Spanned;
     use swc_core::common::{FileName, SourceMap, DUMMY_SP};
-    use swc_core::ecma::ast::{Expr, Lit, Number, Str};
+    use swc_core::ecma::ast::{Callee, Expr, Lit, Number, Str};
     use swc_ecma_parser::lexer::Lexer;
     use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax};
 
@@ -344,4 +345,56 @@ mod tests {
         let reduced = evaluate(&pair.value, pair.meta.clone());
         assert_number_literal(&reduced.value, 42.0);
     }
+
+    #[test]
+    fn resolves_computed_member_with_real_evaluator() {
+        let expr = parse_expression("variantStyles[variant]");
+        let meta = create_metadata();
+
+        let binding_expr = parse_expression("css({ primary: { color: 'blue' } })");
+        let binding = PartialBindingWithMeta::new(
+            Some(binding_expr),
+            Some(BindingPath::new(Some(DUMMY_SP))),
+            true,
+            meta.clone(),
+            BindingSource::Module,
+        );
+        meta.insert_parent_binding("variantStyles", binding);
+
+        let Expr::Member(member) = expr else {
+            panic!("expected member expression");
+        };
+
+        let pair =
+            traverse_member_expression(&member, meta, real_evaluate_expression as EvaluateExpression);
+        match pair.value {
+            Expr::Call(call) => match call.callee {
+                Callee::Expr(callee) => match callee.as_ref() {
+                    Expr::Ident(ident) => assert_eq!(ident.sym.as_ref(), "css"),
+                    other => panic!("expected identifier callee, found {:?}", other),
+                },
+                _ => panic!("expected callee expression"),
+            },
+            other => panic!("expected call expression, found {:?}", other),
+        }
+    }
+
+    #[test]
+    fn collects_binding_for_computed_member_expression() {
+        let expr = parse_expression("variantStyles[variant]");
+
+        let Expr::Member(member) = expr else {
+            panic!("expected member expression");
+        };
+
+        let meta = super::get_member_expression_meta(&member);
+        assert!(meta.binding_identifier.is_some());
+        assert_eq!(meta.access_path.len(), 1);
+        assert_eq!(
+            meta.access_path[0].sym.as_ref(),
+            "variant",
+            "expected computed identifier to be captured in access path"
+        );
+    }
+
 }

@@ -77,7 +77,27 @@ pub fn resolve_expression_in_member(
                     evaluate_expression,
                 );
             }
-            Expr::Call(_) | Expr::Member(_) => {
+            Expr::Call(_) => {
+                let is_compiled = {
+                    let state = current_meta.state();
+                    is_compiled_css_call_expression(&current_expression, &state)
+                };
+
+                if is_compiled {
+                    if let Some(resolved) = resolve_compiled_css_call(
+                        &current_expression,
+                        current_meta.clone(),
+                        evaluate_expression,
+                    ) {
+                        result = resolved;
+                    } else {
+                        result = (evaluate_expression)(&current_expression, current_meta.clone());
+                    }
+                } else {
+                    result = (evaluate_expression)(&current_expression, current_meta.clone());
+                }
+            }
+            Expr::Member(_) => {
                 result = (evaluate_expression)(&current_expression, current_meta.clone());
             }
             _ => {

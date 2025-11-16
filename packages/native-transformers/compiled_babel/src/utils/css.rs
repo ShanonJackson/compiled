@@ -194,6 +194,23 @@ pub fn kebab_case(input: &str) -> String {
 }
 
 /// Mirrors the behaviour of `addUnitIfNeeded` from `@compiled/css`.
+fn format_css_number(mut num: f64) -> String {
+    // Normalize -0 to 0 to avoid "-0" outputs.
+    if num == -0.0 {
+        num = 0.0;
+    }
+    let mut string = num.to_string();
+    if string.ends_with(".0") {
+        string.truncate(string.len() - 2);
+    }
+    if string.starts_with("0.") {
+        string.remove(0);
+    } else if string.starts_with("-0.") {
+        string.remove(1);
+    }
+    string
+}
+
 pub fn add_unit_if_needed(property: &str, value: CssValue<'_>) -> String {
     match value {
         CssValue::Null => String::new(),
@@ -201,17 +218,9 @@ pub fn add_unit_if_needed(property: &str, value: CssValue<'_>) -> String {
         CssValue::String(text) => text.trim().to_string(),
         CssValue::Number(num) => {
             if num == 0.0 || UNITLESS_PROPERTIES.contains(property) {
-                let mut string = num.to_string();
-                if string.ends_with(".0") {
-                    string.truncate(string.len() - 2);
-                }
-                string
+                format_css_number(num)
             } else {
-                let mut string = num.to_string();
-                if string.ends_with(".0") {
-                    string.truncate(string.len() - 2);
-                }
-                format!("{}px", string)
+                format!("{}px", format_css_number(num))
             }
         }
     }
@@ -263,7 +272,8 @@ mod tests {
 
     #[test]
     fn add_unit_skips_unitless_properties() {
-        assert_eq!(add_unit_if_needed("opacity", CssValue::Number(0.5)), "0.5");
+        assert_eq!(add_unit_if_needed("opacity", CssValue::Number(0.5)), ".5");
+        assert_eq!(add_unit_if_needed("opacity", CssValue::Number(-0.5)), "-.5");
     }
 
     #[test]

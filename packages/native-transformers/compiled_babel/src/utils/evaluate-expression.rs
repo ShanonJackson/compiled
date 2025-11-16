@@ -319,6 +319,10 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
             return create_result_pair(evaluated, updated_meta);
         }
 
+        if matches!(target_expression, Expr::Member(_)) {
+            return create_result_pair(value, updated_meta);
+        }
+
         return create_result_pair(target_expression.clone(), updated_meta);
     }
 
@@ -516,6 +520,36 @@ mod tests {
         match pair.value {
             Expr::Lit(Lit::Str(Str { value, .. })) => assert_eq!(value.as_ref(), "blue"),
             other => panic!("expected string literal, found {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolves_computed_member_expression_binding() {
+        let meta = create_metadata();
+        {
+            let mut state = meta.state_mut();
+            state.compiled_imports = Some(CompiledImports {
+                css: vec!["css".into()],
+                ..CompiledImports::default()
+            });
+        }
+        let binding_meta = meta.clone();
+
+        let binding = PartialBindingWithMeta::new(
+            Some(parse_expression("css({ primary: { color: 'blue' } })")),
+            Some(BindingPath::new(Some(DUMMY_SP))),
+            true,
+            binding_meta,
+            BindingSource::Module,
+        );
+        meta.insert_parent_binding("variantStyles", binding);
+
+        let expr = parse_expression("variantStyles[variant]");
+        let pair = evaluate_expression(&expr, meta);
+
+        match pair.value {
+            Expr::Object(_) => {}
+            other => panic!("expected object expression, found {:?}", other),
         }
     }
 
