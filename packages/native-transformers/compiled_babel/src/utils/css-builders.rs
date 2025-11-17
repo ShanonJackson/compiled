@@ -1707,7 +1707,12 @@ fn build_css_internal(node: &Expr, meta: &Metadata) -> CssOutput {
 
     if let Expr::Arrow(arrow) = node {
         if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
-            return match &**body {
+            let mut body_expr = body.as_ref();
+            while let Expr::Paren(paren) = body_expr {
+                body_expr = &paren.expr;
+            }
+
+            return match body_expr {
                 Expr::Object(object) => {
                     let mut build_css =
                         |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);

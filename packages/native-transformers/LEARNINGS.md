@@ -14,5 +14,14 @@ Learnings while matching Babel 1:1
 - Logging for Targeted Fixture Debugging
   - Added COMPILED_CLI_TRACE gated logging to the css‑prop path (element names, attributes, found css) and the resolution path (identifier resolution, export alias mapping) to align behavior precisely with Babel without guessing.
 
-These changes and findings help keep the SWC port behaviorally identical to the Babel implementation at the correct abstraction layers (per‑element JSX traversal and resolveBinding semantics), reducing the risk of surface‑level fixes.
+These changes and findings help keep the SWC port behaviorally identical to the Babel implementation at the correct abstraction layers (per-element JSX traversal and resolveBinding semantics), reducing the risk of surface-level fixes.
 
+- CSS Selector Normalization
+  - Symptom: Fixtures such as `css-map-child-selector`, `css-content-selectors`, and `css-child-combinator-spacing` produced different hashes/selector text (missing spaces around combinators or pseudo selectors).
+  - Root cause: Our Rust `normalize_selector` inserted a space before *every* combinator after encountering `&`, whereas Babel only inserts spaces for descendant combinators and preserves the absence of whitespace before `>`, `+`, `~`, `||`, or pseudo selectors when they were written without it.
+  - Fix: Re-implemented `normalize_selector`/`normalize_ampersand_combinators` exactly like Babel – collapse only the leading whitespace after explicit combinators, keep descendant spaces, and insert the `&` in pseudo-leading selectors. Applied the same helper in both the SWC pipeline and the PostCSS-engine path so they cannot drift.
+
+- Parent-Orphaned Pseudos Interaction
+  - Symptom: Selectors like `span &:before` lost the nesting selector once normalization ran, causing Babel and SWC hashes to diverge.
+  - Root cause: The parent-orphaned pseudos plugin only inserted `&` for pseudo-only selectors, but Babel’s pipeline also considers selectors where a descendant combinator precedes the nesting selector.
+  - Fix: Extend `parent_orphaned_pseudos` to insert a nesting selector when the first compound selector lacks one but a descendant combinator exists later, mirroring Babel’s behavior and allowing normalization to proceed identically.
