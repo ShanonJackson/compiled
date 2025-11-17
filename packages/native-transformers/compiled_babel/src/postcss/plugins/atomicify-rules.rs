@@ -77,7 +77,7 @@ struct AtomicifyOptions<'a> {
 }
 
 fn normalize_selectors(selectors: Vec<String>, options: &AtomicifyOptions<'_>) -> Vec<String> {
-    let cleaned = if let Some(placeholder) = options.declaration_placeholder {
+    if let Some(placeholder) = options.declaration_placeholder {
         selectors
             .into_iter()
             .map(|selector| {
@@ -94,35 +94,7 @@ fn normalize_selectors(selectors: Vec<String>, options: &AtomicifyOptions<'_>) -
             .collect()
     } else {
         selectors
-    };
-
-    cleaned
-        .into_iter()
-        .map(|selector| {
-            if let Some(stripped) = collapse_ampersand_whitespace(&selector) {
-                stripped
-            } else {
-                selector
-            }
-        })
-        .collect()
-}
-
-fn collapse_ampersand_whitespace(selector: &str) -> Option<String> {
-    let trimmed = selector.trim_start();
-    if !trimmed.starts_with('&') {
-        return None;
     }
-
-    let remainder = trimmed[1..].trim_start();
-    if remainder.starts_with(':') {
-        let mut collapsed = String::with_capacity(1 + remainder.len());
-        collapsed.push('&');
-        collapsed.push_str(remainder);
-        return Some(collapsed);
-    }
-
-    None
 }
 
 fn atomicify_qualified_rule(
@@ -300,46 +272,122 @@ fn normalize_selector(selector: &str) -> String {
         return "&".to_string();
     }
 
-    if trimmed.starts_with('&') {
-        let without_amp = trimmed[1..].trim_start();
-        if without_amp.starts_with(':') {
-            let mut normalized = String::with_capacity(1 + without_amp.len());
-            normalized.push('&');
-            normalized.push_str(without_amp);
-            return normalized;
+    if trimmed.contains('&') {
+        if trimmed.starts_with(':') && !trimmed.starts_with('&') {
+            return normalize_ampersand_combinators(&format!("&{}", trimmed));
+        }
+
+        return normalize_ampersand_combinators(trimmed);
+    }
+
+    let selector_body = collapse_initial_combinator_whitespace(trimmed);
+
+    let separator = if requires_ampersand_separator(&selector_body) {
+        " "
+    } else {
+        ""
+    };
+
+    format!("&{}{}", separator, selector_body)
+}
+
+fn collapse_initial_combinator_whitespace(selector: &str) -> String {
+    let mut chars = selector.chars().peekable();
+    let mut result = String::new();
+
+    if let Some(first) = chars.next() {
+        result.push(first);
+        let mut skip_whitespace = matches!(first, '>' | '+' | '~');
+
+        if first == '|' {
+            if let Some(&next) = chars.peek() {
+                if next == '|' {
+                    result.push(next);
+                    chars.next();
+                    skip_whitespace = true;
+                }
+            }
+        }
+
+        if skip_whitespace {
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        while let Some(ch) = chars.next() {
+            result.push(ch);
         }
     }
 
-    // If the selector begins with a pseudo and also contains '&' later (e.g. ":focus &"),
-    // mirror Babel by inserting a leading nesting selector for the pseudo: "&:focus &".
-    if trimmed.starts_with(':') && trimmed.contains('&') {
-        if let Some(amp) = trimmed.find('&') {
-            let pseudo = trimmed[..amp].trim();
-            let rest = trimmed[amp..].trim_start();
-            return format!("&{} {}", pseudo, rest);
+    result
+}
+
+fn requires_ampersand_separator(selector: &str) -> bool {
+    match selector.chars().next() {
+        Some(ch) if ch.is_alphanumeric() || matches!(ch, '*' | '>' | '+' | '~' | '|') => true,
+        Some(ch) if matches!(ch, '-' | '_') => true,
+        _ => false,
+    }
+}
+
+fn normalize_ampersand_combinators(selector: &str) -> String {
+    fn combinator_length(chars: &[char], start: usize) -> Option<usize> {
+        match chars.get(start) {
+            Some('>') | Some('+') | Some('~') => Some(1),
+            Some('|') if matches!(chars.get(start + 1), Some('|')) => Some(2),
+            _ => None,
         }
     }
 
-    let normalized = if trimmed.contains('&') {
-        trimmed.to_string()
-    } else if trimmed.starts_with(':') {
-        let mut normalized = String::with_capacity(1 + trimmed.len());
-        normalized.push('&');
-        normalized.push_str(trimmed);
-        normalized
-    } else {
-        format!("& {}", trimmed)
-    };
+    fn needs_space_before_target(ch: Option<char>) -> bool {
+        matches!(ch, Some(c) if c.is_alphanumeric() || matches!(c, '-' | '_'))
+    }
 
-    let minified = if let Some(list) =
-        crate::postcss::utils::selector_stringifier::parse_selector_list_from_str(&normalized)
-    {
-        crate::postcss::utils::selector_stringifier::serialize_selector_list(&list)
-    } else {
-        normalized
-    };
+    let chars: Vec<char> = selector.chars().collect();
+    let len = chars.len();
+    let mut out = String::with_capacity(selector.len());
+    let mut i = 0;
 
-    minified
+    while i < len {
+        let ch = chars[i];
+        if ch == '&' {
+            out.push('&');
+            i += 1;
+
+            while i < len && chars[i].is_whitespace() {
+                i += 1;
+            }
+
+            if let Some(comb_len) = combinator_length(&chars, i) {
+                for offset in 0..comb_len {
+                    out.push(chars[i + offset]);
+                }
+                i += comb_len;
+
+                while i < len && chars[i].is_whitespace() {
+                    i += 1;
+                }
+
+                continue;
+            }
+
+            if needs_space_before_target(chars.get(i).copied()) {
+                out.push(' ');
+            }
+
+            continue;
+        }
+
+        out.push(ch);
+        i += 1;
+    }
+
+    out
 }
 
 fn declaration_name(name: &DeclarationName) -> String {

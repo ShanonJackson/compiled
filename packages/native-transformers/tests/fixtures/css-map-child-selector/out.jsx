@@ -2,6 +2,6 @@
 import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 const styles = {
-	linkField: "_4cvr1q9y _1bahv2br _zulp1sy7 _ca0qdbr4 _n3tddbr4 _1e0c1txw _syaz1wbm _a8iph9n0",
+	linkField: "_4cvr1q9y _1bahv2br _zulp1sy7 _ca0qdbr4 _n3tddbr4 _aonsh9n0 _1e0c1txw _syaz1wbm",
 };
 export const Component = () => <div xcss={styles.linkField}>content</div>;

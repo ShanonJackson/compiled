@@ -1,0 +1,9 @@
+[
+  "@keyframes kjdbdy5{0%, 33%{box-shadow:0 0 0 2px #6554C0,0 0 0 #6554C0}66%, 100%{box-shadow:0 0 0 2px #6554C0,0 0 0 10px rgba(101,84,192,.01)}}",
+  "._5sagi11n{animation-duration:3s}",
+  "._tip812c5{animation-iteration-count:infinite}",
+  "._j7hq1942{animation-name:kjdbdy5}",
+  "._1pgl87ad{animation-timing-function:cubic-bezier(0.55,0.055,0.675,0.19)}",
+  "._16qs1pjd{box-shadow:0 0 0 2px #6554C0}",
+  "@media (prefers-reduced-motion:reduce){._1bumglyw{animation:none}._sedtglyw{transition:none}}"
+]

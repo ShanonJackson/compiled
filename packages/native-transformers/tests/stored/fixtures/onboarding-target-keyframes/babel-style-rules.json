@@ -1,0 +1,9 @@
+[
+  "@keyframes kjdbdy5{0%{box-shadow:0 0 0 2px #6554c0,0 0 0 #6554c0}33%{box-shadow:0 0 0 2px #6554c0,0 0 0 #6554c0}66%{box-shadow:0 0 0 2px #6554c0,0 0 0 10px rgba(101,84,192,.01)}to{box-shadow:0 0 0 2px #6554c0,0 0 0 10px rgba(101,84,192,.01)}}",
+  "._5sagi11n{animation-duration:3s}",
+  "._tip812c5{animation-iteration-count:infinite}",
+  "._j7hq1942{animation-name:kjdbdy5}",
+  "._1pglmcjr{animation-timing-function:cubic-bezier(.55,.055,.675,.19)}",
+  "._16qsezjf{box-shadow:0 0 0 2px #6554c0}",
+  "@media (prefers-reduced-motion:reduce){._1bumglyw{animation:none}._sedtglyw{transition:none}}"
+]

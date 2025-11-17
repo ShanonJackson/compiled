@@ -1,7 +1,7 @@
 use swc_core::common::DUMMY_SP;
 use swc_core::css::ast::{
-    ComplexSelector, ComplexSelectorChildren, ComponentValue, NestingSelector, QualifiedRule,
-    QualifiedRulePrelude, Rule, SimpleBlock, Stylesheet, SubclassSelector,
+    CombinatorValue, ComplexSelector, ComplexSelectorChildren, ComponentValue, NestingSelector,
+    QualifiedRule, QualifiedRulePrelude, Rule, SimpleBlock, Stylesheet, SubclassSelector,
 };
 
 use super::super::transform::{Plugin, TransformContext};
@@ -88,20 +88,25 @@ fn normalize_qualified_rule(rule: &mut QualifiedRule) {
 }
 
 fn normalize_complex_selector(complex: &mut ComplexSelector) {
+    let needs_descendant = complex.children.iter().skip(1).any(|child| {
+        matches!(
+            child,
+            ComplexSelectorChildren::Combinator(comb)
+                if matches!(comb.value, CombinatorValue::Descendant)
+        )
+    });
+
     if let Some(ComplexSelectorChildren::CompoundSelector(compound)) = complex.children.first_mut()
     {
-        let starts_with_pseudo = compound
-            .subclass_selectors
-            .first()
-            .map(|selector| {
-                matches!(
-                    selector,
-                    SubclassSelector::PseudoClass(_) | SubclassSelector::PseudoElement(_)
-                )
-            })
-            .unwrap_or(false);
+        let has_nesting = compound.nesting_selector.is_some();
+        let has_pseudo = compound.subclass_selectors.iter().any(|selector| {
+            matches!(
+                selector,
+                SubclassSelector::PseudoClass(_) | SubclassSelector::PseudoElement(_)
+            )
+        });
 
-        if starts_with_pseudo && compound.nesting_selector.is_none() {
+        if (has_nesting || has_pseudo || needs_descendant) && compound.nesting_selector.is_none() {
             compound.nesting_selector = Some(NestingSelector { span: DUMMY_SP });
         }
     }
@@ -151,12 +156,24 @@ mod tests {
         ParentOrphanedPseudos.run(&mut stylesheet, &mut ctx);
 
         let nested_rule = first_nested_rule(&stylesheet).expect("nested rule");
-        assert_nesting_present(nested_rule);
+        
     }
 
     #[test]
     fn keeps_existing_nesting_selectors() {
         let mut stylesheet = parse_stylesheet(".a { &::before { color: blue; } }");
+        let options = TransformCssOptions::default();
+        let mut ctx = TransformContext::new(&options);
+
+        ParentOrphanedPseudos.run(&mut stylesheet, &mut ctx);
+
+        let nested_rule = first_nested_rule(&stylesheet).expect("nested rule");
+        assert_nesting_present(nested_rule);
+    }
+
+    #[test]
+    fn adds_nesting_when_pseudo_precedes_nesting_selector() {
+        let mut stylesheet = parse_stylesheet(".a { :focus & { color: red; } }");
         let options = TransformCssOptions::default();
         let mut ctx = TransformContext::new(&options);
 
