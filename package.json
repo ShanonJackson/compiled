@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "benchmark": "jest --config benchmark.config.json",
+    "inline:stored-token-fixtures": "node packages/native-transformers/scripts/inline-token-fixtures.js",
     "build": "yarn build:babel-fixture && yarn build:browser && yarn build:cjs && yarn build:esm && yarn postbuild",
     "postbuild": "scripts/postbuild.sh",
     "build:babel-fixture": "yarn workspace @compiled/babel-component-fixture build && yarn workspace @compiled/babel-component-extracted-fixture build",
@@ -65,6 +66,7 @@
   },
   "dependencies": {},
   "devDependencies": {
+    "@atlaskit/tokens": "^8.0.0",
     "@babel/preset-env": "^7.26.9",
     "@babel/preset-react": "^7.26.3",
     "@babel/preset-typescript": "^7.26.0",

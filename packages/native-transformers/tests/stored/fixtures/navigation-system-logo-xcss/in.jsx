@@ -4,21 +4,21 @@
  */
 import React from 'react';
 import { cssMap, cx, jsx } from '@compiled/react';
-import { token } from '@atlaskit/tokens';
+
 
 const anchorStyles = cssMap({
   root: {
     display: 'flex',
     alignItems: 'center',
     height: '32px',
-    borderRadius: token('radius.small', '3px'),
+    borderRadius: 'var(--ds-radius-small, 3px)',
   },
   newInteractionStates: {
     '&:hover': {
-      backgroundColor: token('color.background.neutral.subtle.hovered'),
+      backgroundColor: 'var(--ds-background-neutral-subtle-hovered, #0515240F)',
     },
     '&:active': {
-      backgroundColor: `${token('color.background.neutral.subtle.pressed')}!important`,
+      backgroundColor: `${'var(--ds-background-neutral-subtle-pressed, #0B120E24)'}!important`,
     },
   },
 });
@@ -28,7 +28,7 @@ const logoContainerStyles = cssMap({
     display: 'none',
     maxWidth: 320,
     boxSizing: 'content-box',
-    paddingInline: token('space.100'),
+    paddingInline: 'var(--ds-space-100, 8px)',
     '@media (min-width: 64rem)': {
       '&&': {
         display: 'flex',

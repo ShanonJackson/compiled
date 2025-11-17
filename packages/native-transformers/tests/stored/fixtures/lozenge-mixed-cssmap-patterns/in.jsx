@@ -4,29 +4,29 @@
  */
 import { cssMap as cssMapUnbounded } from '@compiled/react';
 import { cssMap, jsx } from '@atlaskit/css';
-import { token } from '@atlaskit/tokens';
+
 
 const stylesOld = cssMap({
 	container: {
 		display: 'inline-flex',
-		borderRadius: token('radius.small'),
+		borderRadius: 'var(--ds-radius-small, 4px)',
 		blockSize: 'min-content',
 		position: 'static',
 		overflow: 'hidden',
-		paddingInline: token('space.050'),
+		paddingInline: 'var(--ds-space-050, 4px)',
 		boxSizing: 'border-box',
 	},
-	'text.bold.default': { color: token('color.text.inverse', '#FFFFFF') },
-	'text.bold.inprogress': { color: token('color.text.inverse', '#FFFFFF') },
-	'text.subtle.default': { color: token('color.text.subtle', '#42526E') },
+	'text.bold.default': { color: 'var(--ds-text-inverse, #FFFFFF)' },
+	'text.bold.inprogress': { color: 'var(--ds-text-inverse, #FFFFFF)' },
+	'text.subtle.default': { color: 'var(--ds-text-subtle, #505258)' },
 });
 
 const stylesOldUnbounded = cssMapUnbounded({
 	text: {
-		fontFamily: token('font.family.body'),
+		fontFamily: 'var(--ds-font-family-body, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif)',
 		fontSize: '11px',
 		fontStyle: 'normal',
-		fontWeight: token('font.weight.bold'),
+		fontWeight: 'var(--ds-font-weight-bold, 700)',
 		lineHeight: '16px',
 		overflow: 'hidden',
 		textOverflow: 'ellipsis',

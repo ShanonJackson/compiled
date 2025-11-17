@@ -530,7 +530,7 @@ fn minify_color(input: &str, options: &ColorminOptions) -> String {
             if best.len() < input.len() {
                 return best;
             } else {
-                return input.to_string();
+                return input.to_ascii_lowercase();
             }
         }
     }

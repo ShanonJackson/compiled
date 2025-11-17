@@ -1,11 +1,11 @@
 import React from 'react';
 import { styled } from '@compiled/react';
-import { token } from '@atlaskit/tokens';
+
 
 const Wrapper = styled.div({
 	'> input::placeholder': {
-		color: token('color.text'),
-		fontWeight: token('font.weight.medium'),
+		color: 'var(--ds-text, #292A2E)',
+		fontWeight: 'var(--ds-font-weight-medium, 500)',
 	},
 });
 

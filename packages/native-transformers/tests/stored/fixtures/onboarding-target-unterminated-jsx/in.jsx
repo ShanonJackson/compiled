@@ -3,7 +3,7 @@
  * @jsx jsx
  */
 import { jsx, css, keyframes } from '@compiled/react';
-import { token } from '@atlaskit/tokens';
+
 
 const reduceMotionAsPerUserPreference = css({
   '@media (prefers-reduced-motion: reduce)': {
@@ -12,12 +12,12 @@ const reduceMotionAsPerUserPreference = css({
   },
 });
 
-const baseShadow = `0 0 0 2px ${token('color.border.discovery')}`;
+const baseShadow = `0 0 0 2px ${'var(--ds-border-discovery, #AF59E1)'}`;
 const easing = 'cubic-bezier(0.55, 0.055, 0.675, 0.19)';
 
 const pulseKeyframes = keyframes({
   '0%, 33%': {
-    boxShadow: `${baseShadow}, 0 0 0 ${token('color.border.discovery')}`,
+    boxShadow: `${baseShadow}, 0 0 0 ${'var(--ds-border-discovery, #AF59E1)'}`,
   },
   '66%, 100%': {
     boxShadow: `${baseShadow}, 0 0 0 10px rgba(101, 84, 192, 0.01)`,

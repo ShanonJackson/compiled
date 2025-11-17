@@ -7,8 +7,8 @@ const baseStyles = {
 	border: "none",
 };
 const backgroundColorMap = {
-	"color.background.accent.lime.subtlest": "_bfhk14kp",
-	"color.background.accent.lime.subtler": "_bfhk7wor",
+	"color.background.accent.lime.subtlest": "_bfhk1xib",
+	"color.background.accent.lime.subtler": "_bfhkbkev",
 };
 const CURRENT_SURFACE_CSS_VAR = "--ds-elevation-surface-current";
 const setSurfaceTokenMap = {

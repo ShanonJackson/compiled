@@ -1,10 +1,10 @@
 import React from 'react';
 import { styled } from '@compiled/react';
-import { token } from '@atlaskit/tokens';
+
 
 const Wrapper = styled.div({
-	padding: `${token('space.050')} ${token('space.150')} ${token('space.150')} ${({ padded }) =>
-		padded ? token('space.150') : token('space.0')}`,
+	padding: `${'var(--ds-space-050, 4px)'} ${'var(--ds-space-150, 12px)'} ${'var(--ds-space-150, 12px)'} ${({ padded }) =>
+		padded ? 'var(--ds-space-150, 12px)' : 'var(--ds-space-0, 0px)'}`,
 });
 
 export const Component = () => <Wrapper padded />;
