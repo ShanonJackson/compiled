@@ -11,7 +11,7 @@ const Box = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr) 
 			{...__cmplp}
 			style={__cmpls}
 			ref={__cmplr}
-			className={ax(["_1bsbxh4f", __cmplp.className])}
+			className={ax(["_1bsb4tsx", __cmplp.className])}
 		/>
 	);
 });

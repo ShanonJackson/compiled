@@ -67,7 +67,11 @@ fn convert_length(number: f64, unit: &str) -> String {
                 _ => 1.0,
             };
         let s = format!("{}{}", drop_leading_zero(val), u);
-        if best.is_empty() || s.len() < best.len() {
+        if best.is_empty() {
+            best = s;
+        } else if best.len() < s.len() {
+            // keep existing best
+        } else {
             best = s;
         }
     }
@@ -99,7 +103,11 @@ fn convert_time(number: f64, unit: &str) -> String {
                 _ => 1.0,
             };
         let s = format!("{}{}", drop_leading_zero(val), u);
-        if best.is_empty() || s.len() < best.len() {
+        if best.is_empty() {
+            best = s;
+        } else if best.len() < s.len() {
+            // keep
+        } else {
             best = s;
         }
     }
@@ -131,7 +139,11 @@ fn convert_angle(number: f64, unit: &str) -> String {
                 _ => 1.0,
             };
         let s = format!("{}{}", drop_leading_zero(val), u);
-        if best.is_empty() || s.len() < best.len() {
+        if best.is_empty() {
+            best = s;
+        } else if best.len() < s.len() {
+            // keep
+        } else {
             best = s;
         }
     }
@@ -271,8 +283,18 @@ pub fn plugin() -> pc::BuiltPlugin {
                                 // Prevent walker from descending again into children we already handled.
                                 return false;
                             }
-                            // Do not traverse into var()/url()/unknown functions — cssnano convert-values does not
-                            // rewrite inside them, and walking into var() breaks custom property names like "--foo".
+                            if low == "var" {
+                                for n in inner.iter_mut() {
+                                    if let vp::Node::Word { .. } = n {
+                                        parse_word(n, keep_zero_unit, None);
+                                    }
+                                }
+                                return false;
+                            }
+                            if low == "url" {
+                                return false;
+                            }
+                            // Skip unknown functions for safety.
                             return false;
                         }
                         _ => {}

@@ -2,6 +2,6 @@
 import * as React from "react";
 import { ax, ix } from "@compiled/react/runtime";
 const styles = {
-	button: "_18zr1eak",
+	button: "_18zrpxbi",
 };
 export const Component = () => <div className={styles.button()}>Content</div>;
