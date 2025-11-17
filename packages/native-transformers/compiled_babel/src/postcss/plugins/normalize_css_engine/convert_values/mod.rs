@@ -315,11 +315,7 @@ pub fn plugin() -> pc::BuiltPlugin {
                                 clamp_opacity(node);
                             }
                         }
-                        vp::Node::Function {
-                            value,
-                            nodes: inner,
-                            ..
-                        } => {
+                        vp::Node::Function { value, nodes: inner, .. } => {
                             let low = value.to_lowercase();
                             if matches!(
                                 low.as_str(),
@@ -334,19 +330,9 @@ pub fn plugin() -> pc::BuiltPlugin {
                                 // Prevent walker from descending again into children we already handled.
                                 return false;
                             }
-                            if low == "var" {
-                                for n in inner.iter_mut() {
-                                    if let vp::Node::Word { .. } = n {
-                                        parse_word(n, keep_zero_unit, None);
-                                    }
-                                }
-                                return false;
-                            }
                             if low == "url" {
                                 return false;
                             }
-                            // Skip unknown functions for safety.
-                            return false;
                         }
                         _ => {}
                     }

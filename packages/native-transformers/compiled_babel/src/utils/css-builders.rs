@@ -289,6 +289,28 @@ fn babel_like_expression(expr: &Expr) -> String {
     babel_like_code_for_hash(expr)
 }
 
+fn strip_parentheses<'a>(mut expr: &'a mut Expr) -> &'a mut Expr {
+    loop {
+        match expr {
+            Expr::Paren(paren) => {
+                expr = paren.expr.as_mut();
+            }
+            _ => return expr,
+        }
+    }
+}
+
+fn strip_parentheses_expr<'a>(mut expr: &'a Expr) -> &'a Expr {
+    loop {
+        match expr {
+            Expr::Paren(paren) => {
+                expr = paren.expr.as_ref();
+            }
+            _ => return expr,
+        }
+    }
+}
+
 fn call_arguments_as_array(call: &CallExpr) -> Expr {
     let elements = call
         .args
@@ -645,10 +667,18 @@ where
             continue;
         };
 
-        let has_conditional_body = matches!(
-            arrow.body.as_ref(),
-            BlockStmtOrExpr::Expr(body) if matches!(**body, Expr::Cond(_))
-        );
+        let has_conditional_body = match arrow.body.as_mut() {
+            BlockStmtOrExpr::Expr(body) => {
+                let already_conditional = matches!(body.as_ref(), Expr::Cond(_));
+                let expr = strip_parentheses(body.as_mut());
+                let is_conditional = matches!(expr, Expr::Cond(_));
+                if is_conditional && !already_conditional {
+                    *body = Box::new(expr.clone());
+                }
+                is_conditional
+            }
+            _ => false,
+        };
 
         if !has_conditional_body {
             continue;
@@ -796,7 +826,10 @@ where
             node_expression,
             Expr::Arrow(arrow) if matches!(
                 arrow.body.as_ref(),
-                BlockStmtOrExpr::Expr(expr) if matches!(**expr, Expr::Cond(_))
+                BlockStmtOrExpr::Expr(expr) if matches!(
+                    strip_parentheses_expr(expr.as_ref()),
+                    Expr::Cond(_)
+                )
             )
         );
 
@@ -1422,7 +1455,8 @@ where
                     let mut info: Option<TemplateInfo> = None;
 
                     if let BlockStmtOrExpr::Expr(body) = arrow.body.as_mut() {
-                        match body.as_mut() {
+                        let expr = strip_parentheses(body.as_mut());
+                        match expr {
                             Expr::Cond(_) => {
                                 info = Some(TemplateInfo::Direct { span: arrow.span });
                             }
@@ -1436,6 +1470,9 @@ where
                                                 let conditional = first_expr.as_ref().clone();
                                                 (span, quasis, conditional)
                                             };
+                                            // COMPAT: Babel doesn't preserve ParenthesisExpression
+                                            // wrappers around arrow bodies, so strip them when
+                                            // rewriting to keep behaviour identical.
                                             *body = Box::new(conditional);
                                             info =
                                                 Some(TemplateInfo::FromTemplate { span, quasis });
@@ -2149,7 +2186,7 @@ mod tests {
 
         let output = extract_template_literal_with_builder(&template, &metadata, &mut build_css);
 
-        assert!(output.variables.is_empty());
+        assert!(output.variables.is_empty(), "{:?}", output);
         assert_eq!(output.css.len(), 1);
 
         match &output.css[0] {
@@ -2226,7 +2263,7 @@ mod tests {
         let output =
             super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
 
-        assert!(output.variables.is_empty());
+        assert!(output.variables.is_empty(), "{:?}", output);
         assert_eq!(output.css.len(), 2);
 
         match &output.css[0] {
@@ -2264,7 +2301,7 @@ mod tests {
         let output =
             super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
 
-        assert!(output.variables.is_empty());
+        assert!(output.variables.is_empty(), "{:?}", output);
         assert_eq!(output.css.len(), 2);
 
         match &output.css[0] {
@@ -2290,6 +2327,51 @@ mod tests {
             }
             other => panic!("expected trailing unconditional item, found {other:?}"),
         }
+    }
+
+    #[test]
+    fn extract_object_expression_handles_parenthesized_arrow_conditional() {
+        let metadata = create_metadata();
+        let object = parse_object_literal(
+            "({ cursor: (props) => (props.isClickable ? 'pointer' : 'auto') })",
+        );
+        let mut build_css = |expr: &Expr, meta: &Metadata| super::build_css_internal(expr, meta);
+
+        let output =
+            super::extract_object_expression_with_builder(&object, &metadata, &mut build_css);
+
+        assert!(output.variables.is_empty(), "{:?}", output);
+        let conditional = output
+            .css
+            .iter()
+            .find_map(|item| match item {
+                CssItem::Conditional(cond) => Some(cond),
+                _ => None,
+            })
+            .expect("expected conditional css item");
+
+        if let CssItem::Unconditional(unconditional) = conditional.consequent.as_ref() {
+            assert_eq!(unconditional.css, "cursor:pointer");
+        } else {
+            panic!("expected unconditional consequent");
+        }
+
+        if let CssItem::Unconditional(unconditional) = conditional.alternate.as_ref() {
+            assert_eq!(unconditional.css, "cursor:auto");
+        } else {
+            panic!("expected unconditional alternate");
+        }
+    }
+
+    #[test]
+    fn strip_parentheses_unwraps_conditional() {
+        let mut expr = parse_expression("(props.isClickable ? 'pointer' : 'auto')");
+        let result = super::strip_parentheses(&mut expr);
+
+        assert!(
+            matches!(result, Expr::Cond(_)),
+            "expected conditional expression, found {result:?}"
+        );
     }
 
     #[test]

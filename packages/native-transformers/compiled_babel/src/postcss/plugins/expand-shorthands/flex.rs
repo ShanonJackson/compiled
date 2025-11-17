@@ -139,7 +139,9 @@ fn is_flex_number(node: &ValueNode) -> bool {
 
 fn is_flex_basis(node: &ValueNode) -> bool {
     if let Some(word) = node.as_word() {
-        return word == "content";
+        if word == "content" {
+            return true;
+        }
     }
 
     if node.is_unitless_zero() {

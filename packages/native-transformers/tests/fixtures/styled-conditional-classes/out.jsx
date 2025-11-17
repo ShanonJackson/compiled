@@ -10,15 +10,15 @@ const Item = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __cmplr)
 	return (
 		<C
 			{...__cmpldp}
-			style={{
-				...__cmpls,
-				"--_11qq6im": ix(__cmplp.isClickable ? "pointer" : "auto"),
-				"--_x1dbdm": ix(__cmplp.isClickable ? "red" : "initial"),
-				"--_lqb9ck": ix(__cmplp.spaced ? "0 3px" : "0"),
-			}}
+			style={__cmpls}
 			ref={__cmplr}
 			className={ax([
-				"_56nn1vuy _80om6r3y _1n1p1r31 _5bn0glyw _1vs41o36 _13wf1547",
+				"_nt751r31 _1dit1r31 _49pcglyw _ksodglyw _1hvw1o36 _4hz81o36",
+				__cmplp.isClickable ? "_80omtlke" : "_80om1wug",
+				__cmplp.isClickable ? "_jomr5scu _irr35scu" : "_jomr18uv _irr318uv",
+				__cmplp.spaced
+					? "_1mizidpf _d4l71l7b _8jx7idpf _1ko91l7b"
+					: "_1mizidpf _d4l7idpf _8jx7idpf _1ko9idpf",
 				__cmplp.className,
 			])}
 		/>
