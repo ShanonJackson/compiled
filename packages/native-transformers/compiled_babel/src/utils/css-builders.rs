@@ -1366,15 +1366,6 @@ where
                     continue;
                 }
 
-                if let Expr::Cond(cond) = &prop_value {
-                    let result =
-                        extract_conditional_expression_with_builder(cond, &updated_meta, build_css);
-                    let mapped = to_css_declaration(&key, &result);
-                    css.extend(mapped.css);
-                    variables.extend(mapped.variables);
-                    continue;
-                }
-
                 if let Expr::Tpl(template) = &prop_value {
                     let result = if template.exprs.len() == 1 {
                         if let Some(first_expr) = template.exprs.first() {
