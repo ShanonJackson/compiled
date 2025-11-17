@@ -10,12 +10,13 @@ const ExpiryDateContainer = forwardRef(({ as: C = "div", style: __cmpls, ...__cm
 	return (
 		<C
 			{...__cmpldp}
-			style={{
-				...__cmpls,
-				"--_1to1rer": ix(__cmplp.dueInWeek ? "var(--ds-text-danger,#ae2e24)" : "inherit"),
-			}}
+			style={__cmpls}
 			ref={__cmplr}
-			className={ax(["_syaz1g7e _299mangw", __cmplp.className])}
+			className={ax([
+				"_299mangw",
+				__cmplp.dueInWeek ? "_syazrhrk" : "_syaz1kw7",
+				__cmplp.className,
+			])}
 		/>
 	);
 });
