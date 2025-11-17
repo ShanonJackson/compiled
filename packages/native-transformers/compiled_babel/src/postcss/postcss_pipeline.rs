@@ -948,7 +948,7 @@ fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
                         let raw_value = decl.value();
                         let mut hash_seed = raw_value.clone();
                         if decl.important() {
-                            hash_seed.push_str("!important");
+                            hash_seed.push_str("true");
                         }
                         let mut value_full = raw_value;
                         value_full = minify_color_value(&value_full);
@@ -1338,7 +1338,7 @@ fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
                 let mut value_full = orig_value.clone();
                 let mut hash_seed = value_full.clone();
                 if has_important {
-                    hash_seed.push_str("!important");
+                    hash_seed.push_str("true");
                 }
                 if has_important {
                     value_full.push_str("!important");
@@ -1464,7 +1464,7 @@ fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
                 let prop = decl.prop();
                 let raw_value = decl.value();
                 let mut hash_seed = raw_value.clone();
-                if decl.important() { hash_seed.push_str("!important"); }
+                if decl.important() { hash_seed.push_str("true"); }
                 let mut value_full = raw_value;
                 // Normalize color values before serialization, but keep hash_seed untouched.
                 fn minify_color_value(value: &str) -> String {
@@ -1605,7 +1605,7 @@ fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
                         let prop = decl.prop();
                         let raw_value = decl.value();
                         let mut hash_seed = raw_value.clone();
-                        if decl.important() { hash_seed.push_str("!important"); }
+                        if decl.important() { hash_seed.push_str("true"); }
                         let mut value_full = raw_value;
                         value_full = minify_color_value(&value_full);
                         if decl.important() { value_full.push_str("!important"); }
@@ -1670,7 +1670,7 @@ fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
                                 let prop = nested_decl.prop();
                                 let raw_value = nested_decl.value();
                                 let mut hash_seed = raw_value.clone();
-                                if nested_decl.important() { hash_seed.push_str("!important"); }
+                                if nested_decl.important() { hash_seed.push_str("true"); }
                                 let mut value_full = raw_value;
                                 value_full = minify_color_value(&value_full);
                                 if nested_decl.important() { value_full.push_str("!important"); }

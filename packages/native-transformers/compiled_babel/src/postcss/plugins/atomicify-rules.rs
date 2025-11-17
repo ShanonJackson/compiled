@@ -244,7 +244,7 @@ fn atomic_class_name(
 
     let mut value_seed = serialize_component_values(&declaration.value).unwrap_or_default();
     if declaration.important.is_some() {
-        value_seed.push_str("!important");
+        value_seed.push_str("true");
     }
     if std::env::var("COMPILED_CLI_TRACE").is_ok()
         && declaration_name(&declaration.name) == "margin-left"
