@@ -193,6 +193,10 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
             use super::plugins::normalize_css_engine as nce;
             nce::normalize_string::plugin()
         },
+        {
+            use super::plugins::normalize_css_engine as nce;
+            nce::calc::plugin()
+        },
         super::plugins::expand_shorthands_engine::plugin(),
         // Start emitting atomic rules.
         atomicify_rules_plugin(options.clone(), collector.clone()),

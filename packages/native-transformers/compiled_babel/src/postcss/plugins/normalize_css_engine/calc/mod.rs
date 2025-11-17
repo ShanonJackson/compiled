@@ -331,217 +331,274 @@ impl Default for Options {
     }
 }
 
-fn reduce_with_precision(node: &Node, precision: usize) -> Option<Node> {
-    match node {
-        Node::Value { .. } => Some(node.clone()),
-        Node::Literal(_) => None,
-        Node::Op { op, left, right } => {
-            // Evaluate with precedence already encoded in AST
-            let l = reduce_with_precision(left, precision)?;
-            let r = reduce_with_precision(right, precision)?;
-            match (op, l, r) {
-                ('+', Node::Value { num: ln, unit: lu }, Node::Value { num: rn, unit: ru }) => {
-                    if same_unit(&lu, &ru) {
-                        Some(Node::Value {
-                            num: ln + rn,
-                            unit: lu.or(ru),
-                        })
-                    } else if let (Some(ref lustr), Some(ref rustr)) = (&lu, &ru) {
-                        if unit_kind(lustr) == unit_kind(rustr) {
-                            if let Some(conv) = convert_unit(rn, rustr, lustr, precision) {
-                                Some(Node::Value {
-                                    num: ln + conv,
-                                    unit: lu.clone(),
-                                })
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
+#[derive(Clone, Debug)]
+struct CollectItem {
+    sign: char,
+    node: Node,
+}
+
+fn flip_sign(op: char) -> char {
+    if op == '+' {
+        '-'
+    } else {
+        '+'
+    }
+}
+
+fn is_value_node(node: &Node) -> bool {
+    matches!(node, Node::Value { .. })
+}
+
+fn is_zero_value(node: &Node) -> bool {
+    matches!(node, Node::Value { num, .. } if *num == 0.0)
+}
+
+fn convert_value_to_target(
+    value: f64,
+    from: &Option<String>,
+    target: &Option<String>,
+    precision: usize,
+) -> Option<f64> {
+    if same_unit(from, target) {
+        return Some(value);
+    }
+    match (from, target) {
+        (Some(f), Some(t)) => convert_unit(value, f, t, precision),
+        _ => None,
+    }
+}
+
+fn push_value_item(
+    mut sign: char,
+    mut num: f64,
+    unit: Option<String>,
+    collected: &mut Vec<CollectItem>,
+    precision: usize,
+) {
+    if num < 0.0 {
+        num = -num;
+        sign = flip_sign(sign);
+    }
+
+    let mut handled = false;
+    if num != 0.0 {
+        for item in collected.iter_mut() {
+            if let Node::Value {
+                num: ref mut existing_num,
+                unit: ref existing_unit,
+            } = item.node
+            {
+                if let Some(converted) =
+                    convert_value_to_target(num, &unit, existing_unit, precision)
+                {
+                    if item.sign == sign {
+                        *existing_num += converted;
                     } else {
-                        None
-                    }
-                }
-                ('-', Node::Value { num: ln, unit: lu }, Node::Value { num: rn, unit: ru }) => {
-                    if same_unit(&lu, &ru) {
-                        Some(Node::Value {
-                            num: ln - rn,
-                            unit: lu.or(ru),
-                        })
-                    } else if let (Some(ref lustr), Some(ref rustr)) = (&lu, &ru) {
-                        if unit_kind(lustr) == unit_kind(rustr) {
-                            if let Some(conv) = convert_unit(rn, rustr, lustr, precision) {
-                                Some(Node::Value {
-                                    num: ln - conv,
-                                    unit: lu.clone(),
-                                })
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
+                        *existing_num -= converted;
+                        if *existing_num < 0.0 {
+                            *existing_num = -*existing_num;
+                            item.sign = flip_sign(item.sign);
                         }
-                    } else {
-                        None
                     }
+                    handled = true;
+                    break;
                 }
-                // multiplication
-                ('*', Node::Value { num: ln, unit: lu }, Node::Value { num: rn, unit: ru }) => {
-                    match (lu, ru) {
-                        (Some(u), None) => Some(Node::Value {
-                            num: ln * rn,
-                            unit: Some(u),
-                        }),
-                        (None, Some(u)) => Some(Node::Value {
-                            num: ln * rn,
-                            unit: Some(u),
-                        }),
-                        (None, None) => Some(Node::Value {
-                            num: ln * rn,
-                            unit: None,
-                        }),
-                        _ => None,
-                    }
-                }
-                // division
-                ('/', Node::Value { num: ln, unit: lu }, Node::Value { num: rn, unit: ru }) => {
-                    if rn == 0.0 {
-                        return None;
-                    }
-                    match (lu, ru) {
-                        (Some(u), None) => Some(Node::Value {
-                            num: ln / rn,
-                            unit: Some(u),
-                        }),
-                        (None, Some(_)) => None,
-                        (None, None) => Some(Node::Value {
-                            num: ln / rn,
-                            unit: None,
-                        }),
-                        (Some(_), Some(_)) => None,
-                    }
-                }
-                // Distribute scalar over addition/subtraction: (a +/- b) * c, c * (a +/- b)
-                (
-                    '*',
-                    Node::Op {
-                        op: lop,
-                        left: ll,
-                        right: lr,
-                    },
-                    Node::Value { num: rn, unit: ru },
-                ) if lop == '+' || lop == '-' => {
-                    // (ll op lr) * rn => (ll*rn) op (lr*rn)
-                    let left_mul = reduce_with_precision(
-                        &Node::Op {
-                            op: '*',
-                            left: ll.clone(),
-                            right: Box::new(Node::Value {
-                                num: rn,
-                                unit: ru.clone(),
-                            }),
-                        },
-                        precision,
-                    )?;
-                    let right_mul = reduce_with_precision(
-                        &Node::Op {
-                            op: '*',
-                            left: lr.clone(),
-                            right: Box::new(Node::Value {
-                                num: rn,
-                                unit: ru.clone(),
-                            }),
-                        },
-                        precision,
-                    )?;
-                    Some(Node::Op {
-                        op: lop,
-                        left: Box::new(left_mul),
-                        right: Box::new(right_mul),
-                    })
-                }
-                (
-                    '*',
-                    Node::Value { num: ln, unit: lu },
-                    Node::Op {
-                        op: rop,
-                        left: rl,
-                        right: rr,
-                    },
-                ) if rop == '+' || rop == '-' => {
-                    let left_mul = reduce_with_precision(
-                        &Node::Op {
-                            op: '*',
-                            left: Box::new(Node::Value {
-                                num: ln,
-                                unit: lu.clone(),
-                            }),
-                            right: rl.clone(),
-                        },
-                        precision,
-                    )?;
-                    let right_mul = reduce_with_precision(
-                        &Node::Op {
-                            op: '*',
-                            left: Box::new(Node::Value {
-                                num: ln,
-                                unit: lu.clone(),
-                            }),
-                            right: rr.clone(),
-                        },
-                        precision,
-                    )?;
-                    Some(Node::Op {
-                        op: rop,
-                        left: Box::new(left_mul),
-                        right: Box::new(right_mul),
-                    })
-                }
-                // Distribute division over addition/subtraction when dividing by scalar: (a +/- b) / n
-                (
-                    '/',
-                    Node::Op {
-                        op: lop,
-                        left: ll,
-                        right: lr,
-                    },
-                    Node::Value { num: rn, unit: ru },
-                ) if (lop == '+' || lop == '-') && ru.is_none() => {
-                    if rn == 0.0 {
-                        return None;
-                    }
-                    let left_div = reduce_with_precision(
-                        &Node::Op {
-                            op: '/',
-                            left: ll.clone(),
-                            right: Box::new(Node::Value {
-                                num: rn,
-                                unit: None,
-                            }),
-                        },
-                        precision,
-                    )?;
-                    let right_div = reduce_with_precision(
-                        &Node::Op {
-                            op: '/',
-                            left: lr.clone(),
-                            right: Box::new(Node::Value {
-                                num: rn,
-                                unit: None,
-                            }),
-                        },
-                        precision,
-                    )?;
-                    Some(Node::Op {
-                        op: lop,
-                        left: Box::new(left_div),
-                        right: Box::new(right_div),
-                    })
-                }
-                _ => None,
             }
         }
+    }
+
+    if !handled {
+        collected.push(CollectItem {
+            sign,
+            node: Node::Value { num, unit },
+        });
+    }
+}
+
+fn collect_add_sub_items(
+    sign: char,
+    node: Node,
+    collected: &mut Vec<CollectItem>,
+    precision: usize,
+) {
+    match node {
+        Node::Value { num, unit } => push_value_item(sign, num, unit, collected, precision),
+        Node::Op { op, left, right } if op == '+' || op == '-' => {
+            collect_add_sub_items(sign, *left, collected, precision);
+            let right_sign = if sign == '-' { flip_sign(op) } else { op };
+            collect_add_sub_items(right_sign, *right, collected, precision);
+        }
+        Node::Op { op, left, right } if op == '*' || op == '/' => {
+            let reduced = reduce_node(Node::Op { op, left, right }, precision);
+            collect_add_sub_items(sign, reduced, collected, precision);
+        }
+        other => collected.push(CollectItem { sign, node: other }),
+    }
+}
+
+fn reduce_add_sub_expression(left: Node, right: Node, op: char, precision: usize) -> Node {
+    let mut collected = Vec::new();
+    collect_add_sub_items('+', left, &mut collected, precision);
+    let right_sign = if op == '+' { '+' } else { '-' };
+    collect_add_sub_items(right_sign, right, &mut collected, precision);
+
+    if collected.is_empty() {
+        return Node::Value {
+            num: 0.0,
+            unit: None,
+        };
+    }
+
+    let mut without_zero: Vec<CollectItem> = collected
+        .iter()
+        .cloned()
+        .filter(|item| !is_zero_value(&item.node))
+        .collect();
+
+    if without_zero.is_empty()
+        || (without_zero[0].sign == '-' && !is_value_node(&without_zero[0].node))
+    {
+        if let Some(zero_item) = collected.into_iter().find(|item| is_zero_value(&item.node)) {
+            without_zero.insert(0, zero_item);
+        }
+    }
+
+    if without_zero.is_empty() {
+        return Node::Value {
+            num: 0.0,
+            unit: None,
+        };
+    }
+
+    if without_zero[0].sign == '-' {
+        if let Node::Value { ref mut num, .. } = without_zero[0].node {
+            *num = -*num;
+            without_zero[0].sign = '+';
+        }
+    }
+
+    let mut iter = without_zero.into_iter();
+    let mut root = iter.next().unwrap().node;
+    for item in iter {
+        root = Node::Op {
+            op: item.sign,
+            left: Box::new(root),
+            right: Box::new(item.node),
+        };
+    }
+
+    root
+}
+
+fn apply_number_multiplication(node: Node, multiplier: f64, precision: usize) -> Node {
+    match node {
+        Node::Value { num, unit } => Node::Value {
+            num: num * multiplier,
+            unit,
+        },
+        Node::Op { op, left, right } if op == '+' || op == '-' => Node::Op {
+            op,
+            left: Box::new(apply_number_multiplication(*left, multiplier, precision)),
+            right: Box::new(apply_number_multiplication(*right, multiplier, precision)),
+        },
+        other => Node::Op {
+            op: '*',
+            left: Box::new(other),
+            right: Box::new(Node::Value {
+                num: multiplier,
+                unit: None,
+            }),
+        },
+    }
+}
+
+fn apply_number_division(node: Node, divisor: f64, precision: usize) -> Node {
+    if divisor == 0.0 {
+        return Node::Op {
+            op: '/',
+            left: Box::new(node),
+            right: Box::new(Node::Value {
+                num: divisor,
+                unit: None,
+            }),
+        };
+    }
+    match node {
+        Node::Value { num, unit } => Node::Value {
+            num: num / divisor,
+            unit,
+        },
+        Node::Op { op, left, right } if op == '+' || op == '-' => Node::Op {
+            op,
+            left: Box::new(apply_number_division(*left, divisor, precision)),
+            right: Box::new(apply_number_division(*right, divisor, precision)),
+        },
+        other => Node::Op {
+            op: '/',
+            left: Box::new(other),
+            right: Box::new(Node::Value {
+                num: divisor,
+                unit: None,
+            }),
+        },
+    }
+}
+
+fn reduce_multiplication_expression(left: Node, right: Node, precision: usize) -> Node {
+    let left_reduced = reduce_node(left, precision);
+    let right_reduced = reduce_node(right, precision);
+
+    if let Node::Value {
+        num,
+        unit: None,
+    } = right_reduced
+    {
+        return apply_number_multiplication(left_reduced, num, precision);
+    }
+
+    if let Node::Value {
+        num,
+        unit: None,
+    } = left_reduced
+    {
+        return apply_number_multiplication(right_reduced, num, precision);
+    }
+
+    Node::Op {
+        op: '*',
+        left: Box::new(left_reduced),
+        right: Box::new(right_reduced),
+    }
+}
+
+fn reduce_division_expression(left: Node, right: Node, precision: usize) -> Node {
+    let left_reduced = reduce_node(left, precision);
+    let right_reduced = reduce_node(right, precision);
+
+    if let Node::Value {
+        num,
+        unit: None,
+    } = right_reduced
+    {
+        return apply_number_division(left_reduced, num, precision);
+    }
+
+    Node::Op {
+        op: '/',
+        left: Box::new(left_reduced),
+        right: Box::new(right_reduced),
+    }
+}
+
+fn reduce_node(node: Node, precision: usize) -> Node {
+    match node {
+        Node::Value { .. } | Node::Literal(_) => node,
+        Node::Op { op, left, right } => match op {
+            '+' | '-' => reduce_add_sub_expression(*left, *right, op, precision),
+            '*' => reduce_multiplication_expression(*left, *right, precision),
+            '/' => reduce_division_expression(*left, *right, precision),
+            _ => Node::Op { op, left, right },
+        },
     }
 }
 
@@ -559,20 +616,6 @@ fn fmt_number(n: f64, precision: usize) -> String {
     } else {
         s
     }
-}
-
-fn try_reduce_calc(contents: &str, opt: &Options) -> Option<String> {
-    let ast = parse_calc_expression(contents)?;
-    if let Some(reduced) = reduce_with_precision(&ast, opt.precision) {
-        if let Node::Value { num, unit } = reduced {
-            let mut v = fmt_number(num, opt.precision);
-            if let Some(u) = unit {
-                v.push_str(&u);
-            }
-            return Some(v);
-        }
-    }
-    None
 }
 
 fn op_prec(op: char) -> i32 {
@@ -645,13 +688,28 @@ pub fn plugin() -> pc::BuiltPlugin {
                                 || name_l == "-moz-calc";
                             if is_calc {
                                 let inner = vp::stringify(nodes);
-                                if let Some(new_val) = try_reduce_calc(&inner, &opt) {
-                                    *n = vp::Node::Word { value: new_val };
-                                    changed = true;
-                                } else if let Some(ast) = parse_calc_expression(&inner) {
-                                    let expr = stringify_ast(&ast, opt.precision);
-                                    let wrapped = format!("{}({})", name, expr);
-                                    *n = vp::Node::Word { value: wrapped };
+                                if let Some(ast) = parse_calc_expression(&inner) {
+                                    let reduced = reduce_node(ast, opt.precision);
+                                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                                        eprintln!(
+                                            "[calc] normalize input='{}' reduced={:?}",
+                                            inner, reduced
+                                        );
+                                    }
+                                    match reduced {
+                                        Node::Value { num, unit } => {
+                                            let mut v = fmt_number(num, opt.precision);
+                                            if let Some(u) = unit {
+                                                v.push_str(&u);
+                                            }
+                                            *n = vp::Node::Word { value: v };
+                                        }
+                                        other => {
+                                            let expr = stringify_ast(&other, opt.precision);
+                                            let wrapped = format!("{}({})", name, expr);
+                                            *n = vp::Node::Word { value: wrapped };
+                                        }
+                                    }
                                     changed = true;
                                 }
                             }

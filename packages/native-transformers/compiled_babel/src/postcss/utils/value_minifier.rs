@@ -3,6 +3,9 @@ fn is_whitespace(ch: char) -> bool {
 }
 
 pub fn minify_value_whitespace(input: &str) -> String {
+    if input.to_ascii_lowercase().contains("calc(") {
+        return input.to_string();
+    }
     let mut out = String::with_capacity(input.len());
     let mut in_single = false;
     let mut in_double = false;
@@ -103,4 +106,23 @@ pub fn minify_value_whitespace(input: &str) -> String {
         i += 1;
     }
     out.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minify_value_whitespace;
+
+    #[test]
+    fn trims_var_fallback_outside_calc() {
+        assert_eq!(
+            minify_value_whitespace("var(--space-200, 4px)"),
+            "var(--space-200,4px)"
+        );
+    }
+
+    #[test]
+    fn preserves_calc_spacing() {
+        let value = "calc(100vh - var(--topNavigationHeight, 0px) - var(--bannerHeight, 0px))";
+        assert_eq!(minify_value_whitespace(value), value);
+    }
 }
