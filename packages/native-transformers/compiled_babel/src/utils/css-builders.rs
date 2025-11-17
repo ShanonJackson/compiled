@@ -4,8 +4,8 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
-    ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Prop, PropName,
-    PropOrSpread, SpreadElement, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
+    ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Pat, Prop,
+    PropName, PropOrSpread, SpreadElement, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
 };
 use swc_core::ecma::utils::ExprExt;
 use swc_ecma_codegen::text_writer::JsWriter;
@@ -267,6 +267,28 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
     print_expr(expr)
 }
 
+fn babel_like_expression(expr: &Expr) -> String {
+    if let Expr::Arrow(arrow) = expr {
+        if arrow.params.len() == 1 {
+            if let Pat::Ident(binding) = &arrow.params[0] {
+                if binding.type_ann.is_none() && !binding.optional {
+                    if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+                        // COMPAT: Babel generator emits `param => expression` (without parentheses)
+                        // for single identifier arrow params. Matching this formatting keeps the
+                        // hashed CSS variable names identical to the Babel plugin.
+                        let body_code = babel_like_code_for_hash(body);
+                        return format!("{} => {}", binding.id.sym.as_ref(), body_code);
+                    }
+                }
+            }
+        }
+
+        return print_expression(expr);
+    }
+
+    babel_like_code_for_hash(expr)
+}
+
 fn call_arguments_as_array(call: &CallExpr) -> Expr {
     let elements = call
         .args
@@ -325,7 +347,7 @@ fn is_custom_property_name(value: &str) -> bool {
 
 fn get_variable_declarator_value_for_parent_expr(expr: &Expr, meta: &Metadata) -> (Expr, String) {
     let mut expression = expr.clone();
-    let mut variable_name = print_expression(expr);
+    let mut variable_name = babel_like_expression(expr);
 
     if let Expr::Ident(ident) = expr {
         let base_name = ident.sym.as_ref();
@@ -341,7 +363,7 @@ fn get_variable_declarator_value_for_parent_expr(expr: &Expr, meta: &Metadata) -
                     MetadataContext::Keyframes { keyframe } => {
                         format!("{keyframe}:{base_name}")
                     }
-                    _ => print_expression(node),
+                    _ => babel_like_expression(node),
                 };
             }
         }

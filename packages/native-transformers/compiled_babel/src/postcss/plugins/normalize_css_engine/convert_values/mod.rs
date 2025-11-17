@@ -155,6 +155,64 @@ fn convert_angle(number: f64, unit: &str) -> String {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ConvertValueOptions {
+    length: bool,
+    time: bool,
+    angle: bool,
+}
+
+impl Default for ConvertValueOptions {
+    fn default() -> Self {
+        Self {
+            length: true,
+            time: true,
+            angle: true,
+        }
+    }
+}
+
+fn convert_value(number: f64, unit: &str, opts: ConvertValueOptions) -> String {
+    let mut value = format!("{}{}", drop_leading_zero(number), unit);
+    let unit_lower = unit.to_ascii_lowercase();
+    let mut converted: Option<String> = None;
+
+    if opts.length {
+        match unit_lower.as_str() {
+            "in" | "px" | "pt" | "pc" => {
+                converted = Some(convert_length(number, unit_lower.as_str()));
+            }
+            _ => {}
+        }
+    }
+
+    if opts.time {
+        match unit_lower.as_str() {
+            "s" | "ms" => {
+                converted = Some(convert_time(number, unit_lower.as_str()));
+            }
+            _ => {}
+        }
+    }
+
+    if opts.angle {
+        match unit_lower.as_str() {
+            "turn" | "deg" => {
+                converted = Some(convert_angle(number, unit_lower.as_str()));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(candidate) = converted {
+        if candidate.len() < value.len() {
+            value = candidate;
+        }
+    }
+
+    value
+}
+
 fn parse_word(node: &mut vp::Node, keep_zero_unit: bool, precision_px: Option<usize>) {
     if let vp::Node::Word { value } = node {
         if let Some(pair) = vp::unit::unit(value) {
@@ -164,15 +222,8 @@ fn parse_word(node: &mut vp::Node, keep_zero_unit: bool, precision_px: Option<us
                 let keep = keep_zero_unit || (!is_length_unit(&u.to_lowercase()) && u != "%");
                 *value = format!("{}{}", 0, if keep { u } else { String::new() });
             } else {
-                let mut out = value.clone();
                 let ul = u.to_lowercase();
-                if is_length_unit(&ul) {
-                    out = convert_length(num, &ul);
-                } else if ul == "s" || ul == "ms" {
-                    out = convert_time(num, &ul);
-                } else if ul == "turn" || ul == "deg" {
-                    out = convert_angle(num, &ul);
-                }
+                let mut out = convert_value(num, &u, ConvertValueOptions::default());
                 if let Some(p) = precision_px {
                     if ul == "px" && pair.number.contains('.') {
                         let prec = 10f64.powi(p as i32);
