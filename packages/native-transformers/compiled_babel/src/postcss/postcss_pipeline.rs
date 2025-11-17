@@ -886,10 +886,10 @@ fn extract_stylesheets_plugin(
         out
     }
 
-    fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
-        if at_chain.is_empty() {
-            return rule_css.to_string();
-        }
+fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
+    if at_chain.is_empty() {
+        return rule_css.to_string();
+    }
         let mut out = String::new();
         for (n, p) in at_chain {
             if p.is_empty() {
@@ -1283,12 +1283,24 @@ fn atomicify_rules_plugin(
         for _ in at_chain {
             out.push('}');
         }
-        out
-    }
+    out
+}
 
-    fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
-        // Walk up parents; if any ancestor is an at-rule named 'keyframes', return true
-        let mut cur = Some(node.clone());
+fn clean_placeholder_selector(selector: String, placeholder: Option<&str>) -> String {
+    if let Some(ph) = placeholder {
+        if !ph.is_empty() {
+            let needle = format!(" {}", ph);
+            let mut cleaned = selector.replace(&needle, "");
+            cleaned = cleaned.replace(ph, "");
+            return cleaned.trim().to_string();
+        }
+    }
+    selector
+}
+
+fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
+    // Walk up parents; if any ancestor is an at-rule named 'keyframes', return true
+    let mut cur = Some(node.clone());
         while let Some(n) = cur {
             if let Some(at) = as_at_rule(&n) {
                 if at.name().eq_ignore_ascii_case("keyframes") {
@@ -1333,60 +1345,19 @@ fn atomicify_rules_plugin(
                 }
                 value_full = minify_value_whitespace(&value_full);
 
-                // JS uses selectors.join("") for group seed
-                let normalized_list: Vec<String> = ctx
+                let mut normalized_list: Vec<String> = ctx
                     .selectors
                     .iter()
                     .map(|s| normalized_selector(s))
                     .collect();
-                let selectors_joined_for_hash =
-                    if normalized_list.len() == 1 && normalized_list[0] == "&" {
-                        // JS atomicify receives `undefined` for selectors in this path; template literal coerces to 'undefined'
-                        "undefined".to_string()
-                    } else {
-                        normalized_list.join("")
-                    };
-                let mut group_seed = String::new();
-                if let Some(prefix) = &ctx.opts.class_hash_prefix {
-                    group_seed.push_str(prefix);
-                }
-                let at_label2 = at_chain_label(&ctx.at_chain);
-                let at_seg = if at_label2.is_empty() {
-                    "undefined"
+                normalized_list.sort();
+                let at_label = at_chain_label(&ctx.at_chain);
+                let at_seg = if at_label.is_empty() {
+                    "undefined".to_string()
                 } else {
-                    at_label2.as_str()
+                    at_label.clone()
                 };
-                group_seed.push_str(at_seg);
-                group_seed.push_str(&selectors_joined_for_hash);
-                group_seed.push_str(&prop);
-                let group = hash(&group_seed).chars().take(4).collect::<String>();
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                    let at_dbg = at_chain_label(&ctx.at_chain);
-                    eprintln!(
-                        "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
-                        at_dbg, selectors_joined_for_hash, prop, group_seed, group
-                    );
-                }
-                let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
-                let class = format!("_{}{}", group, value_hash);
-                ctx.collector.push_class(class.clone());
-                // Replace '&' with class selector for each normalized selector
-                let mut replaced_selectors: Vec<String> = Vec::new();
-                for norm in normalized_list {
-                    let replaced = norm.replace('&', &format!(".{}", class));
-                    replaced_selectors.push(replaced);
-                }
 
-                let mut selector_joined = replaced_selectors.join(", ");
-                if let Some(ph) = &ctx.opts.declaration_placeholder {
-                    if !ph.is_empty() {
-                        // Remove placeholder selector segments if present
-                        let needle = format!(" {}", ph);
-                        selector_joined = selector_joined.replace(&needle, "");
-                        selector_joined = selector_joined.replace(ph, "");
-                        selector_joined = selector_joined.trim().to_string();
-                    }
-                }
                 // Inject vendor-prefixed values into the same atomic rule to match Babel's
                 // ordering (prefixed first, then unprefixed) when applicable.
                 let mut decls = String::new();
@@ -1407,12 +1378,38 @@ fn atomicify_rules_plugin(
                 decls.push_str(&prop);
                 decls.push(':');
                 decls.push_str(&value_full);
-                let rule_css = format!("{}{{{}}}", selector_joined, decls);
-                let wrapped = wrap_in_at_rules(&rule_css, &ctx.at_chain);
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                    eprintln!("[engine.atomic] sheet='{}'", wrapped);
+
+                for norm in normalized_list {
+                    let mut group_seed = String::new();
+                    if let Some(prefix) = &ctx.opts.class_hash_prefix {
+                        group_seed.push_str(prefix);
+                    }
+                    group_seed.push_str(&at_seg);
+                    group_seed.push_str(&norm);
+                    group_seed.push_str(&prop);
+                    let group = hash(&group_seed).chars().take(4).collect::<String>();
+                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                        eprintln!(
+                            "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+                            at_label, norm, prop, group_seed, group
+                        );
+                    }
+                    let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
+                    let class = format!("_{}{}", group, value_hash);
+                    ctx.collector.push_class(class.clone());
+
+                    let replaced = norm.replace('&', &format!(".{}", class));
+                    let selector_text = clean_placeholder_selector(
+                        replaced,
+                        ctx.opts.declaration_placeholder.as_deref(),
+                    );
+                    let rule_css = format!("{}{{{}}}", selector_text, decls);
+                    let wrapped = wrap_in_at_rules(&rule_css, &ctx.at_chain);
+                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                        eprintln!("[engine.atomic] sheet='{}'", wrapped);
+                    }
+                    ctx.collector.push_sheet(wrapped);
                 }
-                ctx.collector.push_sheet(wrapped);
             } else if let Some(nested) = as_rule(&child) {
                 // Recurse nested rules
                 let sels = combine_selectors(&ctx.selectors, &nested.selector());
@@ -1481,56 +1478,52 @@ fn atomicify_rules_plugin(
                 if decl.important() { value_full.push_str("!important"); }
                 value_full = minify_value_whitespace(&value_full);
 
-                // JS uses selectors.join("") for the group seed; when selectors is undefined in JS this coerces to 'undefined'.
-                let normalized_list: Vec<String> = selectors.iter().map(|s| normalized_selector(s)).collect();
-                let selectors_joined_for_hash = normalized_list.join("");
-                let mut group_seed = String::new();
-                if let Some(prefix) = &opts.class_hash_prefix { group_seed.push_str(prefix); }
-                let at_seg = if at_label.is_empty() { "undefined" } else { &at_label };
-                group_seed.push_str(at_seg);
-                group_seed.push_str(&selectors_joined_for_hash);
-                group_seed.push_str(&prop);
-                let group = hash(&group_seed).chars().take(4).collect::<String>();
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                    eprintln!(
-                        "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
-                        at_label,
-                        selectors_joined_for_hash,
-                        prop,
-                        group_seed,
-                        group
-                    );
+                let mut normalized_list: Vec<String> =
+                    selectors.iter().map(|s| normalized_selector(s)).collect();
+                normalized_list.sort();
+                for norm in normalized_list {
+                    let mut group_seed = String::new();
+                    if let Some(prefix) = &opts.class_hash_prefix {
+                        group_seed.push_str(prefix);
+                    }
+                    let at_seg = if at_label.is_empty() {
+                        "undefined"
+                    } else {
+                        &at_label
+                    };
+                    group_seed.push_str(at_seg);
+                    group_seed.push_str(&norm);
+                    group_seed.push_str(&prop);
+                    let group = hash(&group_seed).chars().take(4).collect::<String>();
+                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                        eprintln!(
+                            "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+                            at_label, norm, prop, group_seed, group
+                        );
                         if prop == "margin-left" {
                             eprintln!("[atomicify.hash.postcss] value='{}'", hash_seed);
                         }
-                }
-                let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
-                let full_class = format!("_{}{}", group, value_hash);
-                collector.push_class(full_class.clone());
-                let used_class = if let Some(map) = &opts.class_name_compression_map {
-                    let key = full_class.trim_start_matches('_');
-                    if let Some(compressed) = map.get(key) { compressed.clone() } else { full_class.clone() }
-                } else {
-                    full_class.clone()
-                };
-                let mut replaced_selectors: Vec<String> = Vec::new();
-                for norm in normalized_list {
-                    let replaced = norm.replace('&', &format!(".{}", used_class));
-                    replaced_selectors.push(replaced);
-                }
-
-                let mut selector_joined = replaced_selectors.join(", ");
-                if let Some(ph) = &opts.declaration_placeholder {
-                    if !ph.is_empty() {
-                        let needle = format!(" {}", ph);
-                        selector_joined = selector_joined.replace(&needle, "");
-                        selector_joined = selector_joined.replace(ph, "");
-                        selector_joined = selector_joined.trim().to_string();
                     }
+                    let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
+                    let full_class = format!("_{}{}", group, value_hash);
+                    collector.push_class(full_class.clone());
+                    let used_class = if let Some(map) = &opts.class_name_compression_map {
+                        let key = full_class.trim_start_matches('_');
+                        if let Some(compressed) = map.get(key) {
+                            compressed.clone()
+                        } else {
+                            full_class.clone()
+                        }
+                    } else {
+                        full_class.clone()
+                    };
+                    let replaced = norm.replace('&', &format!(".{}", used_class));
+                    let selector_text =
+                        clean_placeholder_selector(replaced, opts.declaration_placeholder.as_deref());
+                    let rule_css = format!("{}{{{}:{}}}", selector_text, prop, value_full);
+                    let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
+                    collector.push_sheet(wrapped);
                 }
-                let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
-                let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
-                collector.push_sheet(wrapped);
                 Ok(())
             }
         })
@@ -1618,52 +1611,59 @@ fn atomicify_rules_plugin(
                         if decl.important() { value_full.push_str("!important"); }
                         value_full = minify_value_whitespace(&value_full);
 
-                        // Hash once using selectors.join("")
-                        let normalized_list: Vec<String> = selectors.iter().map(|s| normalized_selector(s)).collect();
-                        let selectors_joined_for_hash = normalized_list.join("");
-                        let mut group_seed = String::new();
-                        if let Some(prefix) = &opts.class_hash_prefix { group_seed.push_str(prefix); }
-                        let at_seg = if at_label.is_empty() { "undefined" } else { &at_label };
-                        group_seed.push_str(at_seg);
-                        group_seed.push_str(&selectors_joined_for_hash);
-                        group_seed.push_str(&prop);
-                        let group = hash(&group_seed).chars().take(4).collect::<String>();
-                        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                            eprintln!(
-                                "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
-                                at_label,
-                                selectors_joined_for_hash,
-                                prop,
-                                group_seed,
-                                group
-                            );
-                        }
-                        let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
-                        let full_class = format!("_{}{}", group, value_hash);
-                        collector.push_class(full_class.clone());
-                        // Replace using compressed class if map provided.
-                        let used_class = if let Some(map) = &opts.class_name_compression_map {
-                            let key = full_class.trim_start_matches('_');
-                            if let Some(compressed) = map.get(key) { compressed.clone() } else { full_class.clone() }
-                        } else {
-                            full_class.clone()
-                        };
-                        let mut replaced_selectors: Vec<String> = Vec::new();
+                        let normalized_list: Vec<String> =
+                            selectors.iter().map(|s| normalized_selector(s)).collect();
                         for norm in normalized_list {
+                            let mut group_seed = String::new();
+                            if let Some(prefix) = &opts.class_hash_prefix {
+                                group_seed.push_str(prefix);
+                            }
+                            let at_seg = if at_label.is_empty() {
+                                "undefined"
+                            } else {
+                                &at_label
+                            };
+                            group_seed.push_str(at_seg);
+                            group_seed.push_str(&norm);
+                            group_seed.push_str(&prop);
+                            let group = hash(&group_seed).chars().take(4).collect::<String>();
+                            if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                                eprintln!(
+                                    "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+                                    at_label, norm, prop, group_seed, group
+                                );
+                            }
+                            let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
+                            let full_class = format!("_{}{}", group, value_hash);
+                            collector.push_class(full_class.clone());
+                            // Replace using compressed class if map provided.
+                            let used_class = if let Some(map) = &opts.class_name_compression_map {
+                                let key = full_class.trim_start_matches('_');
+                                if let Some(compressed) = map.get(key) {
+                                    compressed.clone()
+                                } else {
+                                    full_class.clone()
+                                }
+                            } else {
+                                full_class.clone()
+                            };
                             let replaced = norm.replace('&', &format!(".{}", used_class));
-                            replaced_selectors.push(replaced);
+                            let selector_text = clean_placeholder_selector(
+                                replaced,
+                                opts.declaration_placeholder.as_deref(),
+                            );
+                            let rule_css = format!("{}{{{}:{}}}", selector_text, prop, value_full);
+                            let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
+                            collector.push_sheet(wrapped);
                         }
-
-                        let selector_joined = replaced_selectors.join(", ");
-                        let rule_css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
-                        let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
-                        collector.push_sheet(wrapped);
                     } else if let Some(nested) = as_rule(&child) {
                         // Nested rule like &:hover — combine selectors and emit
                         let nested_raw = nested.selector();
                         let nested_selectors = combine_selectors(&selectors, &nested_raw);
-                        let normalized_list: Vec<String> = nested_selectors.iter().map(|s| normalized_selector(s)).collect();
-                        let selectors_joined_for_hash = normalized_list.join("");
+                        let normalized_list: Vec<String> = nested_selectors
+                            .iter()
+                            .map(|s| normalized_selector(s))
+                            .collect();
 
                         for gc in nested.nodes() {
                             if let Some(nested_decl) = as_declaration(&gc) {
@@ -1676,48 +1676,51 @@ fn atomicify_rules_plugin(
                                 if nested_decl.important() { value_full.push_str("!important"); }
                                 value_full = minify_value_whitespace(&value_full);
 
-                                let mut group_seed = String::new();
-                                if let Some(prefix) = &opts.class_hash_prefix { group_seed.push_str(prefix); }
-                                let at_seg = if at_label.is_empty() { "undefined" } else { &at_label };
-                                group_seed.push_str(at_seg);
-                                group_seed.push_str(&selectors_joined_for_hash);
-                                group_seed.push_str(&prop);
-                                let group = hash(&group_seed).chars().take(4).collect::<String>();
-                                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                                    eprintln!(
-                                        "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
-                                        at_label,
-                                        selectors_joined_for_hash,
-                                        prop,
-                                        group_seed,
-                                        group
-                                    );
-                                }
-                                let value_hash = hash(&hash_seed).chars().take(4).collect::<String>();
-                                let full_class = format!("_{}{}", group, value_hash);
-                                collector.push_class(full_class.clone());
-                                let used_class = if let Some(map) = &opts.class_name_compression_map {
-                                    let key = full_class.trim_start_matches('_');
-                                    if let Some(compressed) = map.get(key) { compressed.clone() } else { full_class.clone() }
-                                } else {
-                                    full_class.clone()
-                                };
-                                let mut replaced: Vec<String> = Vec::new();
                                 for norm in &normalized_list {
-                                    replaced.push(norm.replace('&', &format!(".{}", used_class)));
-                                }
-                                let mut selector_joined = replaced.join(", ");
-                                if let Some(ph) = &opts.class_hash_prefix { let _ = ph; }
-                                if let Some(ph) = &opts.declaration_placeholder {
-                                    if !ph.is_empty() {
-                                        let needle = format!(" {}", ph);
-                                        selector_joined = selector_joined.replace(&needle, "");
-                                        selector_joined = selector_joined.replace(ph, "");
-                                        selector_joined = selector_joined.trim().to_string();
+                                    let mut group_seed = String::new();
+                                    if let Some(prefix) = &opts.class_hash_prefix {
+                                        group_seed.push_str(prefix);
                                     }
+                                    let at_seg = if at_label.is_empty() {
+                                        "undefined"
+                                    } else {
+                                        &at_label
+                                    };
+                                    group_seed.push_str(at_seg);
+                                    group_seed.push_str(norm);
+                                    group_seed.push_str(&prop);
+                                    let group =
+                                        hash(&group_seed).chars().take(4).collect::<String>();
+                                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                                        eprintln!(
+                                            "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+                                            at_label, norm, prop, group_seed, group
+                                        );
+                                    }
+                                    let value_hash =
+                                        hash(&hash_seed).chars().take(4).collect::<String>();
+                                    let full_class = format!("_{}{}", group, value_hash);
+                                    collector.push_class(full_class.clone());
+                                    let used_class =
+                                        if let Some(map) = &opts.class_name_compression_map {
+                                            let key = full_class.trim_start_matches('_');
+                                            if let Some(compressed) = map.get(key) {
+                                                compressed.clone()
+                                            } else {
+                                                full_class.clone()
+                                            }
+                                        } else {
+                                            full_class.clone()
+                                        };
+                                    let replaced =
+                                        norm.replace('&', &format!(".{}", used_class));
+                                    let selector_text = clean_placeholder_selector(
+                                        replaced,
+                                        opts.declaration_placeholder.as_deref(),
+                                    );
+                                    let css = format!("{}{{{}:{}}}", selector_text, prop, value_full);
+                                    collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
                                 }
-                                let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
-                                collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
                             }
                         }
                     }

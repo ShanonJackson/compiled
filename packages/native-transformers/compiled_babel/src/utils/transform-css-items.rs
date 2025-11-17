@@ -387,8 +387,8 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result =
                 transform_css(&logical.css, options).unwrap_or_else(|err| panic!("{err}"));
-            let ordered = css_result.class_names.clone();
-            let compressed = compress_class_names_for_runtime(&ordered, compression_map.as_ref());
+            let compressed =
+                compress_class_names_for_runtime(&css_result.class_names, compression_map.as_ref());
             let class_name_literal = string_literal(compressed.join(" "));
 
             TransformCssItemResult {
@@ -415,6 +415,9 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
         }
         _ => {
             let css = get_item_css(item);
+            if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+                eprintln!("[swc][transform-css-item] css={}", css);
+            }
             let (options, compression_map) = create_transform_css_options(meta);
             let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
             let ordered = css_result.class_names.clone();

@@ -399,29 +399,65 @@ fn declaration_name(name: &DeclarationName) -> String {
 
 fn collect_rule_selectors(rule: &QualifiedRule) -> Vec<String> {
     match &rule.prelude {
-        QualifiedRulePrelude::SelectorList(list) => list
-            .children
-            .iter()
-            .map(serialize_complex_selector_with_possible_nesting)
-            .collect(),
-        QualifiedRulePrelude::RelativeSelectorList(list) => list
-            .children
-            .iter()
-            .map(|rel| serialize_complex_selector_with_possible_nesting(&rel.selector))
-            .collect(),
+        QualifiedRulePrelude::SelectorList(list) => {
+            let selectors: Vec<String> = list
+                .children
+                .iter()
+                .map(serialize_complex_selector_with_possible_nesting)
+                .collect();
+            if trace_enabled() {
+                eprintln!(
+                    "[atomicify.collect] selector_list count={} selectors={:?}",
+                    selectors.len(),
+                    selectors
+                );
+            }
+            selectors
+        }
+        QualifiedRulePrelude::RelativeSelectorList(list) => {
+            let selectors: Vec<String> = list
+                .children
+                .iter()
+                .map(|rel| serialize_complex_selector_with_possible_nesting(&rel.selector))
+                .collect();
+            if trace_enabled() {
+                eprintln!(
+                    "[atomicify.collect] relative_selector_list count={} selectors={:?}",
+                    selectors.len(),
+                    selectors
+                );
+            }
+            selectors
+        }
         QualifiedRulePrelude::ListOfComponentValues(list) => {
             if let Some(parsed) =
                 crate::postcss::utils::selector_stringifier::parse_selector_list_from_component_values(list)
             {
-                parsed
+                let selectors: Vec<String> = parsed
                     .children
                     .iter()
                     .map(serialize_complex_selector_with_possible_nesting)
-                    .collect()
+                    .collect();
+                if trace_enabled() {
+                    eprintln!(
+                        "[atomicify.collect] parsed component values into {} selectors: {:?}",
+                        selectors.len(),
+                        selectors
+                    );
+                }
+                selectors
             } else {
-                serialize_component_values(&list.children)
+                let fallback: Vec<String> = serialize_component_values(&list.children)
                     .into_iter()
-                    .collect()
+                    .collect();
+                if trace_enabled() {
+                    let raw = fallback.get(0).cloned().unwrap_or_default();
+                    eprintln!(
+                        "[atomicify.collect] fallback component values; raw='{}'",
+                        raw
+                    );
+                }
+                fallback
             }
         }
     }

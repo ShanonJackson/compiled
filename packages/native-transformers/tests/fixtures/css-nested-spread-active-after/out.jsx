@@ -15,5 +15,9 @@ const pressed = {
 };
 const styles = null;
 export const Component = () => (
-	<div className={ax(["_ghybstnw _bufut94y _1uf0stnw _174kt94y _gcm15scu"])} />
+	<div
+		className={ax([
+			"_1tfxstnw _ee5ostnw _ixiwstnw _5or0t94y _19v6t94y _qrdit94y _1uf0stnw _174kt94y _gcm15scu",
+		])}
+	/>
 );

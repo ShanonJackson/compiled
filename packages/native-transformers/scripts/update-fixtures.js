@@ -34,6 +34,73 @@ const BABEL_OPTIONS = {
   ],
 };
 
+function splitTopLevelSegments(body) {
+  const segments = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (depth === 0 && start === -1) {
+      if (/\S/.test(ch)) {
+        start = i;
+      } else {
+        continue;
+      }
+    }
+    if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        segments.push(body.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return segments;
+}
+
+function normalizeMediaRule(rule) {
+  const open = rule.indexOf('{');
+  if (open === -1) return rule.trim();
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < rule.length; i++) {
+    const ch = rule[i];
+    if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) {
+    return rule.trim();
+  }
+  const prefix = rule.slice(0, open + 1);
+  const body = rule.slice(open + 1, close);
+  const suffix = rule.slice(close);
+  const segments = splitTopLevelSegments(body)
+    .map((segment) => normalizeStyleRule(segment.trim()))
+    .filter(Boolean);
+  if (segments.length <= 1) {
+    return rule.trim();
+  }
+  segments.sort();
+  return `${prefix}${segments.join('')}${suffix}`.trim();
+}
+
+function normalizeStyleRule(rule) {
+  const trimmed = (rule || '').trim();
+  if (trimmed.startsWith('@media')) {
+    return normalizeMediaRule(trimmed);
+  }
+  return trimmed;
+}
+
 function formatWithPrettierOrReturn(code, parser = 'babel') {
   try {
     const prettier = require('prettier');
@@ -244,13 +311,23 @@ async function processFixture(name) {
     ]);
     const babelRules = JSON.parse(babelRulesText || '[]');
     const swcRules = JSON.parse(swcRulesText || '[]');
+    const normalizedBabel = babelRules.map(normalizeStyleRule);
+    const normalizedSwc = swcRules.map(normalizeStyleRule);
 
-    const bSet = new Set(babelRules);
-    const sSet = new Set(swcRules);
+    const bSet = new Set(normalizedBabel);
+    const sSet = new Set(normalizedSwc);
     const missing = [];
     const extra = [];
-    for (const it of babelRules) if (!sSet.has(it)) missing.push(it);
-    for (const it of swcRules) if (!bSet.has(it)) extra.push(it);
+    normalizedBabel.forEach((rule, idx) => {
+      if (!sSet.has(rule)) {
+        missing.push(babelRules[idx]);
+      }
+    });
+    normalizedSwc.forEach((rule, idx) => {
+      if (!bSet.has(rule)) {
+        extra.push(swcRules[idx]);
+      }
+    });
 
     const lengthMismatch = babelRules.length !== swcRules.length;
     rulesEqual = missing.length === 0 && extra.length === 0;

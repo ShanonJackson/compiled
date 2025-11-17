@@ -11,6 +11,15 @@ interface PluginOpts {
   classHashPrefix?: string;
 }
 
+const isCssTraceEnabled = () => Boolean(process.env.COMPILED_CSS_TRACE);
+
+const traceAtomicify = (label: string, payload: Record<string, unknown>) => {
+  if (isCssTraceEnabled()) {
+    // eslint-disable-next-line no-console
+    console.log(`[css][atomicify] ${label}`, payload);
+  }
+};
+
 /**
  * Returns true if a given string is a valid CSS identifier
  *
@@ -39,11 +48,13 @@ const atomicClassName = (node: Declaration, opts: PluginOpts) => {
   const selectors = opts.selectors ? opts.selectors.join('') : '';
   const prefix = opts.classHashPrefix ?? '';
   const group = hash(`${prefix}${opts.atRule}${selectors}${node.prop}`).slice(0, 4);
-  console.log({
+  traceAtomicify('hash-input', {
     selectors,
     prefix,
-    inputToHash: `${prefix}${opts.atRule}${selectors}${node.prop}`
-  })
+    atRule: opts.atRule,
+    prop: node.prop,
+    seed: `${prefix}${opts.atRule}${selectors}${node.prop}`,
+  });
   const value = node.important ? node.value + node.important : node.value;
   const valueHash = hash(value).slice(0, 4);
 
@@ -105,13 +116,20 @@ const buildAtomicSelector = (node: Declaration, opts: PluginOpts) => {
 
     const compressedClassName =
       classNameCompressionMap && classNameCompressionMap[fullClassName.slice(1)];
+    const appliedClassName = compressedClassName ?? fullClassName;
 
-    if (compressedClassName) {
-      // Use compressed class name if compressedClassName is available
-      selectors.push(replaceNestingSelector(normalizedSelector, compressedClassName));
-    } else {
-      selectors.push(replaceNestingSelector(normalizedSelector, fullClassName));
-    }
+    const replacedSelector = replaceNestingSelector(normalizedSelector, appliedClassName);
+    selectors.push(replacedSelector);
+
+    traceAtomicify('selector', {
+      prop: node.prop,
+      rawSelector: selector,
+      normalizedSelector,
+      replacedSelector,
+      className: fullClassName,
+      appliedClassName,
+      atRule: opts.atRule,
+    });
 
     if (opts.callback) {
       opts.callback(fullClassName);
