@@ -38,7 +38,7 @@ use crate::utils_is_jsx_function::is_transformed_jsx_function;
 use crate::utils_module_scope;
 use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::utils_preserve_leading_comments::preserve_leading_comments;
-use crate::xcss_prop::visit_xcss_prop;
+use crate::xcss_prop::{visit_xcss_prop, visit_xcss_prop_on_element};
 
 const PACKAGE_NAME: &str = "@compiled/babel-plugin";
 
@@ -2295,6 +2295,14 @@ impl VisitMut for XcssVisitor {
                 .with_own_span(Some(expr.span()));
             visit_xcss_prop(expr, &meta);
         }
+    }
+
+    fn visit_mut_jsx_element(&mut self, element: &mut swc_core::ecma::ast::JSXElement) {
+        // Walk children first so nested nodes are handled depth-first.
+        element.visit_mut_children_with(self);
+
+        let meta = self.meta.clone();
+        visit_xcss_prop_on_element(element, &meta);
     }
 }
 

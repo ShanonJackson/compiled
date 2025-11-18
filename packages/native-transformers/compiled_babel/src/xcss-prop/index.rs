@@ -5,6 +5,7 @@ use swc_core::ecma::ast::{
 };
 use swc_core::ecma::visit::{noop_visit_type, Visit, VisitWith};
 
+use crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing;
 use crate::types::Metadata;
 use crate::utils_ast::build_code_frame_error;
 use crate::utils_build_compiled_component::compiled_template;
@@ -158,6 +159,27 @@ fn collect_member_expression_identifiers(expr: &Expr) -> Vec<Ident> {
     collector.identifiers
 }
 
+fn record_style_rules_from_sheets(sheets: &[String], meta: &Metadata) {
+    if sheets.is_empty() {
+        return;
+    }
+
+    let should_collect = meta.state().opts.extract.unwrap_or(false);
+    if !should_collect {
+        return;
+    }
+
+    let mut state = meta.state_mut();
+    for sheet in sheets {
+        if !sheet.contains('{') {
+            continue;
+        }
+
+        let normalized = normalize_block_value_spacing(sheet);
+        state.style_rules.insert(normalized);
+    }
+}
+
 fn find_inner_component(element: &JSXElement) -> Option<&JSXElement> {
     for child in &element.children {
         if let JSXElementChild::JSXExprContainer(container) = child {
@@ -248,6 +270,7 @@ where
                     .map(|inner| inner.clone())
                     .unwrap_or_else(|| (**element).clone());
 
+                record_style_rules_from_sheets(&sheets, meta);
                 *node = compiled_template(Expr::JSXElement(Box::new(inner)), &sheets, meta);
 
                 true
@@ -275,6 +298,7 @@ where
                     .map(|inner| inner.clone())
                     .unwrap_or_else(|| (**element).clone());
 
+                record_style_rules_from_sheets(&sheets, meta);
                 *node = compiled_template(Expr::JSXElement(Box::new(inner)), &sheets, meta);
 
                 true
@@ -288,6 +312,25 @@ where
 pub fn visit_xcss_prop(node: &mut Expr, meta: &Metadata) -> bool {
     let mut build = |expr: &Expr, metadata: &Metadata| build_css_from_expr(expr, metadata);
     visit_xcss_prop_with_builder(node, meta, &mut build)
+}
+
+/// Applies the xcss transform directly to a `JSXElement`, allowing callers to
+/// run the transform without wrapping the element in an `Expr`.
+pub fn visit_xcss_prop_on_element(element: &mut JSXElement, meta: &Metadata) -> bool {
+    let mut expr = Expr::JSXElement(Box::new(element.clone()));
+    let meta_with_context = meta
+        .with_parent_expr(Some(&expr))
+        .with_own_span(Some(expr.span()));
+    let transformed = visit_xcss_prop(&mut expr, &meta_with_context);
+    if transformed {
+        if let Expr::JSXElement(updated) = expr {
+            *element = *updated;
+        } else {
+            panic!("xcss transform must yield JSXElement");
+        }
+    }
+
+    transformed
 }
 
 #[cfg(test)]
