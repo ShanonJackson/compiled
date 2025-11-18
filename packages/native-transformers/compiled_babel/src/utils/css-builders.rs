@@ -1,11 +1,12 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
+use swc_core::common::comments::CommentKind;
 use swc_core::common::sync::Lrc;
-use swc_core::common::{SourceMap, Spanned, DUMMY_SP};
+use swc_core::common::{SourceMap, SourceMapper, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
-    ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Expr,
-    ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Pat, Prop,
-    PropName, PropOrSpread, SpreadElement, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
+    ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr,
+    Expr, ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Pat, Prop,
+    PropName, PropOrSpread, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
 };
 use swc_core::ecma::utils::ExprExt;
 use swc_ecma_codegen::text_writer::JsWriter;
@@ -57,6 +58,46 @@ fn print_expression(expr: &Expr) -> String {
     }
 
     String::from_utf8(buffer).expect("expression to utf8 string")
+}
+
+fn print_statement(stmt: &Stmt) -> String {
+    let cm: Lrc<SourceMap> = Default::default();
+    let mut buffer = Vec::new();
+
+    {
+        let mut writer = JsWriter::new(cm.clone(), "\n", &mut buffer, None);
+        writer.set_indent_str("  ");
+        let mut emitter = Emitter {
+            cfg: Config::default(),
+            comments: None,
+            cm,
+            wr: writer,
+        };
+
+        stmt.emit_with(&mut emitter).expect("emit statement");
+    }
+
+    String::from_utf8(buffer).expect("statement to utf8 string")
+}
+
+fn print_pattern(pat: &Pat) -> String {
+    let cm: Lrc<SourceMap> = Default::default();
+    let mut buffer = Vec::new();
+
+    {
+        let mut writer = JsWriter::new(cm.clone(), "\n", &mut buffer, None);
+        writer.set_indent_str("  ");
+        let mut emitter = Emitter {
+            cfg: Config::default(),
+            comments: None,
+            cm,
+            wr: writer,
+        };
+
+        pat.emit_with(&mut emitter).expect("emit pattern");
+    }
+
+    String::from_utf8(buffer).expect("pattern to utf8 string")
 }
 
 fn babel_like_code_for_hash(expr: &Expr) -> String {
@@ -267,23 +308,166 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
     print_expr(expr)
 }
 
-fn babel_like_expression(expr: &Expr) -> String {
-    if let Expr::Arrow(arrow) = expr {
-        if arrow.params.len() == 1 {
-            if let Pat::Ident(binding) = &arrow.params[0] {
-                if binding.type_ann.is_none() && !binding.optional {
-                    if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
-                        // COMPAT: Babel generator emits `param => expression` (without parentheses)
-                        // for single identifier arrow params. Matching this formatting keeps the
-                        // hashed CSS variable names identical to the Babel plugin.
-                        let body_code = babel_like_code_for_hash(body);
-                        return format!("{} => {}", binding.id.sym.as_ref(), body_code);
-                    }
-                }
+fn format_arrow_params(arrow: &ArrowExpr) -> String {
+    if arrow.params.is_empty() {
+        return "()".to_string();
+    }
+
+    if arrow.params.len() == 1 {
+        if let Pat::Ident(binding) = &arrow.params[0] {
+            if binding.type_ann.is_none() && !binding.optional {
+                return binding.id.sym.as_ref().to_string();
             }
         }
+    }
 
-        return print_expression(expr);
+    let mut params: Vec<String> = Vec::with_capacity(arrow.params.len());
+    for param in &arrow.params {
+        params.push(print_pattern(param).trim().to_string());
+    }
+
+    format!("({})", params.join(", "))
+}
+
+enum BlockItem<'a> {
+    Stmt(&'a Stmt),
+    Comment { kind: CommentKind, text: String },
+}
+
+fn extract_comment_entries<'a>(
+    snippet: &str,
+    block: &BlockStmt,
+) -> Vec<(u32, BlockItem<'a>)> {
+    let mut entries = Vec::new();
+    let bytes = snippet.as_bytes();
+    let mut index = 0usize;
+    let base = block.span.lo.0;
+
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'/' && bytes[index + 1] == b'/' {
+            let start = index;
+            index += 2;
+            let start_idx = index;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+            let text = snippet[start_idx..index].to_string();
+            entries.push((
+                base + start as u32,
+                BlockItem::Comment {
+                    kind: CommentKind::Line,
+                    text,
+                },
+            ));
+        } else if bytes[index] == b'/' && bytes[index + 1] == b'*' {
+            let start = index;
+            index += 2;
+            let start_idx = index;
+            while index + 1 < bytes.len()
+                && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+            {
+                index += 1;
+            }
+            let text = if index + 1 < bytes.len() {
+                let slice = &snippet[start_idx..index];
+                index += 2;
+                slice.to_string()
+            } else {
+                snippet[start_idx..].to_string()
+            };
+            entries.push((
+                base + start as u32,
+                BlockItem::Comment {
+                    kind: CommentKind::Block,
+                    text,
+                },
+            ));
+        } else {
+            index += 1;
+        }
+    }
+
+    entries
+}
+
+fn format_block_like_babel(block: &BlockStmt, meta: &Metadata) -> String {
+    let snippet = meta
+        .state()
+        .file()
+        .source_map
+        .span_to_snippet(block.span)
+        .ok();
+
+    if block.stmts.is_empty() {
+        return "{\n}".into();
+    }
+
+    let mut entries: Vec<(u32, BlockItem)> = block
+        .stmts
+        .iter()
+        .map(|stmt| (stmt.span().lo.0, BlockItem::Stmt(stmt)))
+        .collect();
+
+    if let Some(ref snippet) = snippet {
+        entries.extend(extract_comment_entries(snippet, block));
+    }
+
+    entries.sort_by_key(|(pos, _)| *pos);
+
+    let mut out = String::from("{\n");
+    for (_, item) in entries {
+        match item {
+            BlockItem::Stmt(stmt) => {
+                let stmt_code = print_statement(stmt).trim().to_string();
+                out.push_str("  ");
+                out.push_str(&stmt_code);
+                if !stmt_code.ends_with(';') && !stmt_code.ends_with('}') {
+                    out.push(';');
+                }
+                out.push('\n');
+            }
+            BlockItem::Comment { kind, text } => {
+                out.push_str("  ");
+                match kind {
+                    CommentKind::Line => {
+                        out.push_str("//");
+                        let starts_with_ws = text
+                            .chars()
+                            .next()
+                            .map(|ch| ch.is_whitespace())
+                            .unwrap_or(false);
+                        if !starts_with_ws && !text.is_empty() {
+                            out.push(' ');
+                        }
+                        out.push_str(&text);
+                    }
+                    CommentKind::Block => {
+                        out.push_str("/*");
+                        out.push_str(&text);
+                        out.push_str("*/");
+                    }
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out.push('}');
+    out
+}
+
+fn babel_like_expression(expr: &Expr, meta: &Metadata) -> String {
+    if let Expr::Arrow(arrow) = expr {
+        let params_code = format_arrow_params(arrow);
+        match arrow.body.as_ref() {
+            BlockStmtOrExpr::Expr(body) => {
+                let body_code = babel_like_code_for_hash(body);
+                return format!("{} => {}", params_code, body_code);
+            }
+            BlockStmtOrExpr::BlockStmt(block) => {
+                let body_code = format_block_like_babel(block, meta);
+                return format!("{} => {}", params_code, body_code);
+            }
+        }
     }
 
     babel_like_code_for_hash(expr)
@@ -369,7 +553,7 @@ fn is_custom_property_name(value: &str) -> bool {
 
 fn get_variable_declarator_value_for_parent_expr(expr: &Expr, meta: &Metadata) -> (Expr, String) {
     let mut expression = expr.clone();
-    let mut variable_name = babel_like_expression(expr);
+    let mut variable_name = babel_like_expression(expr, meta);
 
     if let Expr::Ident(ident) = expr {
         let base_name = ident.sym.as_ref();
@@ -385,7 +569,7 @@ fn get_variable_declarator_value_for_parent_expr(expr: &Expr, meta: &Metadata) -
                     MetadataContext::Keyframes { keyframe } => {
                         format!("{keyframe}:{base_name}")
                     }
-                    _ => babel_like_expression(node),
+                    _ => babel_like_expression(node, meta),
                 };
             }
         }

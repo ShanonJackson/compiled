@@ -347,7 +347,10 @@ static FROM_INITIAL: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
 
 pub fn plugin() -> pc::BuiltPlugin {
     let ignore_default = vec!["writing-mode", "transform-box"];
-    let initial_support = true;
+    // Babel’s cssnano preset currently evaluates `initialSupport` to false for this repo’s
+    // browserslist (still includes `op_mini all`). Default to false here until the same
+    // detection path is ported, so engine + Babel outputs stay aligned.
+    let initial_support = false;
     pc::plugin("postcss-reduce-initial")
         .once_exit(move |css, _| {
             let process_decl = |decl: postcss::ast::nodes::Declaration| {
