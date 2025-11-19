@@ -291,13 +291,47 @@ pub(crate) fn normalize_block_value_spacing(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     let mut inside_block = false;
+    let mut calc_stack: Vec<bool> = Vec::new();
+    let mut current_ident = String::new();
+
     while let Some(ch) = chars.next() {
         if ch == '{' {
             inside_block = true;
+            calc_stack.clear();
+            current_ident.clear();
         } else if ch == '}' {
             inside_block = false;
+            calc_stack.clear();
+            current_ident.clear();
         }
+
+        if ch == '(' {
+            let is_calc = current_ident.eq_ignore_ascii_case("calc");
+            calc_stack.push(is_calc);
+            current_ident.clear();
+        } else if ch == ')' {
+            calc_stack.pop();
+        } else if ch.is_alphabetic() || ch == '-' {
+            current_ident.push(ch);
+        } else {
+            current_ident.clear();
+        }
+
         output.push(ch);
+        if inside_block && ch == ',' {
+            let inside_calc = calc_stack.iter().any(|flag| *flag);
+            if inside_calc {
+                if matches!(chars.peek(), Some(c) if !c.is_whitespace()) {
+                    output.push(' ');
+                }
+            } else {
+                while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            continue;
+        }
+
         if inside_block && ch == ')' {
             if let Some(&next) = chars.peek() {
                 if needs_space_after_token(next) {
@@ -306,6 +340,7 @@ pub(crate) fn normalize_block_value_spacing(input: &str) -> String {
             }
         }
     }
+
     output
 }
 
@@ -346,5 +381,19 @@ mod tests {
         let raw = "._a{padding:5 var(--foo)0 0}";
         let normalized = normalize_block_value_spacing(raw);
         assert_eq!(normalized, "._a{padding:5 var(--foo) 0 0}");
+    }
+
+    #[test]
+    fn trims_var_fallback_outside_calc() {
+        let raw = "._a{box-shadow:var(--foo, 10px)}";
+        let normalized = normalize_block_value_spacing(raw);
+        assert_eq!(normalized, "._a{box-shadow:var(--foo,10px)}");
+    }
+
+    #[test]
+    fn preserves_var_fallback_inside_calc() {
+        let raw = "._a{height:calc(100vh - var(--foo, 10px))}";
+        let normalized = normalize_block_value_spacing(raw);
+        assert_eq!(normalized, raw);
     }
 }

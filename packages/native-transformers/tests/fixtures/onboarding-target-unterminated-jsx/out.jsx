@@ -25,18 +25,14 @@ export const TargetInner = ({ bgColor, children, className, pulse, radius, testI
 		bgColor={bgColor}
 		className={ax([
 			pulse && "",
-			pulse && "_5sagi11n _tip812c5 _j7hq1mi7 _1pglmcjr _16qsd5xj",
+			pulse && "_5sagi11n _tip812c5 _j7hq1mi7 _1pglmcjr _16qs1peg",
 			"_1bumglyw _sedtglyw",
 			className,
 		])}
 		radius={radius}
 		testId={testId}
 		{...props}
-		style={{
-			...props.style,
-			"--_nam9gp": ix(`0 0 0 2px ${"var(--ds-border-discovery, #AF59E1)"}`),
-			"--_11n1krp": ix(`0 0 0 2px ${"var(--ds-border-discovery, #AF59E1)"}`),
-		}}
+		style={props.style}
 	>
 		{children}
 	</Base>

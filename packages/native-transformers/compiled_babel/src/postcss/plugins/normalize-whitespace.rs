@@ -178,7 +178,8 @@ fn normalize_function(function: &mut Function, parent_inside_calc: bool) {
     let is_variable = matches!(lower.as_str(), "var" | "env" | "constant");
     let is_calc = lower == "calc";
 
-    if !is_variable {
+    let should_trim = !(is_variable && parent_inside_calc);
+    if should_trim {
         trim_leading_whitespace(&mut function.value);
         trim_trailing_whitespace(&mut function.value);
     }

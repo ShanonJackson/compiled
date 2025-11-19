@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 
+use swc_atoms::Atom;
 use swc_core::common::{Span, Spanned, SyntaxContext};
-use swc_core::ecma::ast::{BinExpr, Expr, Lit, Number, Str};
+use swc_core::ecma::ast::{BinExpr, Expr, Lit, Number, Str, Tpl};
 use swc_core::ecma::utils::{ExprCtx, ExprExt, Value};
 use swc_core::ecma::visit::{noop_visit_type, Visit, VisitWith};
 
@@ -14,6 +15,7 @@ use crate::utils_traverse_expression_traverse_function::traverse_function;
 use crate::utils_traverse_expression_traverse_identifier::traverse_identifier;
 use crate::utils_traverse_expression_traverse_member_expression::traverse_member_expression;
 use crate::utils_traverse_expression_traverse_unary_expression::traverse_unary_expression;
+use crate::utils_types::EvaluateExpression;
 
 fn skip_wrappers<'a>(expression: &'a Expr) -> &'a Expr {
     match expression {
@@ -258,6 +260,38 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
     }
 }
 
+fn try_evaluate_template_literal(
+    tpl: &Tpl,
+    meta: Metadata,
+    evaluate_expression: EvaluateExpression,
+) -> Option<ResultPair> {
+    let mut current_meta = meta;
+    let mut result = String::new();
+
+    for (index, quasi) in tpl.quasis.iter().enumerate() {
+        result.push_str(quasi.raw.as_ref());
+
+        if let Some(expr) = tpl.exprs.get(index) {
+            let pair = evaluate_expression(expr, current_meta.clone());
+            current_meta = pair.meta.clone();
+
+            match pair.value {
+                Expr::Lit(Lit::Str(str_lit)) => result.push_str(str_lit.value.as_ref()),
+                Expr::Lit(Lit::Num(num_lit)) => result.push_str(&num_lit.value.to_string()),
+                _ => return None,
+            }
+        }
+    }
+
+    let literal = Expr::Lit(Lit::Str(Str {
+        span: tpl.span,
+        value: Atom::from(result),
+        raw: None,
+    }));
+
+    Some(create_result_pair(literal, current_meta))
+}
+
 /// Mirrors the Babel `evaluateExpression` helper by recursively resolving and
 /// evaluating expressions into literal forms where possible while preserving the
 /// metadata threaded through each traversal.
@@ -277,6 +311,14 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
                 traverse_member_expression(member, updated_meta.clone(), evaluate_expression);
             evaluated_value = Some(pair.value);
             updated_meta = pair.meta;
+        }
+        Expr::Tpl(tpl) => {
+            if let Some(pair) =
+                try_evaluate_template_literal(tpl, updated_meta.clone(), evaluate_expression)
+            {
+                evaluated_value = Some(pair.value);
+                updated_meta = pair.meta;
+            }
         }
         Expr::Fn(_) | Expr::Arrow(_) => {
             let pair =
