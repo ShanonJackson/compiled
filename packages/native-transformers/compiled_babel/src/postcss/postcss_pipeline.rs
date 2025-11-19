@@ -11,8 +11,9 @@ use super::transform::{
     transform_css_via_swc_pipeline, CssTransformError, TransformCssOptions, TransformCssResult,
 };
 #[cfg(feature = "postcss_engine")]
+use crate::postcss::plugins::vendor_autoprefixer::{AutoprefixerData, PrefixedDecl};
+#[cfg(feature = "postcss_engine")]
 use crate::postcss::utils::value_minifier::minify_value_whitespace;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "postcss_engine")]
@@ -46,6 +47,65 @@ impl AtomicCollector {
         };
         (sheets, classes)
     }
+}
+
+#[cfg(feature = "postcss_engine")]
+fn prefixed_decl_entries(
+    autoprefixer: Option<&AutoprefixerData>,
+    prop: &str,
+    normalized_value: &str,
+    important: bool,
+) -> Vec<(String, String)> {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    if let Some(engine) = autoprefixer {
+        for PrefixedDecl {
+            property,
+            mut value,
+        } in engine.prefixed_decls(prop, normalized_value)
+        {
+            if important {
+                value.push_str("!important");
+            }
+            entries.push((property, value));
+        }
+    }
+    let mut base = normalized_value.to_string();
+    if important {
+        base.push_str("!important");
+    }
+    entries.push((prop.to_string(), base));
+    entries
+}
+
+#[cfg(feature = "postcss_engine")]
+fn selector_variants_with_autoprefixer(
+    autoprefixer: Option<&AutoprefixerData>,
+    selector: &str,
+) -> Vec<String> {
+    let mut variants: Vec<String> = Vec::new();
+    variants.push(selector.to_string());
+    if let Some(engine) = autoprefixer {
+        for variant in engine.placeholder_selector_variants(selector) {
+            if !variants.iter().any(|existing| existing == &variant) {
+                variants.push(variant);
+            }
+        }
+    }
+    variants
+}
+
+#[cfg(feature = "postcss_engine")]
+fn serialize_decl_entries(entries: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (idx, (prop, value)) in entries.iter().enumerate() {
+        out.push_str(prop);
+        out.push(':');
+        out.push_str(value);
+        if idx + 1 != entries.len() {
+            out.push(';');
+        }
+    }
+    out
 }
 
 #[cfg(feature = "postcss_engine")]
@@ -150,6 +210,15 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
     let flatten_enabled = options.flatten_multiple_selectors.unwrap_or(true);
     let mut plugins: Vec<pc::BuiltPlugin> = Vec::new();
+    let autoprefixer_enabled = std::env::var("AUTOPREFIXER")
+        .map(|v| v != "off")
+        .unwrap_or(true);
+    let autoprefixer_data = if autoprefixer_enabled {
+        crate::postcss::plugins::vendor_autoprefixer::AutoprefixerData::load()
+            .map(Arc::new)
+    } else {
+        None
+    };
 
     // Match Babel ordering: run duplicate-declaration removal before wrapping
     // bare declarations into a rule. This ensures last-wins semantics align.
@@ -200,27 +269,23 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     }
     plugins.push(super::plugins::expand_shorthands_engine::plugin());
     // Start emitting atomic rules.
-    plugins.push(atomicify_rules_plugin(options.clone(), collector.clone()));
+    plugins.push(atomicify_rules_plugin(
+        options.clone(),
+        collector.clone(),
+        autoprefixer_data.clone(),
+    ));
     if flatten_enabled {
         plugins.push(flatten_multiple_selectors_plugin());
         plugins.push(pc::plugin("discard-duplicates-2").build());
     }
     plugins.push(pc::plugin("increase-specificity").build());
     plugins.push(sort_atomic_style_sheet_plugin());
-    // Insert full vendor prefixing at the same stage as JS pipeline
-    if std::env::var("AUTOPREFIXER")
-        .map(|v| v != "off")
-        .unwrap_or(true)
-    {
-        plugins.push(vendor_autoprefixer_plugin());
-    } else {
-        plugins.push(pc::plugin("noop-autoprefixer").build());
-    }
     plugins.push(normalize_whitespace_plugin());
     // Collect keyframes as sheets to match Babel output
     plugins.push(extract_stylesheets_plugin(
         collector.clone(),
         options.clone(),
+        autoprefixer_data.clone(),
     ));
     pc::postcss_with_plugins(plugins)
 }
@@ -860,6 +925,7 @@ fn normalize_ampersand_combinators(selector: &str) -> String {
 fn extract_stylesheets_plugin(
     collector: AtomicCollector,
     _options: TransformCssOptions,
+    _autoprefixer: Option<Arc<AutoprefixerData>>,
 ) -> pc::BuiltPlugin {
     use postcss::ast::nodes::as_at_rule;
     use postcss::list::comma;
@@ -1016,6 +1082,7 @@ fn extract_stylesheets_plugin(
         at_chain: &[(String, String)],
         collector: &AtomicCollector,
         opts: &TransformCssOptions,
+        autoprefixer: Option<&AutoprefixerData>,
     ) {
         let borrowed = node.borrow();
         let children = borrowed.nodes.clone();
@@ -1041,12 +1108,12 @@ fn extract_stylesheets_plugin(
                         if decl.important() {
                             hash_seed.push_str("true");
                         }
-                        let mut value_full = raw_value;
-                        value_full = minify_color_value(&value_full);
+                        let mut normalized_value = minify_color_value(&raw_value);
+                        normalized_value = minify_value_whitespace(&normalized_value);
+                        let mut base_value = normalized_value.clone();
                         if decl.important() {
-                            value_full.push_str("!important");
+                            base_value.push_str("!important");
                         }
-                        value_full = minify_value_whitespace(&value_full);
                         let mut replaced_selectors: Vec<String> = Vec::new();
                         for sel in &sels {
                             let norm = normalized_selector(sel);
@@ -1091,11 +1158,45 @@ fn extract_stylesheets_plugin(
                                 selector_joined = selector_joined.trim().to_string();
                             }
                         }
-                        let css = format!("{}{{{}:{}}}", selector_joined, prop, value_full);
-                        collector.push_sheet(wrap_in_at_rules(&css, at_chain));
+                        let mut decls_to_emit: Vec<(String, String)> = Vec::new();
+                        if let Some(engine) = autoprefixer {
+                            for pref in engine.prefixed_decls(&prop, &normalized_value) {
+                                let mut v = pref.value.clone();
+                                if decl.important() {
+                                    v.push_str("!important");
+                                }
+                                decls_to_emit.push((pref.property.clone(), v));
+                            }
+                        }
+                        decls_to_emit.push((prop.clone(), base_value.clone()));
+
+                        let mut selector_variants: Vec<String> = Vec::new();
+                        if let Some(engine) = autoprefixer {
+                            selector_variants =
+                                engine.placeholder_selector_variants(&selector_joined);
+                        }
+                        for variant in selector_variants {
+                            for (emit_prop, emit_value) in &decls_to_emit {
+                                let css =
+                                    format!("{}{{{}:{}}}", variant, emit_prop, emit_value);
+                                collector.push_sheet(wrap_in_at_rules(&css, at_chain));
+                            }
+                        }
+                        for (emit_prop, emit_value) in &decls_to_emit {
+                            let css =
+                                format!("{}{{{}:{}}}", selector_joined, emit_prop, emit_value);
+                            collector.push_sheet(wrap_in_at_rules(&css, at_chain));
+                        }
                     } else if let Some(_nested_rule) = as_rule(&gc) {
                         // Recurse into nested rules (should be flattened earlier, but handle just in case)
-                        walk_and_emit(&gc, &sels, at_chain, collector, opts);
+                        walk_and_emit(
+                            &gc,
+                            &sels,
+                            at_chain,
+                            collector,
+                            opts,
+                            autoprefixer,
+                        );
                     } else if let Some(nested_at) = as_at_rule(&gc) {
                         // Recurse into nested at-rules under this rule, preserving selectors.
                         // IMPORTANT: Do not descend into @keyframes — JS atomicify never emits
@@ -1122,7 +1223,14 @@ fn extract_stylesheets_plugin(
                         if can_atomicify_at_rule(&name) {
                             next_chain.push((name, params));
                         }
-                        walk_and_emit(&nested_at.to_node(), &sels, &next_chain, collector, opts);
+                        walk_and_emit(
+                            &nested_at.to_node(),
+                            &sels,
+                            &next_chain,
+                            collector,
+                            opts,
+                            autoprefixer,
+                        );
                     }
                 }
             } else if let Some(at) = as_at_rule(&child) {
@@ -1149,9 +1257,16 @@ fn extract_stylesheets_plugin(
                 if can_atomicify_at_rule(&name) {
                     next.push((name, params));
                 }
-                walk_and_emit(&at.to_node(), selectors, &next, collector, opts);
+                walk_and_emit(
+                    &at.to_node(),
+                    selectors,
+                    &next,
+                    collector,
+                    opts,
+                    autoprefixer,
+                );
             } else {
-                walk_and_emit(&child, selectors, at_chain, collector, opts);
+                walk_and_emit(&child, selectors, at_chain, collector, opts, autoprefixer);
             }
         }
     }
@@ -1228,6 +1343,7 @@ fn extract_stylesheets_plugin(
 fn atomicify_rules_plugin(
     options: TransformCssOptions,
     collector: AtomicCollector,
+    autoprefixer: Option<Arc<AutoprefixerData>>,
 ) -> pc::BuiltPlugin {
     use crate::utils_hash::hash;
     use postcss::list::comma;
@@ -1238,6 +1354,7 @@ fn atomicify_rules_plugin(
         selectors: Vec<String>,          // combined selectors at this depth
         opts: &'a TransformCssOptions,
         collector: AtomicCollector,
+        autoprefixer: Option<Arc<AutoprefixerData>>,
     }
 
     fn can_atomicify_at_rule(name: &str) -> bool {
@@ -1525,6 +1642,7 @@ fn atomicify_rules_plugin(
             let at_stack = at_stack.clone();
             let collector = collector.clone();
             let opts = options.clone();
+            let autoprefixer = autoprefixer.clone();
             move |decl, _| {
                 // Skip if this declaration lives under a normal Rule; the rule_exit
                 // hook will handle those to avoid double emission.
@@ -1558,20 +1676,33 @@ fn atomicify_rules_plugin(
 
                 let prop = decl.prop();
                 let raw_value = decl.value();
+                let has_important = decl.important();
                 let mut hash_seed = raw_value.clone();
-                if decl.important() { hash_seed.push_str("true"); }
-                let mut value_full = raw_value;
+                if has_important {
+                    hash_seed.push_str("true");
+                }
                 // Normalize color values before serialization, but keep hash_seed untouched.
                 fn minify_color_value(value: &str) -> String {
                     let trimmed = value.trim();
-                    if trimmed.is_empty() { return value.to_string(); }
-                    let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
-                    let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
-                    if min.len() < trimmed.len() { min } else { trimmed.to_string() }
+                    if trimmed.is_empty() {
+                        return value.to_string();
+                    }
+                    let opts =
+                        super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+                    let min =
+                        super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
+                    if min.len() < trimmed.len() {
+                        min
+                    } else {
+                        trimmed.to_string()
+                    }
                 }
-                value_full = minify_color_value(&value_full);
-                if decl.important() { value_full.push_str("!important"); }
-                value_full = minify_value_whitespace(&value_full);
+                let mut normalized_value = minify_color_value(&raw_value);
+                normalized_value = minify_value_whitespace(&normalized_value);
+                let autoprefixer_ref = autoprefixer.as_ref().map(|arc| arc.as_ref());
+                let prefixed_entries =
+                    prefixed_decl_entries(autoprefixer_ref, &prop, &normalized_value, has_important);
+                let decls = serialize_decl_entries(&prefixed_entries);
 
                 let mut normalized_list: Vec<String> =
                     selectors.iter().map(|s| normalized_selector(s)).collect();
@@ -1613,11 +1744,17 @@ fn atomicify_rules_plugin(
                         full_class.clone()
                     };
                     let replaced = norm.replace('&', &format!(".{}", used_class));
-                    let selector_text =
-                        clean_placeholder_selector(replaced, opts.declaration_placeholder.as_deref());
-                    let rule_css = format!("{}{{{}:{}}}", selector_text, prop, value_full);
-                    let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
-                    collector.push_sheet(wrapped);
+                    let selector_text = clean_placeholder_selector(
+                        replaced,
+                        opts.declaration_placeholder.as_deref(),
+                    );
+                    let selector_variants =
+                        selector_variants_with_autoprefixer(autoprefixer_ref, &selector_text);
+                    for variant in selector_variants {
+                        let rule_css = format!("{}{{{}}}", variant, decls);
+                        let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
+                        collector.push_sheet(wrapped);
+                    }
                 }
                 Ok(())
             }
@@ -1666,6 +1803,7 @@ fn atomicify_rules_plugin(
             let at_stack = at_stack.clone();
             let collector = collector.clone();
             let opts = options.clone();
+            let autoprefixer = autoprefixer.clone();
             move |rule, _| {
                 if is_inside_keyframes(&rule.to_node()) {
                     // We skipped pushing a new selectors frame in rule_filter; keep stack intact.
@@ -1678,6 +1816,7 @@ fn atomicify_rules_plugin(
 
                 let at_chain = at_stack.lock().unwrap().clone();
                 let at_label = at_chain_label(&at_chain);
+                let autoprefixer_ref = autoprefixer.as_ref().map(|arc| arc.as_ref());
 
                 // Minimal color minifier to mirror cssnano before hashing.
                 fn minify_color_value(value: &str) -> String {
@@ -1699,12 +1838,20 @@ fn atomicify_rules_plugin(
                     if let Some(decl) = as_declaration(&child) {
                         let prop = decl.prop();
                         let raw_value = decl.value();
+                        let has_important = decl.important();
                         let mut hash_seed = raw_value.clone();
-                        if decl.important() { hash_seed.push_str("true"); }
-                        let mut value_full = raw_value;
-                        value_full = minify_color_value(&value_full);
-                        if decl.important() { value_full.push_str("!important"); }
+                        if has_important {
+                            hash_seed.push_str("true");
+                        }
+                        let mut value_full = minify_color_value(&raw_value);
                         value_full = minify_value_whitespace(&value_full);
+                        let prefixed_entries = prefixed_decl_entries(
+                            autoprefixer_ref,
+                            &prop,
+                            &value_full,
+                            has_important,
+                        );
+                        let decls = serialize_decl_entries(&prefixed_entries);
 
                         let normalized_list: Vec<String> =
                             selectors.iter().map(|s| normalized_selector(s)).collect();
@@ -1747,9 +1894,13 @@ fn atomicify_rules_plugin(
                                 replaced,
                                 opts.declaration_placeholder.as_deref(),
                             );
-                            let rule_css = format!("{}{{{}:{}}}", selector_text, prop, value_full);
-                            let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
-                            collector.push_sheet(wrapped);
+                            let selector_variants =
+                                selector_variants_with_autoprefixer(autoprefixer_ref, &selector_text);
+                            for variant in selector_variants {
+                                let rule_css = format!("{}{{{}}}", variant, decls);
+                                let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
+                                collector.push_sheet(wrapped);
+                            }
                         }
                     } else if let Some(nested) = as_rule(&child) {
                         // Nested rule like &:hover — combine selectors and emit
@@ -1764,12 +1915,20 @@ fn atomicify_rules_plugin(
                             if let Some(nested_decl) = as_declaration(&gc) {
                                 let prop = nested_decl.prop();
                                 let raw_value = nested_decl.value();
+                                let has_important = nested_decl.important();
                                 let mut hash_seed = raw_value.clone();
-                                if nested_decl.important() { hash_seed.push_str("true"); }
-                                let mut value_full = raw_value;
-                                value_full = minify_color_value(&value_full);
-                                if nested_decl.important() { value_full.push_str("!important"); }
-                                value_full = minify_value_whitespace(&value_full);
+                                if has_important {
+                                    hash_seed.push_str("true");
+                                }
+                                let mut normalized_value = minify_color_value(&raw_value);
+                                normalized_value = minify_value_whitespace(&normalized_value);
+                                let prefixed_entries = prefixed_decl_entries(
+                                    autoprefixer_ref,
+                                    &prop,
+                                    &normalized_value,
+                                    has_important,
+                                );
+                                let decls = serialize_decl_entries(&prefixed_entries);
 
                                 for norm in &normalized_list {
                                     let mut group_seed = String::new();
@@ -1813,8 +1972,14 @@ fn atomicify_rules_plugin(
                                         replaced,
                                         opts.declaration_placeholder.as_deref(),
                                     );
-                                    let css = format!("{}{{{}:{}}}", selector_text, prop, value_full);
-                                    collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
+                                    let selector_variants = selector_variants_with_autoprefixer(
+                                        autoprefixer_ref,
+                                        &selector_text,
+                                    );
+                                    for variant in selector_variants {
+                                        let css = format!("{}{{{}}}", variant, decls);
+                                        collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
+                                    }
                                 }
                             }
                         }
@@ -1891,45 +2056,9 @@ pub fn transform_css_via_postcss(
         eprintln!("[postcss] take collector");
     }
     let (mut sheets, mut class_names) = collector.take();
-    let autoprefix_map =
-        crate::postcss::plugins::vendor_autoprefixer::PrefixDB::load().and_then(|db| {
-            let targets =
-                crate::postcss::plugins::vendor_autoprefixer::resolve_browserslist_targets();
-            let (add, _remove) = db.select_add_remove(&targets);
-            Some(add)
-        });
-    apply_vendor_prefixes_to_sheets(&mut sheets, autoprefix_map.as_ref());
-    // Minimal post-process to guarantee -moz-fit-content is present for width-like properties
-    // when emitting via the engine path. Guarded to avoid duplicates.
-    if std::env::var("AUTOPREFIXER")
-        .map(|v| v != "off")
-        .unwrap_or(true)
-    {
-        for sheet in &mut sheets {
-            let keys = ["min-width", "max-width", "width"];
-            for key in keys.iter() {
-                // Skip if already has -moz-fit-content for this key
-                let moz_sig = format!("{}:-moz-fit-content", key);
-                if sheet.contains(&moz_sig) {
-                    continue;
-                }
-                // Important form first
-                let needle_imp = format!("{}:fit-content!important", key);
-                if sheet.contains(&needle_imp) {
-                    let repl = format!(
-                        "{}:-moz-fit-content!important;{}:fit-content!important",
-                        key, key
-                    );
-                    *sheet = sheet.replace(&needle_imp, &repl);
-                    continue;
-                }
-                // Non-important form
-                let needle = format!("{}:fit-content", key);
-                if sheet.contains(&needle) {
-                    let repl = format!("{}:-moz-fit-content;{}:fit-content", key, key);
-                    *sheet = sheet.replace(&needle, &repl);
-                }
-            }
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        for sheet in &sheets {
+            eprintln!("[postcss] sheet {}", sheet);
         }
     }
     // eprintln!("[postcss-pipeline] after first pass, sheets={}", sheets.len());
@@ -2221,148 +2350,10 @@ pub fn transform_css_via_postcss(
     })
 }
 
-fn apply_vendor_prefixes_to_sheets(
-    sheets: &mut Vec<String>,
-    autoprefix_map: Option<&HashMap<String, Vec<String>>>,
-) {
-    if sheets.is_empty() {
-        return;
-    }
-    let mut extra_sheets: Vec<String> = Vec::new();
-    for sheet in sheets.iter_mut() {
-        let Some((selector, mut decls)) = parse_rule(sheet) else {
-            continue;
-        };
-        if decls.is_empty() {
-            continue;
-        }
-        let base_decl = decls[0].clone();
-        let mut changed = false;
-        if let Some(map) = autoprefix_map {
-            if !base_decl.0.starts_with('-') {
-                if let Some(prefixes) = map.get(&base_decl.0) {
-                    let mut new_pairs: Vec<(String, String)> = Vec::new();
-                    for prefix in prefixes {
-                        let pref_prop = format!("{}{}", prefix, base_decl.0);
-                        if decls.iter().any(|(name, _)| name == &pref_prop) {
-                            continue;
-                        }
-                        new_pairs.push((pref_prop, base_decl.1.clone()));
-                    }
-                    if !new_pairs.is_empty() {
-                        new_pairs.extend(decls.clone());
-                        decls = new_pairs;
-                        changed = true;
-                    }
-                }
-            }
-        }
-        let (base_value_plain, has_important) = strip_important(&base_decl.1);
-        if is_logical_size_prop(&base_decl.0)
-            && base_value_plain.eq_ignore_ascii_case("min-content")
-        {
-            let mut moz_value = "-moz-min-content".to_string();
-            if has_important {
-                moz_value.push_str("!important");
-            }
-            if !decls.iter().any(|(name, value)| {
-                name == &base_decl.0 && value.trim_start().starts_with("-moz-min-content")
-            }) {
-                decls.insert(0, (base_decl.0.clone(), moz_value));
-                changed = true;
-            }
-        } else if is_logical_size_prop(&base_decl.0)
-            && base_value_plain.eq_ignore_ascii_case("max-content")
-        {
-            let mut moz_value = "-moz-max-content".to_string();
-            if has_important {
-                moz_value.push_str("!important");
-            }
-            if !decls.iter().any(|(name, value)| {
-                name == &base_decl.0 && value.trim_start().starts_with("-moz-max-content")
-            }) {
-                decls.insert(0, (base_decl.0.clone(), moz_value));
-                changed = true;
-            }
-        }
-        if selector.contains("::placeholder") {
-            let moz_selector = selector.replace("::placeholder", "::-moz-placeholder");
-            if moz_selector != selector {
-                extra_sheets.push(build_rule(&moz_selector, &decls));
-            }
-        }
-        if changed {
-            *sheet = build_rule(&selector, &decls);
-        }
-    }
-    sheets.extend(extra_sheets);
-}
-
-fn is_logical_size_prop(prop: &str) -> bool {
-    matches!(
-        prop,
-        "block-size"
-            | "inline-size"
-            | "min-block-size"
-            | "min-inline-size"
-            | "max-block-size"
-            | "max-inline-size"
-            | "width"
-            | "min-width"
-            | "max-width"
-            | "height"
-            | "min-height"
-            | "max-height"
-    )
-}
-
-fn parse_rule(sheet: &str) -> Option<(String, Vec<(String, String)>)> {
-    let open = sheet.find('{')?;
-    let close = sheet.rfind('}')?;
-    if close <= open {
-        return None;
-    }
-    let selector = sheet[..open].to_string();
-    let body = &sheet[open + 1..close];
-    let mut decls: Vec<(String, String)> = Vec::new();
-    for chunk in body.split(';') {
-        let trimmed = chunk.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            decls.push((name.trim().to_string(), value.trim().to_string()));
-        }
-    }
-    Some((selector, decls))
-}
-
-fn build_rule(selector: &str, decls: &[(String, String)]) -> String {
-    let mut out = String::new();
-    for (idx, (name, value)) in decls.iter().enumerate() {
-        if idx > 0 {
-            out.push(';');
-        }
-        out.push_str(name);
-        out.push(':');
-        out.push_str(value);
-    }
-    format!("{}{{{}}}", selector, out)
-}
-
-fn strip_important(value: &str) -> (String, bool) {
-    let trimmed = value.trim();
-    if let Some(stripped) = trimmed.strip_suffix("!important") {
-        (stripped.trim().to_string(), true)
-    } else {
-        (trimmed.to_string(), false)
-    }
-}
 fn expand_shorthands_plugin() -> pc::BuiltPlugin {
     // Deprecated shim; real expansion is handled by expand_shorthands_engine::plugin()
     pc::plugin("expand-shorthands-disabled").build()
 }
-#[cfg(feature = "postcss_engine")]
 fn wrap_bare_declarations_plugin(options: TransformCssOptions) -> pc::BuiltPlugin {
     use postcss::ast::nodes::{as_declaration, Rule as PcRule};
 
@@ -2430,128 +2421,4 @@ fn wrap_bare_declarations_plugin(options: TransformCssOptions) -> pc::BuiltPlugi
             Ok(())
         })
         .build()
-}
-#[cfg(feature = "postcss_engine")]
-fn vendor_autoprefixer_plugin() -> pc::BuiltPlugin {
-    use postcss::ast::nodes::{as_declaration, as_rule};
-    // We will reuse the same data loader as the SWC pipeline via JSON includes
-    // and apply a simplified property-level + keyframes prefixing initially.
-    pc::plugin("autoprefixer").once_exit(|root, _| {
-        // Load data similarly to the SWC side
-        let prefixes_json = include_str!("../../autoprefixer_data/prefixes.json");
-        let agents_json = include_str!("../../autoprefixer_data/agents.json");
-        let db = crate::postcss::plugins::vendor_autoprefixer::PrefixDB::load_from_str(prefixes_json, agents_json);
-        if db.is_none() { return Ok(()); }
-        let db = db.unwrap();
-        let targets = {
-            let mut v: Vec<String> = Vec::new();
-            let opts = oxc_browserslist::Opts::default();
-            if let Ok(list) = oxc_browserslist::execute(&opts) {
-                for i in list { v.push(i.to_string()); }
-            }
-            v
-        };
-        let (add, remove) = db.select_add_remove(&targets);
-        let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
-        if tracing {
-            eprintln!(
-                "[autoprefixer:engine] targets={} add_keys={} remove_keys={}",
-                targets.join(", "),
-                add.len(),
-                remove.len()
-            );
-        }
-
-        match root {
-            pc::RootLike::Root(r) => {
-                // @keyframes: walk at-rules and clone_before with prefixed name
-                r.walk_at_rules(|node_ref, _| {
-                    if let Some(at) = as_at_rule(&node_ref) {
-                        if at.name() == "keyframes" {
-                            if let Some(prefixes) = add.get("@keyframes") {
-                                for pref in prefixes {
-                                    if let Some(cloned) = at.clone_before() {
-                                        cloned.set_name(format!("{}keyframes", pref));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    true
-                });
-
-                // Declarations
-                r.walk_rules(|rule_ref, _| {
-                    if let Some(rule) = as_rule(&rule_ref) {
-                        let mut to_insert: Vec<(usize, postcss::ast::NodeRef)> = Vec::new();
-                        for (idx, child) in rule.nodes().iter().enumerate() {
-                            if let Some(decl) = as_declaration(child) {
-                                let prop = decl.prop();
-                                if let Some(prefixes) = add.get(&prop) {
-                                    for pref in prefixes {
-                                        let mut raws = postcss::ast::RawData::default();
-                                        raws.set_text("between", ":");
-                                        let nd = postcss::ast::nodes::declaration_with_raws(format!("{}{}", pref, prop), decl.value(), decl.important(), raws);
-                                        to_insert.push((idx, nd));
-                                    }
-                                }
-                                // Value-level: sizes fit-content -> -moz-fit-content
-                                let value = decl.value();
-                                let lower = value.to_ascii_lowercase();
-                                if matches!(prop.as_str(), "width" | "min-width" | "max-width") && (lower.trim() == "fit-content" || lower.contains("fit-content")) {
-                                    // Avoid double-inserting if present already
-                                    let already = rule.nodes().iter().any(|n| {
-                                        if let Some(d) = as_declaration(n) {
-                                            d.prop() == prop && d.value().trim().eq_ignore_ascii_case("-moz-fit-content")
-                                        } else { false }
-                                    });
-                                    if !already {
-                                        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[autoprefixer:engine] size fit-content -> -moz for prop={} sel={}", prop, rule.selector()); }
-                                        let mut raws = postcss::ast::RawData::default();
-                                        raws.set_text("between", ":");
-                                        let nd = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-moz-fit-content".to_string(), decl.important(), raws);
-                                        to_insert.push((idx, nd));
-                                    }
-                                }
-                                // Value-level: display flex variants
-                                if prop == "display" {
-                                    if lower == "flex" {
-                                        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[autoprefixer:engine] display:flex -> webkit/ms for sel={}", rule.selector()); }
-                                        let mut raws = postcss::ast::RawData::default();
-                                        raws.set_text("between", ":");
-                                        let nd1 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-webkit-flex".to_string(), decl.important(), raws.clone());
-                                        let nd2 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-ms-flexbox".to_string(), decl.important(), raws);
-                                        to_insert.push((idx, nd1));
-                                        to_insert.push((idx + 1, nd2));
-                                    } else if lower == "inline-flex" {
-                                        if std::env::var("COMPILED_CLI_TRACE").is_ok() { eprintln!("[autoprefixer:engine] display:inline-flex -> webkit/ms for sel={}", rule.selector()); }
-                                        let mut raws = postcss::ast::RawData::default();
-                                        raws.set_text("between", ":");
-                                        let nd1 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-webkit-inline-flex".to_string(), decl.important(), raws.clone());
-                                        let nd2 = postcss::ast::nodes::declaration_with_raws(prop.clone(), "-ms-inline-flexbox".to_string(), decl.important(), raws);
-                                        to_insert.push((idx, nd1));
-                                        to_insert.push((idx + 1, nd2));
-                                    }
-                                }
-                                // Basic removal: skip outdated prefixed props
-                                if let Some(rem) = remove.get(&prop) {
-                                    if prop.starts_with('-') && rem.iter().any(|p| prop.starts_with(p)) {
-                                        rule.remove_child(child.clone());
-                                    }
-                                }
-                            }
-                        }
-                        let mut inserted = 0usize;
-                        for (idx, nd) in to_insert.into_iter() {
-                            postcss::ast::Node::insert(&rule.to_node(), idx + inserted, nd);
-                            inserted += 1;
-                        }
-                    }
-                    true
-                });
-            }
-            pc::RootLike::Document(_d) => {}
-        }
-        Ok(())
-    }).build()
 }

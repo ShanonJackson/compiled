@@ -32,6 +32,8 @@ struct PrefixEntry {
     feature: Option<String>,
     #[serde(default)]
     props: Option<Vec<String>>,
+    #[serde(default)]
+    selector: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +53,20 @@ pub struct PrefixDB {
     // name -> entry
     entries: HashMap<String, PrefixEntry>,
     agents: HashMap<String, Agent>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ValueRule {
+    pub(crate) keyword: String,
+    pub(crate) prefixes: Vec<String>,
+    kind: ValueKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ValueKind {
+    Plain,
+    FitContent,
+    Stretch,
 }
 
 impl PrefixDB {
@@ -106,39 +122,74 @@ impl PrefixDB {
         let sel: BTreeSet<String> = normalized_targets.into_iter().collect();
 
         for (name, data) in &self.entries {
-            let all_prefixes: BTreeSet<String> = {
-                let mut s: BTreeSet<String> = BTreeSet::new();
-                for br in &data.browsers {
-                    if let Some(pref) = self.prefix_for_browser(br) {
-                        s.insert(pref);
-                    }
-                }
-                for m in &data.mistakes {
-                    s.insert(m.clone());
-                }
-                s
-            };
-
-            let mut need: BTreeSet<String> = BTreeSet::new();
+            let mut entries: Vec<(String, Option<String>)> = Vec::new();
             for br in &data.browsers {
-                let parts: Vec<&str> = br.split(' ').collect();
-                let simple = if parts.len() >= 2 {
-                    format!("{} {}", parts[0], parts[1])
-                } else {
-                    br.clone()
+                let mut parts = br.split_whitespace();
+                let browser = match (parts.next(), parts.next()) {
+                    (Some(name), Some(version)) => {
+                        let mut browser = String::from(name);
+                        browser.push(' ');
+                        browser.push_str(version);
+                        browser
+                    }
+                    _ => br.clone(),
                 };
-                if sel.contains(&simple) {
-                    if let Some(pref) = self.prefix_for_browser(&simple) {
-                        need.insert(pref);
+                let note = parts.next().map(|first| {
+                    let mut note = String::from(first);
+                    for rest in parts {
+                        note.push(' ');
+                        note.push_str(rest);
+                    }
+                    note
+                });
+                entries.push((browser, note));
+            }
+
+            let mut note_prefixes: Vec<String> = Vec::new();
+            for (browser, note) in &entries {
+                if let Some(note) = note {
+                    if let Some(prefix) = self.prefix_for_browser(browser) {
+                        note_prefixes.push(format!("{} {}", prefix, note));
                     }
                 }
             }
+            note_prefixes.sort();
+            note_prefixes.dedup();
 
-            if !need.is_empty() {
-                let mut prefixes: Vec<String> = need.iter().cloned().collect();
+            let mut needed: Vec<String> = Vec::new();
+            for (browser, note) in &entries {
+                if sel.contains(browser) {
+                    if let Some(prefix) = self.prefix_for_browser(browser) {
+                        if let Some(note) = note {
+                            needed.push(format!("{} {}", prefix, note));
+                        } else {
+                            needed.push(prefix);
+                        }
+                    }
+                }
+            }
+            needed.sort();
+            needed.dedup();
+            let need_set: BTreeSet<String> = needed.iter().cloned().collect();
+
+            let mut all_prefixes: BTreeSet<String> = BTreeSet::new();
+            for br in &data.browsers {
+                if let Some(pref) = self.prefix_for_browser(br) {
+                    all_prefixes.insert(pref);
+                }
+            }
+            for m in &data.mistakes {
+                all_prefixes.insert(m.clone());
+            }
+            for note in &note_prefixes {
+                all_prefixes.insert(note.clone());
+            }
+
+            if !needed.is_empty() {
+                let mut prefixes = needed.clone();
                 sort_prefixes(&mut prefixes);
                 add.insert(name.clone(), prefixes);
-                let rem: Vec<String> = all_prefixes.difference(&need).cloned().collect();
+                let rem: Vec<String> = all_prefixes.difference(&need_set).cloned().collect();
                 if !rem.is_empty() {
                     remove.insert(name.clone(), rem);
                 }
@@ -232,6 +283,118 @@ impl PrefixDB {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct AutoprefixerData {
+    pub add: HashMap<String, Vec<String>>,
+    pub remove: HashMap<String, Vec<String>>,
+    pub value_map: HashMap<String, Vec<ValueRule>>,
+    pub selector_map: HashMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrefixedDecl {
+    pub property: String,
+    pub value: String,
+}
+
+impl AutoprefixerData {
+    pub fn load_with_targets() -> Option<(Self, Vec<String>)> {
+        let db = PrefixDB::load()?;
+        let targets = resolve_browserslist_targets();
+        let data = Self::from_db(db, targets.clone());
+        Some((data, targets))
+    }
+
+    pub fn load() -> Option<Self> {
+        Self::load_with_targets().map(|(data, _)| data)
+    }
+
+    pub fn from_db(db: PrefixDB, targets: Vec<String>) -> Self {
+        let (add, remove) = db.select_add_remove(&targets);
+        let value_map = build_value_prefix_map(&db, &add);
+        let selector_map = build_selector_prefix_map(&db, &add);
+        AutoprefixerData {
+            add,
+            remove,
+            value_map,
+            selector_map,
+        }
+    }
+
+    pub fn property_prefixes(&self, prop: &str) -> Option<&Vec<String>> {
+        self.add.get(prop)
+    }
+
+    pub fn selector_prefixes(&self, selector: &str) -> Option<&Vec<String>> {
+        self.selector_map.get(selector)
+    }
+
+    pub fn prefixed_value_rules(&self, prop: &str) -> Option<&Vec<ValueRule>> {
+        self.value_map.get(prop)
+    }
+
+    pub fn prefixed_decls(&self, prop: &str, value: &str) -> Vec<PrefixedDecl> {
+        let mut out: Vec<PrefixedDecl> = Vec::new();
+        if let Some(prefixes) = self.property_prefixes(prop) {
+            for prefix in prefixes {
+                out.push(PrefixedDecl {
+                    property: format!("{}{}", prefix, prop),
+                    value: value.to_string(),
+                });
+            }
+        }
+        out.extend(self.prefixed_value_decls(prop, value));
+        out
+    }
+
+    pub fn prefixed_value_decls(&self, prop: &str, value: &str) -> Vec<PrefixedDecl> {
+        let mut out: Vec<PrefixedDecl> = Vec::new();
+        let trimmed = value.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if let Some(rules) = self.prefixed_value_rules(prop) {
+            for rule in rules {
+                if rule.matches_keyword(&lower) {
+                    for prefix in &rule.prefixes {
+                        if let Some(pref_value) = rule.prefixed_value(prefix) {
+                            out.push(PrefixedDecl {
+                                property: prop.to_string(),
+                                value: pref_value,
+                            });
+                        }
+                    }
+                }
+            }
+        } else if matches!(prop, "width" | "min-width" | "max-width")
+            && (trimmed.eq_ignore_ascii_case("fit-content") || lower.contains("fit-content"))
+        {
+            out.push(PrefixedDecl {
+                property: prop.to_string(),
+                value: "-moz-fit-content".to_string(),
+            });
+        }
+
+        out
+    }
+
+    pub fn placeholder_selector_variants(&self, selector: &str) -> Vec<String> {
+        if !selector.contains("::placeholder") {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if let Some(prefixes) = self.selector_prefixes("::placeholder") {
+            for prefix in prefixes {
+                for variant in placeholder_variants(prefix) {
+                    let replaced = selector.replace("::placeholder", &variant);
+                    if replaced != selector {
+                        out.push(replaced);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct VendorAutoprefixer;
 
@@ -245,21 +408,24 @@ impl Plugin for VendorAutoprefixer {
     }
 
     fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
-        let Some(db) = PrefixDB::load() else {
+        let Some((config, targets)) = AutoprefixerData::load_with_targets() else {
             return;
         };
-        let targets = resolve_browserslist_targets();
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
             eprintln!("[autoprefixer] plugin start targets={}", targets.join(", "));
         }
-        let (add, remove) = db.select_add_remove(&targets);
         let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
         if tracing {
             eprintln!(
                 "[autoprefixer] targets={} add_keys={} remove_keys={}",
                 targets.join(", "),
-                add.len(),
-                remove.len()
+                config.add.len(),
+                config.remove.len()
+            );
+            eprintln!(
+                "[autoprefixer] trace includes user-select? {} placeholder? {}",
+                config.add.contains_key("user-select"),
+                config.add.contains_key("::placeholder")
             );
         }
 
@@ -270,7 +436,7 @@ impl Plugin for VendorAutoprefixer {
                 Rule::AtRule(at) => {
                     if let Some(name) = at_rule_name(&at.name) {
                         if name == "keyframes" {
-                            if let Some(prefixes) = add.get("@keyframes") {
+                            if let Some(prefixes) = config.add.get("@keyframes") {
                                 for pref in prefixes {
                                     let mut cloned = (*at.clone()).clone();
                                     cloned.name =
@@ -283,7 +449,7 @@ impl Plugin for VendorAutoprefixer {
                     new_rules.push(Rule::AtRule(at));
                 }
                 Rule::QualifiedRule(mut qr) => {
-                    apply_decl_prefixing(&mut qr, &add, &remove);
+                    apply_decl_prefixing(&mut qr, &config);
                     new_rules.push(Rule::QualifiedRule(qr));
                 }
                 other => new_rules.push(other),
@@ -340,11 +506,7 @@ fn clone_decl_with_prop(decl: &Declaration, prop: String) -> Declaration {
     d
 }
 
-fn apply_decl_prefixing(
-    rule: &mut QualifiedRule,
-    add: &HashMap<String, Vec<String>>,
-    remove: &HashMap<String, Vec<String>>,
-) {
+fn apply_decl_prefixing(rule: &mut QualifiedRule, config: &AutoprefixerData) {
     let mut new_block: Vec<ComponentValue> = Vec::new();
     for node in std::mem::take(&mut rule.block.value) {
         if let ComponentValue::Declaration(decl_box) = &node {
@@ -352,7 +514,7 @@ fn apply_decl_prefixing(
             let prop = decl_prop(&decl.name).to_string();
 
             // Property-level: add prefixed properties
-            if let Some(prefixes) = add.get(&prop) {
+            if let Some(prefixes) = config.property_prefixes(&prop) {
                 for pref in prefixes {
                     let prefixed_prop = format!("{}{}", pref, prop);
                     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
@@ -365,9 +527,8 @@ fn apply_decl_prefixing(
                 }
             }
 
-            // Value-level: naive support for fit-content case and vendor functions
-            // Inject value-level prefixes, but avoid duplicates if already present
-            let value_prefixed = maybe_prefix_value(&prop, &decl.value, add);
+            // Value-level prefixes for intrinsic keywords or known values.
+            let value_prefixed = maybe_prefix_value(&prop, &decl.value, config);
             'inject: for v in value_prefixed {
                 if let DeclarationName::Ident(id) = &v.name {
                     let target_prop = id.value.to_string();
@@ -398,7 +559,7 @@ fn apply_decl_prefixing(
             }
 
             // Removal of old props (basic): skip emitting outdated prefixed properties
-            if let Some(rem) = remove.get(&prop) {
+            if let Some(rem) = config.remove.get(&prop) {
                 let n = decl_prop(&decl.name);
                 if n.starts_with("-") && rem.iter().any(|p| n.starts_with(p)) {
                     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
@@ -417,27 +578,54 @@ fn apply_decl_prefixing(
 fn maybe_prefix_value(
     prop: &str,
     value: &Vec<ComponentValue>,
-    add: &HashMap<String, Vec<String>>,
+    config: &AutoprefixerData,
 ) -> Vec<Declaration> {
     let mut out: Vec<Declaration> = Vec::new();
-    // Special-case: width/min/max fit-content -> -moz-fit-content
-    if matches!(prop, "width" | "min-width" | "max-width") {
+    if let Some(rules) = config.prefixed_value_rules(prop) {
         if value.len() == 1 {
-            if let ComponentValue::Ident(i) = &value[0] {
-                let low = i.value.to_ascii_lowercase();
-                if i.value.trim().eq_ignore_ascii_case("fit-content") || low.contains("fit-content")
-                {
-                    let d = Declaration {
-                        name: DeclarationName::Ident(swc_core::css::ast::Ident {
-                            value: prop.into(),
-                            raw: None,
+            if let ComponentValue::Ident(ident) = &value[0] {
+                let lower = ident.value.to_ascii_lowercase();
+                for rule in rules {
+                    if rule.matches_keyword(&lower) {
+                        for prefix in &rule.prefixes {
+                            if let Some(pref_value) = rule.prefixed_value(prefix) {
+                                out.push(Declaration {
+                                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                                        value: prop.into(),
+                                        raw: None,
+                                        span: Default::default(),
+                                    }),
+                                    value: vec![make_ident(&pref_value)],
+                                    important: None,
+                                    span: Default::default(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Special-case: width/min/max fit-content -> -moz-fit-content
+        if matches!(prop, "width" | "min-width" | "max-width") {
+            if value.len() == 1 {
+                if let ComponentValue::Ident(i) = &value[0] {
+                    let low = i.value.to_ascii_lowercase();
+                    if i.value.trim().eq_ignore_ascii_case("fit-content")
+                        || low.contains("fit-content")
+                    {
+                        let d = Declaration {
+                            name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                                value: prop.into(),
+                                raw: None,
+                                span: Default::default(),
+                            }),
+                            value: vec![make_ident("-moz-fit-content")],
+                            important: None,
                             span: Default::default(),
-                        }),
-                        value: vec![make_ident("-moz-fit-content")],
-                        important: None,
-                        span: Default::default(),
-                    };
-                    out.push(d);
+                        };
+                        out.push(d);
+                    }
                 }
             }
         }
@@ -498,6 +686,113 @@ fn maybe_prefix_value(
     }
 
     // TODO: Full value-level prefixing (gradients, grid, imageset, cross-fade, etc.)
-    let _ = add; // silence unused parameter until full port lands
+    let _ = config; // silence unused parameter until full port lands
     out
+}
+
+pub(crate) fn build_value_prefix_map(
+    db: &PrefixDB,
+    add: &HashMap<String, Vec<String>>,
+) -> HashMap<String, Vec<ValueRule>> {
+    let mut map: HashMap<String, Vec<ValueRule>> = HashMap::new();
+    for (name, entry) in &db.entries {
+        let Some(props) = &entry.props else {
+            continue;
+        };
+        let Some(kind) = classify_value_kind(name) else {
+            continue;
+        };
+        let Some(prefixes) = add.get(name) else {
+            continue;
+        };
+        let rule = ValueRule {
+            keyword: name.clone(),
+            prefixes: prefixes.clone(),
+            kind,
+        };
+        for prop in props {
+            map.entry(prop.clone()).or_default().push(rule.clone());
+        }
+    }
+    map
+}
+
+fn classify_value_kind(name: &str) -> Option<ValueKind> {
+    match name {
+        "min-content" | "max-content" => Some(ValueKind::Plain),
+        "fit-content" => Some(ValueKind::FitContent),
+        "fill" | "fill-available" | "stretch" => Some(ValueKind::Stretch),
+        _ => None,
+    }
+}
+
+fn strip_note_prefix(prefix: &str) -> &str {
+    prefix.split_once(' ').map(|(p, _)| p).unwrap_or(prefix)
+}
+
+impl ValueRule {
+    pub(crate) fn matches_keyword(&self, value: &str) -> bool {
+        value.eq_ignore_ascii_case(&self.keyword)
+    }
+
+    pub(crate) fn prefixed_value(&self, prefix: &str) -> Option<String> {
+        let base = strip_note_prefix(prefix);
+        match self.kind {
+            ValueKind::Plain => Some(format!("{}{}", base, self.keyword)),
+            ValueKind::FitContent => {
+                if base == "-moz-" {
+                    Some("-moz-fit-content".to_string())
+                } else {
+                    None
+                }
+            }
+            ValueKind::Stretch => {
+                if base == "-moz-" {
+                    Some("-moz-available".to_string())
+                } else if base == "-webkit-" {
+                    Some("-webkit-fill-available".to_string())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn build_selector_prefix_map(
+    db: &PrefixDB,
+    add: &HashMap<String, Vec<String>>,
+) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    for (name, entry) in &db.entries {
+        if entry.selector {
+            if let Some(prefixes) = add.get(name) {
+                map.insert(name.clone(), prefixes.clone());
+            }
+        }
+    }
+    map
+}
+
+pub(crate) fn placeholder_variants(prefix: &str) -> Vec<String> {
+    let base = strip_note_prefix(prefix);
+    let is_old = prefix.contains("old");
+    if base == "-webkit-" {
+        vec!["::-webkit-input-placeholder".to_string()]
+    } else if base == "-moz-" {
+        if is_old {
+            vec![":-moz-placeholder".to_string()]
+        } else {
+            vec!["::-moz-placeholder".to_string()]
+        }
+    } else if base == "-ms-" {
+        if is_old {
+            vec![":-ms-input-placeholder".to_string()]
+        } else {
+            vec!["::-ms-input-placeholder".to_string()]
+        }
+    } else {
+        let trimmed = base.trim_matches('-');
+        vec![format!("::{}placeholder", trimmed)]
+    }
 }
