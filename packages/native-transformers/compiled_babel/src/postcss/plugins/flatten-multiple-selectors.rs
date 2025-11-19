@@ -1,6 +1,7 @@
+use swc_core::atoms::Atom;
 use swc_core::css::ast::{
-    ComponentValue, QualifiedRule, QualifiedRulePrelude, RelativeSelectorList, Rule, SelectorList,
-    SimpleBlock, Stylesheet,
+    ComponentValue, Ident, KeyframeBlock, KeyframeSelector, QualifiedRule, QualifiedRulePrelude,
+    RelativeSelectorList, Rule, SelectorList, SimpleBlock, Stylesheet,
 };
 
 use super::super::transform::{Plugin, TransformContext};
@@ -68,22 +69,34 @@ fn flatten_component_values(values: &mut Vec<ComponentValue>) {
     let mut index = 0;
 
     while index < values.len() {
-        let replacements = match &values[index] {
-            ComponentValue::QualifiedRule(rule) => split_qualified_rule(rule),
-            _ => None,
-        };
-
-        if let Some(mut replacement_rules) = replacements {
-            values.remove(index);
-            let count = replacement_rules.len();
-            for (offset, replacement) in replacement_rules.drain(..).enumerate() {
-                values.insert(
-                    index + offset,
-                    ComponentValue::QualifiedRule(Box::new(replacement)),
-                );
+        if let ComponentValue::QualifiedRule(rule) = &values[index] {
+            if let Some(mut replacement_rules) = split_qualified_rule(rule) {
+                values.remove(index);
+                let count = replacement_rules.len();
+                for (offset, replacement) in replacement_rules.drain(..).enumerate() {
+                    values.insert(
+                        index + offset,
+                        ComponentValue::QualifiedRule(Box::new(replacement)),
+                    );
+                }
+                index += count;
+                continue;
             }
-            index += count;
-            continue;
+        }
+
+        if let ComponentValue::KeyframeBlock(block) = &values[index] {
+            if let Some(mut replacement_blocks) = split_keyframe_block(block) {
+                values.remove(index);
+                let count = replacement_blocks.len();
+                for (offset, replacement) in replacement_blocks.drain(..).enumerate() {
+                    values.insert(
+                        index + offset,
+                        ComponentValue::KeyframeBlock(Box::new(replacement)),
+                    );
+                }
+                index += count;
+                continue;
+            }
         }
 
         match &mut values[index] {
@@ -113,6 +126,37 @@ fn split_qualified_rule(rule: &QualifiedRule) -> Option<Vec<QualifiedRule>> {
             split_relative_selector_list(rule, list)
         }
         _ => None,
+    }
+}
+
+fn split_keyframe_block(block: &KeyframeBlock) -> Option<Vec<KeyframeBlock>> {
+    if block.prelude.len() <= 1 {
+        return None;
+    }
+
+    let mut replacements = Vec::with_capacity(block.prelude.len());
+
+    for selector in &block.prelude {
+        let mut new_block = block.clone();
+        new_block.prelude = vec![selector.clone()];
+        normalize_keyframe_selectors(&mut new_block.prelude);
+        replacements.push(new_block);
+    }
+
+    Some(replacements)
+}
+
+fn normalize_keyframe_selectors(selectors: &mut [KeyframeSelector]) {
+    for selector in selectors {
+        if let KeyframeSelector::Percentage(percentage) = selector {
+            if (percentage.value.value - 100.0).abs() < f64::EPSILON {
+                *selector = KeyframeSelector::Ident(Ident {
+                    span: percentage.span,
+                    value: Atom::from("to"),
+                    raw: None,
+                });
+            }
+        }
     }
 }
 
@@ -160,7 +204,7 @@ mod tests {
     use super::*;
     use crate::postcss::transform::{TransformContext, TransformCssOptions};
     use swc_core::common::{input::StringInput, FileName, SourceMap};
-    use swc_core::css::ast::{ComplexSelector, QualifiedRulePrelude, Rule};
+    use swc_core::css::ast::{ComplexSelector, KeyframeSelector, QualifiedRulePrelude, Rule};
     use swc_core::css::codegen::{
         writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit,
     };
@@ -187,6 +231,18 @@ mod tests {
             generator
                 .emit(selector)
                 .expect("failed to serialize complex selector");
+        }
+        output
+    }
+
+    fn serialize_keyframe_selector(selector: &KeyframeSelector) -> String {
+        let mut output = String::new();
+        {
+            let writer = BasicCssWriter::new(&mut output, None, Default::default());
+            let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+            generator
+                .emit(selector)
+                .expect("failed to serialize keyframe selector");
         }
         output
     }
@@ -252,6 +308,39 @@ mod tests {
         assert_eq!(
             nested_selectors,
             vec![vec![String::from(".a")], vec![String::from(".b")]]
+        );
+    }
+
+    #[test]
+    fn splits_keyframe_block_selectors() {
+        let mut stylesheet = parse_stylesheet("@keyframes pulse { 0%, 50% { opacity: 0; } }");
+        let options = TransformCssOptions::default();
+        let mut ctx = TransformContext::new(&options);
+
+        FlattenMultipleSelectors.run(&mut stylesheet, &mut ctx);
+
+        let mut selector_lists = Vec::new();
+        for rule in &stylesheet.rules {
+            if let Rule::AtRule(at_rule) = rule {
+                if let Some(block) = &at_rule.block {
+                    for component in &block.value {
+                        if let ComponentValue::KeyframeBlock(block) = component {
+                            selector_lists.push(
+                                block
+                                    .prelude
+                                    .iter()
+                                    .map(serialize_keyframe_selector)
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            selector_lists,
+            vec![vec![String::from("0%")], vec![String::from("50%")]]
         );
     }
 

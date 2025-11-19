@@ -11,7 +11,7 @@ export const Pulse = ({ children, pulse = true, ...props }) => (
 		{...props}
 		className={ax([
 			pulse && "",
-			pulse && "_5sagi11n _tip812c5 _j7hq1942 _1pgl87ad _16qs1pjd",
+			pulse && "_5sagi11n _tip812c5 _j7hq1942 _1pglmcjr _16qsezjf",
 			"_1bumglyw _sedtglyw",
 		])}
 	>

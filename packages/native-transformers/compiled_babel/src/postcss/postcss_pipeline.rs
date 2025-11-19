@@ -147,77 +147,157 @@ fn discard_empty_rules_plugin() -> pc::BuiltPlugin {
 fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -> pc::Processor {
     // Step 2 of bisect: add a small batch of light plugins
     // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
-    let plugins: Vec<pc::BuiltPlugin> = vec![
-        // Match Babel ordering: run duplicate-declaration removal before wrapping
-        // bare declarations into a rule. This ensures last-wins semantics align.
-        discard_duplicates_plugin(),
-        wrap_bare_declarations_plugin(options.clone()),
-        discard_empty_rules_plugin(),
-        pc::plugin("parent-orphaned-pseudos").build(),
-        pc::plugin("postcss-nested").build(),
-        super::plugins::normalize_css_engine::minify_selectors::plugin(),
-        super::plugins::normalize_css_engine::minify_params::plugin(),
-        // cssnano-like optimizers (safe subset first)
-        // Keep normalize-url/normalize-string/minify-params disabled until last.
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::ordered_values::plugin()
-        },
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::reduce_initial::plugin()
-        },
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::convert_values::plugin()
-        },
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::colormin::plugin()
-        },
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::normalize_current_color_plugin()
-        },
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::discard_comments_plugin()
-        },
-        // Add normalize-url next in the bisect sequence
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::normalize_url::plugin()
-        },
-        // Add normalize-string after normalize-url
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::normalize_string::plugin()
-        },
-        {
-            use super::plugins::normalize_css_engine as nce;
-            nce::calc::plugin()
-        },
-        super::plugins::expand_shorthands_engine::plugin(),
-        // Start emitting atomic rules.
-        atomicify_rules_plugin(options.clone(), collector.clone()),
-        pc::plugin("flatten-multiple-selectors").build(),
-        pc::plugin("discard-duplicates-2").build(),
-        pc::plugin("increase-specificity").build(),
-        sort_atomic_style_sheet_plugin(),
-        // Insert full vendor prefixing at the same stage as JS pipeline
-        if std::env::var("AUTOPREFIXER")
-            .map(|v| v != "off")
-            .unwrap_or(true)
-        {
-            vendor_autoprefixer_plugin()
-        } else {
-            pc::plugin("noop-autoprefixer").build()
-        },
-        normalize_whitespace_plugin(),
-        // Collect keyframes as sheets to match Babel output
-        extract_stylesheets_plugin(collector.clone(), options.clone()),
-    ];
+    let flatten_enabled = options.flatten_multiple_selectors.unwrap_or(true);
+    let mut plugins: Vec<pc::BuiltPlugin> = Vec::new();
+
+    // Match Babel ordering: run duplicate-declaration removal before wrapping
+    // bare declarations into a rule. This ensures last-wins semantics align.
+    plugins.push(discard_duplicates_plugin());
+    plugins.push(wrap_bare_declarations_plugin(options.clone()));
+    plugins.push(discard_empty_rules_plugin());
+    plugins.push(pc::plugin("parent-orphaned-pseudos").build());
+    plugins.push(pc::plugin("postcss-nested").build());
+    plugins.push(super::plugins::normalize_css_engine::minify_selectors::plugin());
+    plugins.push(super::plugins::normalize_css_engine::minify_params::plugin());
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::ordered_values::plugin());
+    }
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::reduce_initial::plugin());
+    }
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::convert_values::plugin());
+    }
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::colormin::plugin());
+    }
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::normalize_current_color_plugin());
+    }
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::discard_comments_plugin());
+    }
+    // Add normalize-url next in the bisect sequence
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::normalize_url::plugin());
+    }
+    // Add normalize-string after normalize-url
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::normalize_string::plugin());
+    }
+    {
+        use super::plugins::normalize_css_engine as nce;
+        plugins.push(nce::calc::plugin());
+    }
+    plugins.push(super::plugins::expand_shorthands_engine::plugin());
+    // Start emitting atomic rules.
+    plugins.push(atomicify_rules_plugin(options.clone(), collector.clone()));
+    if flatten_enabled {
+        plugins.push(flatten_multiple_selectors_plugin());
+        plugins.push(pc::plugin("discard-duplicates-2").build());
+    }
+    plugins.push(pc::plugin("increase-specificity").build());
+    plugins.push(sort_atomic_style_sheet_plugin());
+    // Insert full vendor prefixing at the same stage as JS pipeline
+    if std::env::var("AUTOPREFIXER")
+        .map(|v| v != "off")
+        .unwrap_or(true)
+    {
+        plugins.push(vendor_autoprefixer_plugin());
+    } else {
+        plugins.push(pc::plugin("noop-autoprefixer").build());
+    }
+    plugins.push(normalize_whitespace_plugin());
+    // Collect keyframes as sheets to match Babel output
+    plugins.push(extract_stylesheets_plugin(collector.clone(), options.clone()));
     pc::postcss_with_plugins(plugins)
+}
+
+#[cfg(feature = "postcss_engine")]
+fn flatten_multiple_selectors_plugin() -> pc::BuiltPlugin {
+    fn flatten_rule(rule: &PcRule) {
+        let selector = rule.selector();
+        let selectors = postcss::list::comma(&selector);
+        if selectors.len() <= 1 {
+            return;
+        }
+
+        let inside_keyframes = is_rule_inside_keyframes(rule);
+        let mut iter = selectors
+            .into_iter()
+            .map(|s| {
+                if inside_keyframes {
+                    normalize_keyframe_selector_text(s)
+                } else {
+                    s
+                }
+            })
+            .filter(|s| !s.is_empty());
+        let Some(first) = iter.next() else {
+            return;
+        };
+        rule.set_selector(first);
+        for selector in iter {
+            let text = selector;
+            rule.clone_after_with(move |clone| {
+                clone.set_selector(text.clone());
+            });
+        }
+    }
+
+    pc::plugin("flatten-multiple-selectors")
+        .once_exit(|root, _| {
+            match root {
+                pc::RootLike::Root(r) => {
+                    r.walk_rules(|rule_ref, _| {
+                        if let Some(rule) = as_rule(&rule_ref) {
+                            flatten_rule(&rule);
+                        }
+                        true
+                    });
+                }
+                pc::RootLike::Document(d) => {
+                    d.walk_rules(|rule_ref, _| {
+                        if let Some(rule) = as_rule(&rule_ref) {
+                            flatten_rule(&rule);
+                        }
+                        true
+                    });
+                }
+            }
+            Ok(())
+        })
+        .build()
+}
+
+fn is_rule_inside_keyframes(rule: &PcRule) -> bool {
+    let mut current = rule.to_node().borrow().parent();
+    while let Some(node) = current {
+        if let Some(at) = as_at_rule(&node) {
+            if at.name().eq_ignore_ascii_case("keyframes") {
+                return true;
+            }
+        }
+        current = node.borrow().parent();
+    }
+    false
+}
+
+fn normalize_keyframe_selector_text(selector: String) -> String {
+    let trimmed = selector.trim();
+    if trimmed.eq_ignore_ascii_case("100%") {
+        "to".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(feature = "postcss_engine")]
