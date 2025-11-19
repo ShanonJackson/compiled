@@ -13,7 +13,7 @@ export const CellContentWrapper = forwardRef(
 				{...__cmplp}
 				style={__cmpls}
 				ref={__cmplr}
-				className={ax(["_u7uxidpf _133a1ytt", __cmplp.className])}
+				className={ax(["_1p3lidpf _13ce1ytt", __cmplp.className])}
 			/>
 		);
 	}

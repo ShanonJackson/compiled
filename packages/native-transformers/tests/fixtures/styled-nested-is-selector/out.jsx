@@ -11,7 +11,7 @@ export const Component = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp
 			{...__cmplp}
 			style={__cmpls}
 			ref={__cmplr}
-			className={ax(["_1awpidpf", __cmplp.className])}
+			className={ax(["_1puhidpf", __cmplp.className])}
 		/>
 	);
 });

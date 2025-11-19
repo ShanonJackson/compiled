@@ -1,5 +1,5 @@
 [
-  "@keyframes ke0nii9{0%, 33%{box-shadow:var(--_nam9gp), 0 0 0 var(--ds-border-discovery, #af59e1)}66%, 100%{box-shadow:var(--_nam9gp), 0 0 0 10px rgba(101,84,192,.01)}}",
+  "@keyframes ke0nii9{0%{box-shadow:var(--_nam9gp), 0 0 0 var(--ds-border-discovery, #af59e1)}33%{box-shadow:var(--_nam9gp), 0 0 0 var(--ds-border-discovery, #af59e1)}66%{box-shadow:var(--_nam9gp), 0 0 0 10px rgba(101,84,192,.01)}to{box-shadow:var(--_nam9gp), 0 0 0 10px rgba(101,84,192,.01)}}",
   "._5sagi11n{animation-duration:3s}",
   "._tip812c5{animation-iteration-count:infinite}",
   "._j7hq1mi7{animation-name:ke0nii9}",

@@ -2,8 +2,12 @@ use postcss as pc;
 use swc_atoms::Atom;
 use swc_core::common::{input::StringInput, FileName, SourceMap};
 use swc_core::css::ast::*;
-use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
+
+use crate::postcss::utils::selector_stringifier::{
+    serialize_complex_selector, serialize_relative_selector, serialize_relative_selector_list,
+    serialize_selector_list,
+};
 
 // Port of postcss-minify-selectors@5.2.1 using SWC's CSS AST to mirror behaviour.
 
@@ -283,22 +287,10 @@ fn dedupe_forgiving_relative_selectors(selectors: &mut Vec<ForgivingRelativeSele
 }
 
 fn format_complex(sel: &ComplexSelector) -> String {
-    let mut s = String::new();
-    {
-        let wr = BasicCssWriter::new(&mut s, None, Default::default());
-        let mut gen = CodeGenerator::new(wr, CodegenConfig { minify: false });
-        gen.emit(sel).ok();
-    }
-    s
+    serialize_complex_selector(sel)
 }
 fn format_relative(sel: &RelativeSelector) -> String {
-    let mut s = String::new();
-    {
-        let wr = BasicCssWriter::new(&mut s, None, Default::default());
-        let mut gen = CodeGenerator::new(wr, CodegenConfig { minify: false });
-        gen.emit(sel).ok();
-    }
-    s
+    serialize_relative_selector(sel)
 }
 
 fn process_selector_list(list: &mut SelectorList) {
@@ -319,24 +311,49 @@ fn process_relative_selector_list(list: &mut RelativeSelectorList) {
     sort_relative_selectors(&mut list.children);
 }
 
+fn starts_with_relative_combinator(selector: &str) -> bool {
+    let trimmed = selector.trim_start();
+    if trimmed.starts_with("||") {
+        return true;
+    }
+    matches!(trimmed.chars().next(), Some('>') | Some('+') | Some('~'))
+}
+
 fn minify_selector_string(selector: &str) -> Option<String> {
     // COMPAT: cssnano postcss-minify-selectors replaces keyframe step tags
     // literally using postcss-selector-parser, so 'from' -> '0%' and '100%' -> 'to'
     // without going through a selector AST/codegen. Mirroring this avoids SWC
     // escaping (e.g. '0%' -> '\\30 \\%').
-    let lower = selector.trim().to_ascii_lowercase();
+    let trimmed = selector.trim();
+    let lower = trimmed.to_ascii_lowercase();
     if lower == "from" {
         return Some("0%".to_string());
     }
     if lower == "100%" {
         return Some("to".to_string());
     }
-    // Build a tiny stylesheet to leverage SWC to parse just the selector prelude
-    let css_input = format!("{}{{}}", selector);
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+    let parse_relative = starts_with_relative_combinator(trimmed);
     let cm: SourceMap = Default::default();
-    let fm = cm.new_source_file(FileName::Custom("sel.css".into()).into(), css_input);
+    let fm = cm.new_source_file(FileName::Custom("sel.css".into()).into(), trimmed.to_string());
     let mut errors = vec![];
-    let mut ss = parse_string_input::<Stylesheet>(
+    if parse_relative {
+        let mut list = parse_string_input::<RelativeSelectorList>(
+            StringInput::from(&*fm),
+            None,
+            ParserConfig::default(),
+            &mut errors,
+        )
+        .ok()?;
+        if !errors.is_empty() {
+            return None;
+        }
+        process_relative_selector_list(&mut list);
+        return Some(serialize_relative_selector_list(&list));
+    }
+    let mut list = parse_string_input::<SelectorList>(
         StringInput::from(&*fm),
         None,
         ParserConfig::default(),
@@ -346,34 +363,8 @@ fn minify_selector_string(selector: &str) -> Option<String> {
     if !errors.is_empty() {
         return None;
     }
-    // Expect one qualified rule
-    if let Some(Rule::QualifiedRule(rule)) = ss.rules.get_mut(0) {
-        match &mut rule.prelude {
-            QualifiedRulePrelude::SelectorList(list) => {
-                process_selector_list(list);
-                // Serialize only the prelude
-                let mut out = String::new();
-                {
-                    let wr = BasicCssWriter::new(&mut out, None, Default::default());
-                    let mut gen = CodeGenerator::new(wr, CodegenConfig { minify: false });
-                    gen.emit(list).ok();
-                }
-                return Some(out);
-            }
-            QualifiedRulePrelude::RelativeSelectorList(list) => {
-                process_relative_selector_list(list);
-                let mut out = String::new();
-                {
-                    let wr = BasicCssWriter::new(&mut out, None, Default::default());
-                    let mut gen = CodeGenerator::new(wr, CodegenConfig { minify: false });
-                    gen.emit(list).ok();
-                }
-                return Some(out);
-            }
-            _ => {}
-        }
-    }
-    None
+    process_selector_list(&mut list);
+    Some(serialize_selector_list(&list))
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
@@ -429,4 +420,21 @@ pub fn plugin() -> pc::BuiltPlugin {
             Ok(())
         })
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minify_selector_string;
+
+    #[test]
+    fn trims_whitespace_inside_is_arguments() {
+        let optimized = minify_selector_string(">:is(div, button)").unwrap();
+        assert_eq!(optimized, ">:is(div,button)");
+    }
+
+    #[test]
+    fn trims_whitespace_around_child_combinators() {
+        let optimized = minify_selector_string("> div > div:first-of-type").unwrap();
+        assert_eq!(optimized, ">div>div:first-of-type");
+    }
 }
