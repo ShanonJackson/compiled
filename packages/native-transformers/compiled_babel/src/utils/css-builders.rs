@@ -334,10 +334,7 @@ enum BlockItem<'a> {
     Comment { kind: CommentKind, text: String },
 }
 
-fn extract_comment_entries<'a>(
-    snippet: &str,
-    block: &BlockStmt,
-) -> Vec<(u32, BlockItem<'a>)> {
+fn extract_comment_entries<'a>(snippet: &str, block: &BlockStmt) -> Vec<(u32, BlockItem<'a>)> {
     let mut entries = Vec::new();
     let bytes = snippet.as_bytes();
     let mut index = 0usize;
@@ -363,9 +360,7 @@ fn extract_comment_entries<'a>(
             let start = index;
             index += 2;
             let start_idx = index;
-            while index + 1 < bytes.len()
-                && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
-            {
+            while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
                 index += 1;
             }
             let text = if index + 1 < bytes.len() {

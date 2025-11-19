@@ -156,7 +156,6 @@ mod tests {
         ParentOrphanedPseudos.run(&mut stylesheet, &mut ctx);
 
         let nested_rule = first_nested_rule(&stylesheet).expect("nested rule");
-        
     }
 
     #[test]

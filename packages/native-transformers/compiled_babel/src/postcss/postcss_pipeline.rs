@@ -217,7 +217,10 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     }
     plugins.push(normalize_whitespace_plugin());
     // Collect keyframes as sheets to match Babel output
-    plugins.push(extract_stylesheets_plugin(collector.clone(), options.clone()));
+    plugins.push(extract_stylesheets_plugin(
+        collector.clone(),
+        options.clone(),
+    ));
     pc::postcss_with_plugins(plugins)
 }
 
@@ -925,7 +928,6 @@ fn extract_stylesheets_plugin(
             }
         }
 
-
         let trimmed = selector.trim();
         if trimmed.is_empty() {
             return "&".to_string();
@@ -974,10 +976,10 @@ fn extract_stylesheets_plugin(
         out
     }
 
-fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
-    if at_chain.is_empty() {
-        return rule_css.to_string();
-    }
+    fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
+        if at_chain.is_empty() {
+            return rule_css.to_string();
+        }
         let mut out = String::new();
         for (n, p) in at_chain {
             if p.is_empty() {
@@ -1375,24 +1377,24 @@ fn atomicify_rules_plugin(
         for _ in at_chain {
             out.push('}');
         }
-    out
-}
-
-fn clean_placeholder_selector(selector: String, placeholder: Option<&str>) -> String {
-    if let Some(ph) = placeholder {
-        if !ph.is_empty() {
-            let needle = format!(" {}", ph);
-            let mut cleaned = selector.replace(&needle, "");
-            cleaned = cleaned.replace(ph, "");
-            return cleaned.trim().to_string();
-        }
+        out
     }
-    selector
-}
 
-fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
-    // Walk up parents; if any ancestor is an at-rule named 'keyframes', return true
-    let mut cur = Some(node.clone());
+    fn clean_placeholder_selector(selector: String, placeholder: Option<&str>) -> String {
+        if let Some(ph) = placeholder {
+            if !ph.is_empty() {
+                let needle = format!(" {}", ph);
+                let mut cleaned = selector.replace(&needle, "");
+                cleaned = cleaned.replace(ph, "");
+                return cleaned.trim().to_string();
+            }
+        }
+        selector
+    }
+
+    fn is_inside_keyframes(node: &pc::ast::NodeRef) -> bool {
+        // Walk up parents; if any ancestor is an at-rule named 'keyframes', return true
+        let mut cur = Some(node.clone());
         while let Some(n) = cur {
             if let Some(at) = as_at_rule(&n) {
                 if at.name().eq_ignore_ascii_case("keyframes") {

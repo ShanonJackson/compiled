@@ -315,7 +315,11 @@ pub fn plugin() -> pc::BuiltPlugin {
                                 clamp_opacity(node);
                             }
                         }
-                        vp::Node::Function { value, nodes: inner, .. } => {
+                        vp::Node::Function {
+                            value,
+                            nodes: inner,
+                            ..
+                        } => {
                             let low = value.to_lowercase();
                             if matches!(
                                 low.as_str(),

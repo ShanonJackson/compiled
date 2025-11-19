@@ -25,7 +25,12 @@ pub fn traverse_member_access_path(
     );
 
     if let Some((segment, remaining)) = access_path.split_first() {
-        let evaluated = evaluate_path(&result.value, result.meta.clone(), segment.sym.as_ref());
+        let evaluated = evaluate_path(
+            &result.value,
+            result.meta.clone(),
+            segment.sym.as_ref(),
+            evaluate_expression,
+        );
         return traverse_member_access_path(
             &evaluated.value,
             evaluated.meta,

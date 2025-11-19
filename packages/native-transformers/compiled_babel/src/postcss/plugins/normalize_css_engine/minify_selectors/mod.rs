@@ -337,7 +337,10 @@ fn minify_selector_string(selector: &str) -> Option<String> {
     }
     let parse_relative = starts_with_relative_combinator(trimmed);
     let cm: SourceMap = Default::default();
-    let fm = cm.new_source_file(FileName::Custom("sel.css".into()).into(), trimmed.to_string());
+    let fm = cm.new_source_file(
+        FileName::Custom("sel.css".into()).into(),
+        trimmed.to_string(),
+    );
     let mut errors = vec![];
     if parse_relative {
         let mut list = parse_string_input::<RelativeSelectorList>(

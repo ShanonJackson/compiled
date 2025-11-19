@@ -337,7 +337,7 @@ fn parse_program(
     Some((program, source_map, collected))
 }
 
-fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<CachedModule> {
+pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<CachedModule> {
     let (module_path, code, options, resolver_clone, cwd, root) = {
         let mut state = meta.state_mut();
         let filename = state.filename.clone()?;
@@ -619,13 +619,17 @@ pub fn resolve_binding(
     evaluate_expression: EvaluateExpression,
 ) -> Option<PartialBindingWithMeta> {
     let binding = get_scoped_binding(reference_name, &meta)?;
+    let is_import_binding = matches!(
+        binding.path.as_ref().map(|path| &path.kind),
+        Some(BindingPathKind::Import { .. })
+    );
 
     // COMPAT: Babel resolves local export aliases by mapping the exported name
     // back to its local before proceeding. If our scoped binding is a
     // placeholder (no node captured), try to resolve a local name from a
     // `export { local as reference_name }` declaration in this module and then
     // resolve that local instead.
-    if binding.node.is_none() {
+    if binding.node.is_none() && !is_import_binding {
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
             eprintln!(
                 "[resolve_binding] placeholder for '{}', checking local export alias",

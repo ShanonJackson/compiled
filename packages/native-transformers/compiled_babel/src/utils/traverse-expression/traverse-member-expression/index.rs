@@ -365,8 +365,11 @@ mod tests {
             panic!("expected member expression");
         };
 
-        let pair =
-            traverse_member_expression(&member, meta, real_evaluate_expression as EvaluateExpression);
+        let pair = traverse_member_expression(
+            &member,
+            meta,
+            real_evaluate_expression as EvaluateExpression,
+        );
         match pair.value {
             Expr::Call(call) => match call.callee {
                 Callee::Expr(callee) => match callee.as_ref() {
@@ -396,5 +399,4 @@ mod tests {
             "expected computed identifier to be captured in access path"
         );
     }
-
 }

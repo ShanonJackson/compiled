@@ -69,8 +69,7 @@ where
             };
 
             let mut total_sheets: Vec<String> = Vec::new();
-            let mut new_properties: Vec<PropOrSpread> =
-                Vec::with_capacity(object_lit.props.len());
+            let mut new_properties: Vec<PropOrSpread> = Vec::with_capacity(object_lit.props.len());
             let previous_extract = meta.state().opts.extract;
             let initial_style_rules = meta.state().style_rules.clone();
             let initial_sheets = meta.state().sheets.clone();

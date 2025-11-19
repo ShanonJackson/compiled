@@ -548,19 +548,11 @@ fn reduce_multiplication_expression(left: Node, right: Node, precision: usize) -
     let left_reduced = reduce_node(left, precision);
     let right_reduced = reduce_node(right, precision);
 
-    if let Node::Value {
-        num,
-        unit: None,
-    } = right_reduced
-    {
+    if let Node::Value { num, unit: None } = right_reduced {
         return apply_number_multiplication(left_reduced, num, precision);
     }
 
-    if let Node::Value {
-        num,
-        unit: None,
-    } = left_reduced
-    {
+    if let Node::Value { num, unit: None } = left_reduced {
         return apply_number_multiplication(right_reduced, num, precision);
     }
 
@@ -575,11 +567,7 @@ fn reduce_division_expression(left: Node, right: Node, precision: usize) -> Node
     let left_reduced = reduce_node(left, precision);
     let right_reduced = reduce_node(right, precision);
 
-    if let Node::Value {
-        num,
-        unit: None,
-    } = right_reduced
-    {
+    if let Node::Value { num, unit: None } = right_reduced {
         return apply_number_division(left_reduced, num, precision);
     }
 
