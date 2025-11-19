@@ -17,7 +17,7 @@ const Component = forwardRef(({ as: C = "div", style: __cmpls, ...__cmplp }, __c
 			style={__cmpls}
 			ref={__cmplr}
 			className={ax([
-				"_syaz15td _1ed91y44 _osa31y44 _18t21y44 _1pdk1y44 _ibks1a6z _i65s105o _a8siftgi",
+				"_1ud41y44 _tozs1y44 _38gu1y44 _mn4j1y44 _12nkftgi _syaz15td _10r21a6z _10jz105o",
 				__cmplp.isActive ? "_bfhk1paw" : "_bfhk1i1c",
 				__cmplp.className,
 			])}

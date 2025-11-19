@@ -329,7 +329,13 @@ fn collapse_initial_combinator_whitespace(selector: &str) -> String {
 
 fn requires_ampersand_separator(selector: &str) -> bool {
     match selector.chars().next() {
-        Some(ch) if ch.is_alphanumeric() || matches!(ch, '*' | '>' | '+' | '~' | '|') => true,
+        Some(ch)
+            if ch.is_alphanumeric()
+                || matches!(ch, '*' | '>' | '+' | '~' | '|')
+                || matches!(ch, '.' | '#' | '[') =>
+        {
+            true
+        }
         Some(ch) if matches!(ch, '-' | '_') => true,
         _ => false,
     }

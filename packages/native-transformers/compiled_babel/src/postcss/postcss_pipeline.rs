@@ -913,7 +913,11 @@ fn extract_stylesheets_plugin(
 
         fn requires_ampersand_separator(selector: &str) -> bool {
             match selector.chars().next() {
-                Some(ch) if ch.is_alphanumeric() || matches!(ch, '*' | '>' | '+' | '~' | '|') => {
+                Some(ch)
+                    if ch.is_alphanumeric()
+                        || matches!(ch, '*' | '>' | '+' | '~' | '|')
+                        || matches!(ch, '.' | '#' | '[') =>
+                {
                     true
                 }
                 Some(ch) if matches!(ch, '-' | '_') => true,
@@ -1311,7 +1315,11 @@ fn atomicify_rules_plugin(
 
         fn requires_ampersand_separator(selector: &str) -> bool {
             match selector.chars().next() {
-                Some(ch) if ch.is_alphanumeric() || matches!(ch, '*' | '>' | '+' | '~' | '|') => {
+                Some(ch)
+                    if ch.is_alphanumeric()
+                        || matches!(ch, '*' | '>' | '+' | '~' | '|')
+                        || matches!(ch, '.' | '#' | '[') =>
+                {
                     true
                 }
                 Some(ch) if matches!(ch, '-' | '_') => true,
