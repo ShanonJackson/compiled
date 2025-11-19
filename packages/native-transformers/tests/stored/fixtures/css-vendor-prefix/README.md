@@ -1,2 +1,0 @@
-- Also browser prefixing
--

@@ -30,11 +30,11 @@ use crate::utils_manipulate_template_literal::{
     has_nested_template_literals_with_conditional_rules, is_quasi_mid_statement,
     optimize_conditional_statement, recompose_template_literal,
 };
+use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::utils_object_property_to_string::{
     can_be_statically_concatenated, expression_to_string, expression_type,
     object_property_to_string,
 };
-use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::utils_resolve_binding::resolve_binding;
 use crate::utils_types::{
     BindingSource, ConditionalCssItem, CssItem, CssMapItem, CssOutput, LogicalCssItem,

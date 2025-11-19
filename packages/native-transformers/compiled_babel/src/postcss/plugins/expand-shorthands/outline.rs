@@ -18,13 +18,13 @@ pub fn outline(value: &ValuesRoot) -> Vec<LonghandDeclaration> {
 
     let mut extract = |node: Option<&ValueNode>| -> bool {
         if let Some(node) = node {
-            if let Some(word) = node.as_word() {
-                if is_color(node) {
-                    if color_value.is_some() {
-                        return true;
-                    }
-                    color_value = Some(node.clone());
-                } else if SIZE_VALUES.contains(&word) {
+            if is_color(node) {
+                if color_value.is_some() {
+                    return true;
+                }
+                color_value = Some(node.clone());
+            } else if let Some(word) = node.as_word() {
+                if SIZE_VALUES.contains(&word) {
                     if width_value.is_some() {
                         return true;
                     }

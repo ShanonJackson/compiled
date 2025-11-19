@@ -42,6 +42,8 @@ struct Agent {
     prefix: String,
     #[serde(default, rename = "prefix_exceptions")]
     prefix_exceptions: Option<HashMap<String, String>>,
+    #[serde(default)]
+    versions: Vec<Option<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -57,11 +59,21 @@ impl PrefixDB {
         let aj = AGENTS_JSON.as_ref().and_then(|s| Some(*s))?;
         let entries: HashMap<String, PrefixEntry> = match serde_json::from_str(pjson) {
             Ok(v) => v,
-            Err(_) => return None,
+            Err(err) => {
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    eprintln!("[autoprefixer] failed to parse prefixes.json: {err}");
+                }
+                return None;
+            }
         };
         let agents: HashMap<String, Agent> = match serde_json::from_str::<AgentsMap>(aj) {
             Ok(v) => v.0,
-            Err(_) => return None,
+            Err(err) => {
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+                    eprintln!("[autoprefixer] failed to parse agents.json: {err}");
+                }
+                return None;
+            }
         };
         Some(PrefixDB { entries, agents })
     }
@@ -88,9 +100,10 @@ impl PrefixDB {
         &self,
         selected_browsers: &[String],
     ) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+        let normalized_targets = self.normalize_targets(selected_browsers);
         let mut add: HashMap<String, Vec<String>> = HashMap::new();
         let mut remove: HashMap<String, Vec<String>> = HashMap::new();
-        let sel: BTreeSet<String> = selected_browsers.iter().cloned().collect();
+        let sel: BTreeSet<String> = normalized_targets.into_iter().collect();
 
         for (name, data) in &self.entries {
             let all_prefixes: BTreeSet<String> = {
@@ -122,7 +135,9 @@ impl PrefixDB {
             }
 
             if !need.is_empty() {
-                add.insert(name.clone(), need.iter().cloned().collect());
+                let mut prefixes: Vec<String> = need.iter().cloned().collect();
+                sort_prefixes(&mut prefixes);
+                add.insert(name.clone(), prefixes);
                 let rem: Vec<String> = all_prefixes.difference(&need).cloned().collect();
                 if !rem.is_empty() {
                     remove.insert(name.clone(), rem);
@@ -132,6 +147,88 @@ impl PrefixDB {
             }
         }
         (add, remove)
+    }
+}
+
+fn sort_prefixes(prefixes: &mut Vec<String>) {
+    fn remove_note(value: &str) -> &str {
+        value.split_once(' ').map(|(p, _)| p).unwrap_or(value)
+    }
+    prefixes.sort_by(|a, b| {
+        let a_clean = remove_note(a);
+        let b_clean = remove_note(b);
+        if a_clean.len() == b_clean.len() {
+            b.len().cmp(&a.len())
+        } else {
+            b_clean.len().cmp(&a_clean.len())
+        }
+    });
+}
+
+fn parse_leading_numeric(value: &str) -> Option<f64> {
+    let mut end = 0;
+    for (idx, ch) in value.char_indices() {
+        if ch.is_ascii_digit() || ch == '.' {
+            end = idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        return None;
+    }
+    value[..end].parse::<f64>().ok()
+}
+
+impl Agent {
+    fn normalize_version(&self, version: &str) -> Option<String> {
+        if self
+            .versions
+            .iter()
+            .filter_map(|v| v.as_ref())
+            .any(|v| v == version)
+        {
+            return Some(version.to_string());
+        }
+        let target = parse_leading_numeric(version)?;
+        let mut best_value = None;
+        let mut best_version = None;
+        for known in self.versions.iter().filter_map(|v| v.as_ref()) {
+            if known.eq(version) {
+                return Some(known.clone());
+            }
+            if let Some(val) = parse_leading_numeric(known) {
+                if val <= target {
+                    let replace = match best_value {
+                        Some(current) => val > current,
+                        None => true,
+                    };
+                    if replace {
+                        best_value = Some(val);
+                        best_version = Some(known.clone());
+                    }
+                }
+            }
+        }
+        best_version
+    }
+}
+
+impl PrefixDB {
+    fn normalize_targets(&self, targets: &[String]) -> Vec<String> {
+        let mut out = Vec::with_capacity(targets.len());
+        for target in targets {
+            if let Some((browser, version)) = target.split_once(' ') {
+                if let Some(agent) = self.agents.get(browser) {
+                    if let Some(norm) = agent.normalize_version(version) {
+                        out.push(format!("{} {}", browser, norm));
+                        continue;
+                    }
+                }
+            }
+            out.push(target.clone());
+        }
+        out
     }
 }
 
@@ -152,6 +249,9 @@ impl Plugin for VendorAutoprefixer {
             return;
         };
         let targets = resolve_browserslist_targets();
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+            eprintln!("[autoprefixer] plugin start targets={}", targets.join(", "));
+        }
         let (add, remove) = db.select_add_remove(&targets);
         let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
         if tracing {
@@ -193,7 +293,7 @@ impl Plugin for VendorAutoprefixer {
     }
 }
 
-fn resolve_browserslist_targets() -> Vec<String> {
+pub fn resolve_browserslist_targets() -> Vec<String> {
     // Use oxc_browserslist to resolve defaults (no repo-specific options requested)
     let mut out = Vec::new();
     let opts = oxc_browserslist::Opts::default();

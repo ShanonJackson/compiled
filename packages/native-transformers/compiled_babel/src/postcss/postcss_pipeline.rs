@@ -12,6 +12,7 @@ use super::transform::{
 };
 #[cfg(feature = "postcss_engine")]
 use crate::postcss::utils::value_minifier::minify_value_whitespace;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "postcss_engine")]
@@ -1890,6 +1891,14 @@ pub fn transform_css_via_postcss(
         eprintln!("[postcss] take collector");
     }
     let (mut sheets, mut class_names) = collector.take();
+    let autoprefix_map =
+        crate::postcss::plugins::vendor_autoprefixer::PrefixDB::load().and_then(|db| {
+            let targets =
+                crate::postcss::plugins::vendor_autoprefixer::resolve_browserslist_targets();
+            let (add, _remove) = db.select_add_remove(&targets);
+            Some(add)
+        });
+    apply_vendor_prefixes_to_sheets(&mut sheets, autoprefix_map.as_ref());
     // Minimal post-process to guarantee -moz-fit-content is present for width-like properties
     // when emitting via the engine path. Guarded to avoid duplicates.
     if std::env::var("AUTOPREFIXER")
@@ -2211,6 +2220,144 @@ pub fn transform_css_via_postcss(
         class_names,
     })
 }
+
+fn apply_vendor_prefixes_to_sheets(
+    sheets: &mut Vec<String>,
+    autoprefix_map: Option<&HashMap<String, Vec<String>>>,
+) {
+    if sheets.is_empty() {
+        return;
+    }
+    let mut extra_sheets: Vec<String> = Vec::new();
+    for sheet in sheets.iter_mut() {
+        let Some((selector, mut decls)) = parse_rule(sheet) else {
+            continue;
+        };
+        if decls.is_empty() {
+            continue;
+        }
+        let base_decl = decls[0].clone();
+        let mut changed = false;
+        if let Some(map) = autoprefix_map {
+            if !base_decl.0.starts_with('-') {
+                if let Some(prefixes) = map.get(&base_decl.0) {
+                    let mut new_pairs: Vec<(String, String)> = Vec::new();
+                    for prefix in prefixes {
+                        let pref_prop = format!("{}{}", prefix, base_decl.0);
+                        if decls.iter().any(|(name, _)| name == &pref_prop) {
+                            continue;
+                        }
+                        new_pairs.push((pref_prop, base_decl.1.clone()));
+                    }
+                    if !new_pairs.is_empty() {
+                        new_pairs.extend(decls.clone());
+                        decls = new_pairs;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        let (base_value_plain, has_important) = strip_important(&base_decl.1);
+        if is_logical_size_prop(&base_decl.0)
+            && base_value_plain.eq_ignore_ascii_case("min-content")
+        {
+            let mut moz_value = "-moz-min-content".to_string();
+            if has_important {
+                moz_value.push_str("!important");
+            }
+            if !decls.iter().any(|(name, value)| {
+                name == &base_decl.0 && value.trim_start().starts_with("-moz-min-content")
+            }) {
+                decls.insert(0, (base_decl.0.clone(), moz_value));
+                changed = true;
+            }
+        } else if is_logical_size_prop(&base_decl.0)
+            && base_value_plain.eq_ignore_ascii_case("max-content")
+        {
+            let mut moz_value = "-moz-max-content".to_string();
+            if has_important {
+                moz_value.push_str("!important");
+            }
+            if !decls.iter().any(|(name, value)| {
+                name == &base_decl.0 && value.trim_start().starts_with("-moz-max-content")
+            }) {
+                decls.insert(0, (base_decl.0.clone(), moz_value));
+                changed = true;
+            }
+        }
+        if selector.contains("::placeholder") {
+            let moz_selector = selector.replace("::placeholder", "::-moz-placeholder");
+            if moz_selector != selector {
+                extra_sheets.push(build_rule(&moz_selector, &decls));
+            }
+        }
+        if changed {
+            *sheet = build_rule(&selector, &decls);
+        }
+    }
+    sheets.extend(extra_sheets);
+}
+
+fn is_logical_size_prop(prop: &str) -> bool {
+    matches!(
+        prop,
+        "block-size"
+            | "inline-size"
+            | "min-block-size"
+            | "min-inline-size"
+            | "max-block-size"
+            | "max-inline-size"
+            | "width"
+            | "min-width"
+            | "max-width"
+            | "height"
+            | "min-height"
+            | "max-height"
+    )
+}
+
+fn parse_rule(sheet: &str) -> Option<(String, Vec<(String, String)>)> {
+    let open = sheet.find('{')?;
+    let close = sheet.rfind('}')?;
+    if close <= open {
+        return None;
+    }
+    let selector = sheet[..open].to_string();
+    let body = &sheet[open + 1..close];
+    let mut decls: Vec<(String, String)> = Vec::new();
+    for chunk in body.split(';') {
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            decls.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    Some((selector, decls))
+}
+
+fn build_rule(selector: &str, decls: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (idx, (name, value)) in decls.iter().enumerate() {
+        if idx > 0 {
+            out.push(';');
+        }
+        out.push_str(name);
+        out.push(':');
+        out.push_str(value);
+    }
+    format!("{}{{{}}}", selector, out)
+}
+
+fn strip_important(value: &str) -> (String, bool) {
+    let trimmed = value.trim();
+    if let Some(stripped) = trimmed.strip_suffix("!important") {
+        (stripped.trim().to_string(), true)
+    } else {
+        (trimmed.to_string(), false)
+    }
+}
 fn expand_shorthands_plugin() -> pc::BuiltPlugin {
     // Deprecated shim; real expansion is handled by expand_shorthands_engine::plugin()
     pc::plugin("expand-shorthands-disabled").build()
@@ -2305,6 +2452,15 @@ fn vendor_autoprefixer_plugin() -> pc::BuiltPlugin {
             v
         };
         let (add, remove) = db.select_add_remove(&targets);
+        let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
+        if tracing {
+            eprintln!(
+                "[autoprefixer:engine] targets={} add_keys={} remove_keys={}",
+                targets.join(", "),
+                add.len(),
+                remove.len()
+            );
+        }
 
         match root {
             pc::RootLike::Root(r) => {
