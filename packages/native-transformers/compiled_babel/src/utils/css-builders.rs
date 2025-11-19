@@ -34,6 +34,7 @@ use crate::utils_object_property_to_string::{
     can_be_statically_concatenated, expression_to_string, expression_type,
     object_property_to_string,
 };
+use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::utils_resolve_binding::resolve_binding;
 use crate::utils_types::{
     BindingSource, ConditionalCssItem, CssItem, CssMapItem, CssOutput, LogicalCssItem,
@@ -1070,8 +1071,9 @@ where
             continue;
         }
 
-        let (variable_expression, variable_name) =
+        let (mut variable_expression, variable_name) =
             get_variable_declarator_value_for_parent_expr(node_expression, meta);
+        normalize_props_usage(&mut variable_expression);
         let Some(next_quasi) = template.quasis.get_mut(index + 1) else {
             panic!("Template literal missing trailing quasi for interpolation");
         };
@@ -1187,46 +1189,30 @@ where
         if looks_like_css_literal {
             css_output = Some(build_css(expr, meta));
         } else {
-            let is_compiled_css = {
-                let state = meta.state();
-                let compiled = is_compiled_css_tagged_template_expression(expr, &state)
-                    || is_compiled_css_call_expression(expr, &state);
-                compiled
-            };
+            let state = meta.state();
+            let is_compiled_css = is_compiled_css_tagged_template_expression(expr, &state)
+                || is_compiled_css_call_expression(expr, &state);
+            drop(state);
 
             if is_compiled_css {
-                css_output = Some(build_css(expr, meta));
+                let mut cloned = expr.clone();
+                normalize_props_usage(&mut cloned);
+                css_output = Some(build_css(&cloned, meta));
             } else if let Expr::Ident(identifier) = expr {
                 if let Some(binding) =
                     resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
                 {
-                    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                        eprintln!(
-                            "[build_css] ident='{}' source={:?} has_node={}",
-                            identifier.sym,
-                            binding.source,
-                            binding.node.is_some()
-                        );
-                    }
-                    if let Some(node) = binding.node.clone() {
-                        let compiled = {
-                            let state = binding.meta.state();
-                            let compiled =
-                                is_compiled_css_tagged_template_expression(&node, &state)
-                                    || is_compiled_css_call_expression(&node, &state);
-                            compiled
-                        };
+                    if let Some(mut node) = binding.node.clone() {
+                        normalize_props_usage(&mut node);
+                        let state = binding.meta.state();
+                        let compiled = is_compiled_css_tagged_template_expression(&node, &state)
+                            || is_compiled_css_call_expression(&node, &state);
+                        drop(state);
 
                         if compiled {
                             let result = build_css(&node, &binding.meta);
                             assert_no_imported_css_variables(expr, meta, &binding, &result);
                             css_output = Some(result);
-                        } else if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                            eprintln!(
-                                "[build_css] ident='{}' resolved node not compiled util: kind={}",
-                                identifier.sym,
-                                print_expression(&node)
-                            );
                         }
                     }
                 }
@@ -1497,8 +1483,9 @@ where
                 // within an `@property` block). This allows the value to be provided at
                 // runtime via inline style while preserving identical hashing/IO.
                 if let Expr::Lit(Lit::Bool(_)) = &prop_value {
-                    let (variable_expression, variable_name) =
+                    let (mut variable_expression, variable_name) =
                         get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
+                    normalize_props_usage(&mut variable_expression);
 
                     let name = format!("--_{}", hash(&variable_name));
 
@@ -1717,8 +1704,9 @@ where
                     continue;
                 }
 
-                let (variable_expression, variable_name) =
+                let (mut variable_expression, variable_name) =
                     get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
+                normalize_props_usage(&mut variable_expression);
                 let name = format!("--_{}", hash(&variable_name));
 
                 variables.push(Variable {
@@ -1992,7 +1980,10 @@ fn build_css_internal(node: &Expr, meta: &Metadata) -> CssOutput {
             }
         }
 
-        let result = build_css_internal(&binding_node, &binding.meta);
+        let mut normalized_node = binding_node;
+        normalize_props_usage(&mut normalized_node);
+
+        let result = build_css_internal(&normalized_node, &binding.meta);
         assert_no_imported_css_variables(&Expr::Ident(identifier.clone()), meta, &binding, &result);
         callback_if_file_included(meta, &binding.meta);
         return result;
