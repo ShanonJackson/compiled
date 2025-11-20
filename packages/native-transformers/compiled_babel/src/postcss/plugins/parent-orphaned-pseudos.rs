@@ -88,27 +88,38 @@ fn normalize_qualified_rule(rule: &mut QualifiedRule) {
 }
 
 fn normalize_complex_selector(complex: &mut ComplexSelector) {
-    let needs_descendant = complex.children.iter().skip(1).any(|child| {
-        matches!(
-            child,
-            ComplexSelectorChildren::Combinator(comb)
-                if matches!(comb.value, CombinatorValue::Descendant)
-        )
-    });
-
-    if let Some(ComplexSelectorChildren::CompoundSelector(compound)) = complex.children.first_mut()
-    {
-        let has_nesting = compound.nesting_selector.is_some();
-        let has_pseudo = compound.subclass_selectors.iter().any(|selector| {
-            matches!(
-                selector,
-                SubclassSelector::PseudoClass(_) | SubclassSelector::PseudoElement(_)
-            )
-        });
-
-        if (has_nesting || has_pseudo || needs_descendant) && compound.nesting_selector.is_none() {
+    if let Some(compound) = first_compound_selector(complex) {
+        if selector_starts_with_pseudo(compound) && compound.nesting_selector.is_none() {
             compound.nesting_selector = Some(NestingSelector { span: DUMMY_SP });
         }
+    }
+}
+
+fn first_compound_selector(
+    complex: &mut ComplexSelector,
+) -> Option<&mut swc_core::css::ast::CompoundSelector> {
+    let mut iter = complex.children.iter_mut();
+    while let Some(child) = iter.next() {
+        match child {
+            ComplexSelectorChildren::CompoundSelector(compound) => return Some(compound),
+            ComplexSelectorChildren::Combinator(combinator) => {
+                if !matches!(combinator.value, CombinatorValue::Descendant) {
+                    return None;
+                }
+            }
+        }
+    }
+    None
+}
+
+fn selector_starts_with_pseudo(compound: &swc_core::css::ast::CompoundSelector) -> bool {
+    if compound.nesting_selector.is_some() || compound.type_selector.is_some() {
+        return false;
+    }
+
+    match compound.subclass_selectors.first() {
+        Some(SubclassSelector::PseudoClass(_) | SubclassSelector::PseudoElement(_)) => true,
+        _ => false,
     }
 }
 
@@ -146,16 +157,26 @@ mod tests {
         None
     }
 
+    fn first_root_rule(stylesheet: &Stylesheet) -> Option<&QualifiedRule> {
+        for rule in &stylesheet.rules {
+            if let Rule::QualifiedRule(rule) = rule {
+                return Some(rule);
+            }
+        }
+        None
+    }
+
     #[test]
     fn adds_nesting_to_orphaned_pseudo_rules() {
         let mut stylesheet =
-            parse_stylesheet(".a {\n  &:hover { color: red; }\n  ::before { content: ''; }\n }");
+            parse_stylesheet(".a {\n  :hover { color: red; }\n  ::before { content: ''; }\n }");
         let options = TransformCssOptions::default();
         let mut ctx = TransformContext::new(&options);
 
         ParentOrphanedPseudos.run(&mut stylesheet, &mut ctx);
 
         let nested_rule = first_nested_rule(&stylesheet).expect("nested rule");
+        assert_nesting_present(nested_rule);
     }
 
     #[test]
@@ -182,6 +203,18 @@ mod tests {
         assert_nesting_present(nested_rule);
     }
 
+    #[test]
+    fn does_not_add_nesting_to_regular_pseudos() {
+        let mut stylesheet = parse_stylesheet(".a:hover { color: red; }");
+        let options = TransformCssOptions::default();
+        let mut ctx = TransformContext::new(&options);
+
+        ParentOrphanedPseudos.run(&mut stylesheet, &mut ctx);
+
+        let root_rule = first_root_rule(&stylesheet).expect("root rule");
+        assert_nesting_absent(root_rule);
+    }
+
     fn assert_nesting_present(rule: &QualifiedRule) {
         match &rule.prelude {
             QualifiedRulePrelude::SelectorList(list) => {
@@ -200,6 +233,27 @@ mod tests {
                 };
 
                 assert!(compound.nesting_selector.is_some());
+            }
+            _ => panic!("unexpected prelude variant"),
+        }
+    }
+
+    fn assert_nesting_absent(rule: &QualifiedRule) {
+        match &rule.prelude {
+            QualifiedRulePrelude::SelectorList(list) => {
+                let compound = match list.children.first().unwrap().children.first().unwrap() {
+                    ComplexSelectorChildren::CompoundSelector(compound) => compound,
+                    _ => panic!("expected compound selector"),
+                };
+                assert!(compound.nesting_selector.is_none());
+            }
+            QualifiedRulePrelude::RelativeSelectorList(list) => {
+                let relative = list.children.first().expect("relative selector");
+                let compound = match relative.selector.children.first().unwrap() {
+                    ComplexSelectorChildren::CompoundSelector(compound) => compound,
+                    _ => panic!("expected compound selector"),
+                };
+                assert!(compound.nesting_selector.is_none());
             }
             _ => panic!("unexpected prelude variant"),
         }

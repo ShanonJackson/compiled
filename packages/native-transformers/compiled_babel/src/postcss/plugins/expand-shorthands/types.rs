@@ -5,7 +5,7 @@ use swc_atoms::Atom;
 use swc_core::common::{input::StringInput, FileName, SourceMap, Span};
 use swc_core::css::ast::{
     Angle, ComponentValue, Declaration, DeclarationName, Dimension, Flex, FunctionName, Ident,
-    Length, Resolution, Rule, Stylesheet, Time, Token, TokenAndSpan, UnknownDimension,
+    IdSelector, Length, Resolution, Rule, Stylesheet, Time, Token, TokenAndSpan, UnknownDimension,
 };
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
@@ -228,8 +228,14 @@ fn determine_value_kind(components: &[ComponentValue]) -> ValueNodeKind {
             },
         },
         ComponentValue::Color(_) => ValueNodeKind::Color,
+        ComponentValue::IdSelector(id) => id_selector_to_word(id),
         _ => ValueNodeKind::Other,
     }
+}
+
+fn id_selector_to_word(id: &IdSelector) -> ValueNodeKind {
+    let value = format!("#{}", id.text.value);
+    ValueNodeKind::Word(value)
 }
 
 fn extract_dimension_unit(dimension: &Dimension) -> String {

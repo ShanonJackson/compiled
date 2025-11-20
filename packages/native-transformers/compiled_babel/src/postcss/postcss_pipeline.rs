@@ -225,7 +225,7 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     plugins.push(discard_duplicates_plugin());
     plugins.push(wrap_bare_declarations_plugin(options.clone()));
     plugins.push(discard_empty_rules_plugin());
-    plugins.push(pc::plugin("parent-orphaned-pseudos").build());
+    plugins.push(parent_orphaned_pseudos_plugin());
     plugins.push(pc::plugin("postcss-nested").build());
     plugins.push(super::plugins::normalize_css_engine::minify_selectors::plugin());
     plugins.push(super::plugins::normalize_css_engine::minify_params::plugin());
@@ -337,6 +337,68 @@ fn flatten_multiple_selectors_plugin() -> pc::BuiltPlugin {
                     d.walk_rules(|rule_ref, _| {
                         if let Some(rule) = as_rule(&rule_ref) {
                             flatten_rule(&rule);
+                        }
+                        true
+                    });
+                }
+            }
+            Ok(())
+        })
+        .build()
+}
+
+#[cfg(feature = "postcss_engine")]
+fn parent_orphaned_pseudos_plugin() -> pc::BuiltPlugin {
+    use postcss::ast::nodes::as_rule;
+
+    fn add_nesting(selector: &str) -> Option<String> {
+        let parts = postcss::list::comma(selector);
+        let mut changed = false;
+        let mut updated: Vec<String> = Vec::with_capacity(parts.len());
+        for part in parts {
+            let trimmed = part.trim_start();
+            if trimmed.starts_with(':') {
+                let offset = part
+                    .char_indices()
+                    .find(|(_, ch)| !ch.is_whitespace())
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                let mut rebuilt = String::with_capacity(part.len() + 1);
+                rebuilt.push_str(&part[..offset]);
+                rebuilt.push('&');
+                rebuilt.push_str(&part[offset..]);
+                updated.push(rebuilt);
+                changed = true;
+            } else {
+                updated.push(part);
+            }
+        }
+        if changed {
+            Some(updated.join(", "))
+        } else {
+            None
+        }
+    }
+
+    pc::plugin("parent-orphaned-pseudos")
+        .once_exit(|root, _| {
+            match root {
+                pc::RootLike::Root(r) => {
+                    r.walk_rules(|rule_ref, _| {
+                        if let Some(rule) = as_rule(&rule_ref) {
+                            if let Some(new_selector) = add_nesting(&rule.selector()) {
+                                rule.set_selector(new_selector);
+                            }
+                        }
+                        true
+                    });
+                }
+                pc::RootLike::Document(d) => {
+                    d.walk_rules(|rule_ref, _| {
+                        if let Some(rule) = as_rule(&rule_ref) {
+                            if let Some(new_selector) = add_nesting(&rule.selector()) {
+                                rule.set_selector(new_selector);
+                            }
                         }
                         true
                     });

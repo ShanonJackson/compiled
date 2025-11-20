@@ -45,12 +45,12 @@ const EditorShell = () => {
 			<section
 				aria-label="Rich text editor"
 				className={ax([
-					"_zulp7vkz _ca0q1tcg _u5f31tcg _n3td1tcg _19bv1tcg _2rko7vkz _1e0c11p5 _bfhk118l",
+					"_zulp7vkz _ca0q1tcg _u5f31tcg _n3td1tcg _19bv1tcg _2rko7vkz _1e0c11p5 _bfhk1hxd",
 				])}
 			>
 				<header
 					className={ax([
-						"_1n261g80 _zulpftgi _stfgokh7 _zs121y44 _1gfl1y44 _yhjmftgi _1gqn1y44 _11lvftgi _19e7owjk _1e0c1txw _1uegowjk _1o7p1crf _1i49angw _7dir18uv _4rtxtlke _dwxl3739 _4c0xu67f",
+						"_1n261g80 _zulpftgi _stfgokh7 _zs121y44 _1gfl1y44 _yhjmftgi _1gqn1y44 _11lvftgi _19e7owjk _1e0c1txw _1uegowjk _1o7p1crf _1i49angw _7dir1j28 _4rtxtlke _m4w23739 _6pupu67f",
 					])}
 				>
 					<ToolbarButton active={bold} label="Bold" onClick={handleToggle(setBold)} />
@@ -69,10 +69,10 @@ const EditorShell = () => {
 					value={value}
 					onChange={(event) => setValue(event.target.value)}
 					className={ax([
-						"_ca0q7vkz _u5f37vkz _n3td7vkz _19bv7vkz _2rko1crf _19it1k6b _1tkeuuw1 _bfhku67f _1wybo7ao _vwz4yu22 _nt751r31 _49pcnqa1 _1hvwyh40 _1bg4yh40",
+						"_ca0q7vkz _u5f37vkz _n3td7vkz _19bv7vkz _2rko1crf _19it1i89 _1tkeuuw1 _bfhku67f _1wybo7ao _vwz4yu22 _nt75b0wy _49pcnqa1 _1hvwyh40 _1bg4yh40",
 					])}
 				/>
-				<footer className={ax(["_1bah1yb4 _1e0c1txw _1wyb1crf _syaz1tgh"])}>
+				<footer className={ax(["_1bah1yb4 _1e0c1txw _1wyb1crf _syaz9sh9"])}>
 					<span>{wordCount} words</span>
 					<EditorStatus />
 				</footer>

@@ -16,7 +16,7 @@ export const Component = ({ children, onClick }) => {
 		<button
 			onClick={onClick}
 			className={ax([
-				"_ca0q7vkz _u5f37vkz _n3td7vkz _19bv7vkz _19itxtig _2rko1y44 _v5641hdd _bfhk130e _syazu67f _1wybdlk8 _80omtlke _irr3i6ib _4cvxi6ib _nt751r31 _49pcnqa1 _1hvwyh40 _1bg4yh40",
+				"_ca0q7vkz _u5f37vkz _n3td7vkz _19bv7vkz _19itxtig _2rko1y44 _v5641hdd _bfhk130e _syazu67f _1wybdlk8 _80omtlke _irr3i6ib _4cvxi6ib _nt75130e _49pcnqa1 _1hvwyh40 _1bg4yh40",
 			])}
 		>
 			{children}
