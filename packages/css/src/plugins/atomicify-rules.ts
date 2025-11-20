@@ -11,15 +11,6 @@ interface PluginOpts {
   classHashPrefix?: string;
 }
 
-const isCssTraceEnabled = () => Boolean(process.env.COMPILED_CSS_TRACE);
-
-const traceAtomicify = (label: string, payload: Record<string, unknown>) => {
-  if (isCssTraceEnabled()) {
-    // eslint-disable-next-line no-console
-    console.log(`[css][atomicify] ${label}`, payload);
-  }
-};
-
 /**
  * Returns true if a given string is a valid CSS identifier
  *
@@ -49,17 +40,6 @@ const atomicClassName = (node: Declaration, opts: PluginOpts) => {
   const prefix = opts.classHashPrefix ?? '';
   const group = hash(`${prefix}${opts.atRule}${selectors}${node.prop}`).slice(0, 4);
   const value = node.important ? node.value + node.important : node.value;
-  traceAtomicify('value', {
-    prop: node.prop,
-    value,
-  });
-  traceAtomicify('hash-input', {
-    selectors,
-    prefix,
-    atRule: opts.atRule,
-    prop: node.prop,
-    seed: `${prefix}${opts.atRule}${selectors}${node.prop}`,
-  });
   const valueHash = hash(value).slice(0, 4);
 
   return `_${group}${valueHash}`;
@@ -124,16 +104,6 @@ const buildAtomicSelector = (node: Declaration, opts: PluginOpts) => {
 
     const replacedSelector = replaceNestingSelector(normalizedSelector, appliedClassName);
     selectors.push(replacedSelector);
-
-    traceAtomicify('selector', {
-      prop: node.prop,
-      rawSelector: selector,
-      normalizedSelector,
-      replacedSelector,
-      className: fullClassName,
-      appliedClassName,
-      atRule: opts.atRule,
-    });
 
     if (opts.callback) {
       opts.callback(fullClassName);

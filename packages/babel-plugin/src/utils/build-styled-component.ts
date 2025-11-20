@@ -262,9 +262,6 @@ export const buildStyledComponent = (tag: Tag, cssOutput: CSSOutput, meta: Metad
     ],
     ...conditionalCssOutput.classNames,
   ];
-  console.log('[babel-plugin] jsx classNames:',
-    classNames.map((c) => (c && c.type === 'StringLiteral' ? c.value : '<expr>')));
-
   return styledTemplate(
     {
       classNames,

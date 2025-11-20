@@ -91,40 +91,18 @@ export const sortAtomicStyleSheet = (config: {
         }
       });
 
-      const firstDeclProp = (r: Rule): string =>
-        r.nodes?.find((n): n is any => n.type === 'decl')?.prop ?? '<none>';
-
-      console.log('[css] sort-atomic collected', {
-        catchAll: catchAll.map((n) => n.type),
-        rules: rules.map((r) => firstDeclProp(r)),
-        atRules: atRules.map((a) => ({ name: a.atRuleName, query: a.query })),
-      });
-
       if (sortShorthandEnabled) {
         sortShorthandDeclarations(catchAll);
         sortShorthandDeclarations(rules);
         sortShorthandDeclarations(atRules.map((atRule) => atRule.node));
-        console.log('[css] sort-atomic after shorthand', {
-          catchAll: catchAll.map((n) => n.type),
-          rules: rules.map((r) => firstDeclProp(r)),
-          atRules: atRules.map((a) => ({ name: a.atRuleName, query: a.query })),
-        });
       }
 
       // Pseudo-selector and at-rule sorting takes priority over shorthand
       // property sorting.
       sortPseudoSelectors(rules);
-      console.log('[css] sort-atomic after pseudo', {
-        rules: rules.map((r) => firstDeclProp(r)),
-        atRules: atRules.map((a) => ({ name: a.atRuleName, query: a.query })),
-      });
       if (sortAtRulesEnabled) {
         atRules.sort(sortAtRules);
       }
-      console.log('[css] sort-atomic after atRulesEnabled', {
-        rules: rules.map((r) => firstDeclProp(r)),
-        atRules: atRules.map((a) => ({ name: a.atRuleName, query: a.query })),
-      });
 
       for (const atRule of atRules) {
         const node = atRule.node;
@@ -133,11 +111,6 @@ export const sortAtomicStyleSheet = (config: {
         }
         sortAtRulePseudoSelectors(node);
       }
-      console.log('[css] sort-atomic final', {
-        order: [
-          ...rules.map((r) => `rule(${firstDeclProp(r)}`),
-          ...atRules.map((a) => `@${a.atRuleName} ${a.query}`),
-      ]});
       root.nodes = [...catchAll, ...rules, ...atRules.map((atRule) => atRule.node)];
     },
   };

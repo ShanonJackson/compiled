@@ -64,8 +64,7 @@ export const transformCss = (
       atomicifyRules({
         classNameCompressionMap: opts.classNameCompressionMap,
         callback: (className: string) => {
-          console.log('[css] atomic encounter:', className);
-          classNames.push(className)
+          classNames.push(className);
         },
         classHashPrefix: opts.classHashPrefix,
       }),

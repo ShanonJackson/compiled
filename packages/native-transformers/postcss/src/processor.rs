@@ -12,7 +12,6 @@ use crate::css_syntax_error::CssSyntaxError;
 use crate::parse::{parse_with_options, ParseError, ParseOptions};
 use crate::result::{ProcessorMetadata, Result as PostcssResult, ResultOptions, Warning};
 use crate::source_map::{MapGenerator, MapOptions, MapSetting, PreviousMapError};
-use crate::warn_once::warn_once;
 
 #[derive(Debug)]
 pub enum ProcessorError {
@@ -1944,24 +1943,5 @@ impl Plugin for BuiltPlugin {
 
 pub fn plugin(name: impl Into<String>) -> PluginBuilder {
     let name_string = name.into();
-    if std::env::var("COMPILED_SKIP_POSTCSS_DEPRECATION").is_ok() {
-        return PluginBuilder::new(name_string);
-    }
-    let warning = format!(
-        "{}: postcss.plugin was deprecated. Migration guide:\nhttps://evilmartians.com/chronicles/postcss-8-plugin-migration",
-        name_string
-    );
-    warn_once(&warning);
-
-    if let Ok(lang) = env::var("LANG") {
-        if lang.starts_with("cn") {
-            let chinese_warning = format!(
-                "{}: 里面 postcss.plugin 被弃用. 迁移指南:\nhttps://www.w3ctech.com/topic/2226",
-                name_string
-            );
-            warn_once(&chinese_warning);
-        }
-    }
-
     PluginBuilder::new(name_string)
 }

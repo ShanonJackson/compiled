@@ -142,7 +142,6 @@ async function writeFileIfChanged(filePath, content) {
 async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   const label = path.basename(fixtureDir);
   const t0 = Date.now();
-  console.log(`[fixtures] ${label}: babel`);
   const cfg = await readFixtureConfig(fixtureDir);
   const compiledOptions = {
     cache: false,
@@ -165,9 +164,6 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
       ],
     ],
   });
-  console.log(
-    `[fixtures] ${label}: babel done ${((Date.now() - t0) / 1000).toFixed(1)}s`
-  );
 
   if (!result || typeof result.code !== 'string') {
     throw new Error(`Failed to transform fixture at ${fixtureDir}`);
@@ -182,7 +178,6 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
 
 async function attemptSwcTransform(inputCode, inputPath) {
   const label = path.basename(path.dirname(inputPath));
-  console.log(`[fixtures] ${label}: swc`);
   const { existsSync } = require('fs');
   const { spawnSync } = require('child_process');
   const bin = path.join(
@@ -243,7 +238,6 @@ async function attemptSwcTransform(inputCode, inputPath) {
 
   try {
     const parsed = JSON.parse(run.stdout || '{}');
-    console.log(`[fixtures] ${label}: swc done`);
     return {
       code: parsed.code || inputCode,
       styleRules: Array.isArray(parsed.styleRules) ? parsed.styleRules : [],
@@ -261,7 +255,6 @@ async function processFixture(name) {
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
   const startedAt = Date.now();
-  console.log(`[fixtures] === ${name} ===`);
 
   const babelOutputs = await generateBabelOutputs(
     fixtureDir,
@@ -347,7 +340,6 @@ async function processFixture(name) {
   }
 
   const dur = ((Date.now() - startedAt) / 1000).toFixed(1);
-  console.log(`[fixtures] ${name}: done ${dur}s`);
 
   return { name, codeEqual, rulesEqual, ruleReport };
 }

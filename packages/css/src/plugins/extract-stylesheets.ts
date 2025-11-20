@@ -8,11 +8,6 @@ export const extractStyleSheets = (opts?: { callback: (sheet: string) => void })
     postcssPlugin: 'extract-style-sheets',
     OnceExit(root) {
       root.each((node) => {
-        const sheet = node.toString();
-        if (process.env.COMPILED_CLI_TRACE) {
-          // Log each final sheet in the order they are emitted                                                                                                                                                                             
-          console.log('[css] extract sheet:', sheet);
-        }
         opts?.callback(node.toString());
       });
     },
