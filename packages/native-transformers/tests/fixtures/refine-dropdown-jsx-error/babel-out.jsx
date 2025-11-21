@@ -3,7 +3,6 @@
 import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
 import DropdownMenu, { DropdownItem, DropdownItemGroup } from '@atlaskit/dropdown-menu';
-import { token } from '@atlaskit/tokens';
 function Item({
   item,
   onItemClick,
@@ -19,7 +18,7 @@ function Item({
     return <DropdownMenu placement="right-start" shouldRenderToParent isOpen={currentOpenedSubMenu === item} onOpenChange={handleOpenChange} trigger={({
       triggerRef,
       ...triggerProps
-    }) => <DropdownItem {...triggerProps} ref={triggerRef} elemBefore={item.icon} elemAfter={<span color={token('color.icon.subtle')}>→</span>}>
+    }) => <DropdownItem {...triggerProps} ref={triggerRef} elemBefore={item.icon} elemAfter={<span color={"var(--ds-icon-subtle, #626F86)"}>→</span>}>
 						<span>{item.title}</span>
 					</DropdownItem>}>
 				<DropdownItemGroup>

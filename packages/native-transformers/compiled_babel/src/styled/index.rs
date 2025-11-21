@@ -1,7 +1,7 @@
 use swc_core::common::{Span, DUMMY_SP};
 use swc_core::ecma::ast::{
-    ArrayLit, BlockStmtOrExpr, CallExpr, Callee, Expr, ExprOrSpread, MemberExpr, MemberProp, Stmt,
-    TaggedTpl,
+    ArrayLit, BinaryOp, BlockStmtOrExpr, CallExpr, Callee, Expr, ExprOrSpread, MemberExpr,
+    MemberProp, Stmt, TaggedTpl,
 };
 
 use crate::types::{Metadata, Tag, TagType};
@@ -207,11 +207,11 @@ fn extract_styled_data(node: &Expr, meta: &Metadata) -> Option<StyledData> {
 }
 
 fn has_invalid_expression(node: &TaggedTpl) -> bool {
-    let has_logical = node.tpl.exprs.iter().any(|expr| {
+    let has_and_logical = node.tpl.exprs.iter().any(|expr| {
         if let Expr::Arrow(arrow) = expr.as_ref() {
             if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
                 if let Expr::Bin(bin) = body.as_ref() {
-                    return bin.op.is_logical();
+                    return matches!(bin.op, BinaryOp::LogicalAnd);
                 }
             }
         }
@@ -219,7 +219,7 @@ fn has_invalid_expression(node: &TaggedTpl) -> bool {
         false
     });
 
-    if !has_logical {
+    if !has_and_logical {
         return false;
     }
 
@@ -264,15 +264,15 @@ where
 {
     let mut result = StyledVisitResult::default();
 
+    let Some(styled_data) = extract_styled_data(node, meta) else {
+        return result;
+    };
+
     if let Expr::TaggedTpl(tagged) = node {
         if has_invalid_expression(tagged) {
             panic_invalid_expression(tagged.span, meta);
         }
     }
-
-    let Some(styled_data) = extract_styled_data(node, meta) else {
-        return result;
-    };
 
     let css_output = build_css(styled_data.css_node.clone(), meta);
 

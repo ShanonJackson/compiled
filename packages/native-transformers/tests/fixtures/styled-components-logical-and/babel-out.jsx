@@ -1,0 +1,17 @@
+import React from 'react';
+import styled from 'styled-components';
+// Styled-components usage with logical && interpolations should not panic in the Compiled plugin.
+const DropdownTitle = styled.p<{
+  numItems?: number;
+  enabled?: boolean;
+}>`
+  font: ${"var(--ds-font-body-small, normal 400 11px/16px ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Ubuntu, \"Helvetica Neue\", sans-serif)"};
+  ${({
+  enabled
+}) => !enabled && `font-weight: ${"var(--ds-font-weight-semibold, 600)"};`}
+  ${({
+  numItems,
+  enabled
+}) => !enabled && `color: ${numItems ? "var(--ds-text, #172B4D)" : "var(--ds-text-subtlest, #626F86)"};`}
+`;
+export const Component = () => <DropdownTitle numItems={1} />;
