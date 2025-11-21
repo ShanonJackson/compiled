@@ -208,10 +208,9 @@ pub(crate) fn expression_to_string(expression: &Expr, meta: Metadata) -> String 
         Expr::Ident(_) | Expr::Member(_) => {
             let pair = evaluate_expression(expression, meta.clone());
             if pair.value == *expression {
-                panic!(
-                    "Cannot statically evaluate the value of \"{}\"",
-                    expression_type(expression)
-                );
+                // If we couldn't resolve the identifier/member, leave the key empty to match
+                // Babel's non-panicking behaviour when objectPropertyToString can't evaluate.
+                return String::new();
             }
 
             expression_to_string(&pair.value, pair.meta)
@@ -225,10 +224,12 @@ pub(crate) fn expression_to_string(expression: &Expr, meta: Metadata) -> String 
                 }
             }
 
-            panic!(
-                "Cannot statically evaluate the value of \"{}\"",
-                expression_type(expression)
-            );
+            let kind = expression_type(expression);
+            if matches!(kind, "Identifier" | "MemberExpression") {
+                return String::new();
+            }
+
+            panic!("Cannot statically evaluate the value of \"{}\"", kind);
         }
         Expr::TsConstAssertion(assertion) => {
             expression_to_string(&assertion.expr, meta)
@@ -347,12 +348,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot statically evaluate the value of \"Identifier\"")]
-    fn throws_when_identifier_cannot_be_resolved() {
+    fn empty_when_identifier_cannot_be_resolved() {
         let prop = make_key_value_prop("missing", true);
         let meta = create_metadata();
 
-        object_property_to_string(&prop, meta);
+        assert_eq!(object_property_to_string(&prop, meta), "");
     }
 
     #[test]

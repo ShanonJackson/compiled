@@ -24,8 +24,8 @@ use crate::css_prop::visit_css_prop;
 use crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing;
 use crate::styled::{visit_styled, StyledVisitResult};
 use crate::types::{
-    CleanupAction, CompiledImports, Metadata, PathCleanup, PluginOptions, SharedTransformState,
-    TransformFile, TransformMetadata, TransformState,
+    CleanupAction, CompiledImports, Metadata, PathCleanup, PluginOptions, SharedScope,
+    SharedTransformState, TransformFile, TransformMetadata, TransformState,
 };
 use crate::utils_append_runtime_imports::append_runtime_imports;
 use crate::utils_ast::build_code_frame_error;
@@ -38,6 +38,7 @@ use crate::utils_is_jsx_function::is_transformed_jsx_function;
 use crate::utils_module_scope;
 use crate::utils_normalize_props_usage::normalize_props_usage;
 use crate::utils_preserve_leading_comments::preserve_leading_comments;
+use crate::utils_types::{BindingPath, BindingSource, PartialBindingWithMeta};
 use crate::xcss_prop::{visit_xcss_prop, visit_xcss_prop_on_element};
 
 const PACKAGE_NAME: &str = "@compiled/babel-plugin";
@@ -1986,23 +1987,211 @@ impl CompiledBabelTransform {
 
 struct CssPropVisitor {
     meta: Metadata,
+    scope_stack: Vec<SharedScope>,
 }
 
 impl CssPropVisitor {
     fn new(meta: Metadata) -> Self {
-        Self { meta }
+        let parent_scope = meta.parent_scope();
+        Self {
+            meta,
+            scope_stack: vec![parent_scope],
+        }
+    }
+
+    fn current_scope(&self) -> SharedScope {
+        self.scope_stack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.meta.parent_scope())
+    }
+
+    fn push_scope(&mut self) {
+        let scope = self.meta.allocate_own_scope();
+        self.scope_stack.push(scope);
+    }
+
+    fn pop_scope(&mut self) {
+        self.scope_stack.pop();
+    }
+
+    fn prop_name_to_string(name: &swc_core::ecma::ast::PropName) -> Option<String> {
+        use swc_core::ecma::ast::PropName;
+
+        match name {
+            PropName::Ident(ident) => Some(ident.sym.to_string()),
+            PropName::Str(value) => Some(value.value.to_string()),
+            PropName::Num(value) => Some(value.value.to_string()),
+            PropName::BigInt(value) => Some(value.value.to_string()),
+            PropName::Computed(_) => None,
+        }
+    }
+
+    fn insert_binding(
+        &mut self,
+        name: &str,
+        init: Option<Expr>,
+        path: Option<BindingPath>,
+        constant: bool,
+    ) {
+        let binding_meta = self.meta.with_parent_scope(self.current_scope());
+        let binding = PartialBindingWithMeta::new(
+            init,
+            path,
+            constant,
+            binding_meta,
+            BindingSource::Module,
+        );
+
+        self.current_scope()
+            .borrow_mut()
+            .insert(name.to_string(), binding);
+    }
+
+    fn register_pattern(
+        &mut self,
+        pattern: &Pat,
+        init: Option<&Expr>,
+        constant: bool,
+        path: Vec<String>,
+        default_value: Option<Expr>,
+        span: Option<Span>,
+    ) {
+        match pattern {
+            Pat::Ident(binding) => {
+                let name = binding.id.sym.as_ref();
+                let span = span.unwrap_or(binding.id.span);
+                let binding_path = if !path.is_empty() || default_value.is_some() {
+                    Some(BindingPath::variable(span.into(), path, default_value))
+                } else {
+                    Some(BindingPath::new(span.into()))
+                };
+
+                self.insert_binding(name, init.cloned(), binding_path, constant);
+            }
+            Pat::Assign(assign) => {
+                let assign_default = Some(*assign.right.clone()).or(default_value);
+
+                self.register_pattern(
+                    &assign.left,
+                    init,
+                    constant,
+                    path,
+                    assign_default,
+                    Some(assign.span),
+                );
+            }
+            Pat::Object(object) => {
+                for prop in &object.props {
+                    match prop {
+                        swc_core::ecma::ast::ObjectPatProp::KeyValue(key_value) => {
+                            if let Some(key) = Self::prop_name_to_string(&key_value.key) {
+                                let mut next_path = path.clone();
+                                next_path.push(key);
+
+                                self.register_pattern(
+                                    &key_value.value,
+                                    init,
+                                    constant,
+                                    next_path,
+                                    None,
+                                    Some(key_value.value.span()),
+                                );
+                            }
+                        }
+                        swc_core::ecma::ast::ObjectPatProp::Assign(assign) => {
+                            let mut next_path = path.clone();
+                            next_path.push(assign.key.sym.to_string());
+                            let default_expr =
+                                assign.value.as_ref().map(|expr| expr.as_ref().clone());
+                            let span = Some(assign.key.span);
+                            let binding_path =
+                                BindingPath::variable(span.into(), next_path, default_expr);
+
+                            self.insert_binding(
+                                assign.key.sym.as_ref(),
+                                init.cloned(),
+                                Some(binding_path),
+                                constant,
+                            );
+                        }
+                        swc_core::ecma::ast::ObjectPatProp::Rest(rest) => {
+                            self.register_pattern(
+                                &rest.arg,
+                                init,
+                                constant,
+                                Vec::new(),
+                                None,
+                                Some(rest.span),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn register_var_decl(&mut self, decl: &VarDecl) {
+        let constant = matches!(decl.kind, VarDeclKind::Const);
+
+        for declarator in &decl.decls {
+            let init = declarator.init.as_deref();
+            self.register_pattern(
+                &declarator.name,
+                init,
+                constant,
+                Vec::new(),
+                None,
+                Some(declarator.span),
+            );
+        }
+    }
+
+    fn merged_scope(&self) -> SharedScope {
+        let merged = self.meta.allocate_own_scope();
+        {
+            let mut out = merged.borrow_mut();
+            for scope in &self.scope_stack {
+                for (key, value) in scope.borrow().iter() {
+                    out.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        merged
+    }
+
+    fn scoped_meta(&self) -> Metadata {
+        self.meta.with_parent_scope(self.merged_scope())
     }
 }
 
 impl VisitMut for CssPropVisitor {
     noop_visit_mut_type!();
 
+    fn visit_mut_var_decl(&mut self, decl: &mut VarDecl) {
+        self.register_var_decl(decl);
+        decl.visit_mut_children_with(self);
+    }
+
+    fn visit_mut_function(&mut self, function: &mut swc_core::ecma::ast::Function) {
+        self.push_scope();
+        function.visit_mut_children_with(self);
+        self.pop_scope();
+    }
+
+    fn visit_mut_arrow_expr(&mut self, expr: &mut swc_core::ecma::ast::ArrowExpr) {
+        self.push_scope();
+        expr.visit_mut_children_with(self);
+        self.pop_scope();
+    }
+
     fn visit_mut_expr(&mut self, expr: &mut Expr) {
         expr.visit_mut_children_with(self);
 
         if matches!(expr, Expr::JSXElement(_)) {
             let meta = self
-                .meta
+                .scoped_meta()
                 .with_parent_expr(Some(expr))
                 .with_own_span(Some(expr.span()));
             visit_css_prop(expr, &meta);
@@ -2014,7 +2203,7 @@ impl VisitMut for CssPropVisitor {
         element.visit_mut_children_with(self);
 
         // Then attempt css prop transform on this element directly
-        let meta = self.meta.clone();
+        let meta = self.scoped_meta();
         crate::css_prop::visit_css_prop_on_element(element, &meta);
     }
 }

@@ -1,12 +1,13 @@
 # SWC Fixture Debugging Guide
 
-This is the quickest loop to capture a Jira breakage into a fixture, debug it, and guard it against regressions. The goal: go from “file X fails” → minimal fixture → fix → fixture green.
+This is the quickest loop to capture a Jira breakage into a fixture, debug it, and guard it against regressions. The goal: go from “file X fails” → minimal fixture → fix → fixture green. Correctness is #1; performance is #2—match Babel first, then prefer fixes that keep the hot paths cheap once parity is achieved.
 
 ## 1) Reproduce and isolate
 - Start from the failing Jira file (e.g. `jira/src/packages/navigation-apps/atlassian-navigation/src/ui/notifications/main.tsx`).
 - Rip out a minimal snippet that still fails. Prefer the smallest expression/hook/style that triggers the panic/error.
 - If tokens are involved, keep the tokenized form produced by the Babel pre-pass (you can log it in the Jira collector or run the tokens plugin on the snippet).
 - Decide fixture name: short, descriptive, kebab-case (e.g. `notifications-call-expression`).
+- Remember: Jira sources often use `token('...')`; fixtures run the tokens Babel plugin as a pre-pass (just like the style-rule collectors) before both Babel and SWC transforms. You don’t need to inline tokens manually—use the same `token(...)` calls as Jira and let the pre-pass resolve them.
 
 ## 2) Create the fixture skeleton
 - Under `packages/native-transformers/tests/fixtures/<name>/` add:
@@ -16,13 +17,14 @@ This is the quickest loop to capture a Jira breakage into a fixture, debug it, a
 
 ## 3) Generate baselines
 - From `packages/native-transformers/` run:
-  - `node scripts/update-fixtures.js --only <name>` to produce:
+  - Run scoped first: `node scripts/update-fixtures.js --only <name>` to produce:
     - `babel-out.js`, `babel-style-rules.json`
     - `out.js`, `swc-style-rules.json`
   - If generation fails, capture the error output in a temporary note; often the SWC panic stack points to the code path to investigate.
 
 ## 4) Compare and diagnose
 - Open the four outputs side-by-side; focus on the diff between `babel-style-rules.json` and `swc-style-rules.json`. Ignore style rule ordering differences (we normalize/sort). Codegen differences between `babel-out.js` and `out.js` are less important than style-rule parity—use them only to understand why style rules diverged.
+- Avoid reformatting fixture outputs manually; let the updater write them. Code formatting churn is expected and not gated—style-rule parity is the primary target.
 - Common failure categories:
   - Parser/AST handling (e.g. `TsConstAssertion has no name`).
   - Unsupported expressions in style hashing / keyframes serialization.
@@ -47,6 +49,7 @@ This is the quickest loop to capture a Jira breakage into a fixture, debug it, a
 - If you added logging or temporary debug scaffolding, remove it before finalizing.
 - Summarize the root cause + fix in the PR description so future regressions are easy to triage.
 - Run the full fixture suite before landing to confirm no regressions: `node scripts/update-fixtures.js` (CI will also run it, but catching locally is faster).
+  - Use `--only` during development to avoid churning all outputs, then run the full suite once before landing.
 
 ## Quick commands
 - Update single fixture: `node scripts/update-fixtures.js --only <name>`

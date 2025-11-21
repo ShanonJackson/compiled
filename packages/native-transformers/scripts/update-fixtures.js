@@ -3,8 +3,11 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const os = require('os');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const monorepoRoot = path.resolve(repoRoot, '..', '..', '..');
+const monorepoNodeModules = path.join(monorepoRoot, 'node_modules');
 process.chdir(repoRoot);
 
 const babel = require('@babel/core');
@@ -109,9 +112,7 @@ function formatWithPrettierOrReturn(code, parser = 'babel-ts') {
   if (typeof code !== 'string') {
     return code;
   }
-  // Prettier 3 can return async results or throw on the SWC/Babel outputs we
-  // generate for fixtures. To keep the fixture pipeline stable and fast, skip
-  // formatting and return raw code.
+  // Formatting is intentionally skipped to avoid Prettier parser/plugin crashes on generated code.
   return code;
   try {
     const prettier = require('prettier');
@@ -125,27 +126,91 @@ function formatWithPrettierOrReturn(code, parser = 'babel-ts') {
         printWidth: 100,
       });
 
-    const tryFormat = (parserName) => {
-      const output = format(parserName);
-      // Prettier 3 can return a Promise; bail to raw code if so to keep this sync.
+    try {
+      const output = format(parser);
       if (output && typeof output.then === 'function') {
         return code;
       }
       return output;
-    };
-
-    try {
-      return tryFormat(parser);
     } catch (_primaryErr) {
       // Fallback to plain babel parser if TS/JSX parse fails.
       try {
-        return tryFormat('babel');
+        const fallback = format('babel');
+        if (fallback && typeof fallback.then === 'function') {
+          return code;
+        }
+        return fallback;
       } catch (_secondaryErr) {
         return code;
       }
     }
   } catch (_err) {
     // If prettier itself blows up (e.g. plugin mismatch), return unformatted code.
+    return code;
+  }
+}
+
+function loadTokensPlugin() {
+  const candidates = [
+    () => require(require.resolve('@atlaskit/tokens/babel-plugin', { paths: [monorepoRoot] })),
+    () => require('@atlaskit/tokens/babel-plugin'),
+    () =>
+      require(
+        path.join(
+          monorepoRoot,
+          'platform',
+          'packages',
+          'design-system',
+          'tokens',
+          'prebuilt',
+          'babel-plugin',
+          'plugin.js'
+        )
+      ),
+  ];
+  for (const load of candidates) {
+    try {
+      return load();
+    } catch (_e) {
+      // try next
+    }
+  }
+  return null;
+}
+
+function shouldPrepassTokens(inputCode) {
+  return (
+    inputCode.includes('@atlaskit/tokens') ||
+    /\btoken\(['"]/.test(inputCode) ||
+    /\bdefineToken\(['"]/.test(inputCode)
+  );
+}
+
+function applyTokensPrepass(code, filename) {
+  const tokensPlugin = loadTokensPlugin();
+  if (!shouldPrepassTokens(code)) {
+    return code;
+  }
+  try {
+    if (!tokensPlugin) {
+      throw new Error('no tokens plugin');
+    }
+    const result = babel.transformSync(code, {
+      filename,
+      babelrc: false,
+      configFile: false,
+      ast: false,
+      code: true,
+      parserOpts: {
+        sourceType: 'module',
+        plugins: ['typescript', 'jsx'],
+      },
+      plugins: [[tokensPlugin]],
+      envName: 'test',
+    });
+    return (result && result.code) || code;
+  } catch (_err) {
+    // If tokens prepass fails (e.g., missing token or plugin resolution), fall back to original code.
     return code;
   }
 }
@@ -176,6 +241,8 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   const label = path.basename(fixtureDir);
   const t0 = Date.now();
   const cfg = await readFixtureConfig(fixtureDir);
+  const tokenized = applyTokensPrepass(inputCode, inputPath);
+  const plugins = [];
   const compiledOptions = {
     cache: false,
     optimizeCss: true,
@@ -186,15 +253,13 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
       : {}),
   };
 
-  const result = babel.transformSync(inputCode, {
+  const result = babel.transformSync(tokenized, {
     ...BABEL_OPTIONS,
     filename: inputPath,
     plugins: [
+      ...plugins,
       [require.resolve('@compiled/babel-plugin'), compiledOptions],
-      [
-        require.resolve('@compiled/babel-plugin-strip-runtime'),
-        { compiledRequireExclude: true },
-      ],
+      [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
     ],
   });
 
@@ -209,7 +274,7 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   };
 }
 
-async function attemptSwcTransform(inputCode, inputPath) {
+async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   const label = path.basename(path.dirname(inputPath));
   const { existsSync } = require('fs');
   const { spawnSync } = require('child_process');
@@ -236,6 +301,17 @@ async function attemptSwcTransform(inputCode, inputPath) {
     }
   }
 
+  // Pre-pass with tokens plugin to mirror Jira collector behavior
+  const tokenized = applyTokensPrepass(inputCode, inputPath);
+
+  // Keep the tokenized file alongside the original so relative imports resolve correctly.
+  const tmpFileBase = `.tmp-swc-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tmpFile = path.join(
+    path.dirname(inputPath),
+    `${tmpFileBase}${path.extname(inputPath)}`
+  );
+  await fsp.writeFile(tmpFile, tokenized, 'utf8');
+
   const runEnv = { ...process.env };
   // Ensure native transformer headers report the same version as Babel.
   // The Rust transformers read TEST_PKG_VERSION to embed the plugin version.
@@ -248,12 +324,19 @@ async function attemptSwcTransform(inputCode, inputPath) {
   } catch (_e) {
     // ignore if package cannot be resolved; transformers will fall back
   }
-  const run = spawnSync(bin, [inputPath], {
+  const run = spawnSync(bin, [tmpFile], {
     cwd: path.join(repoRoot, 'packages', 'native-transformers'),
     encoding: 'utf8',
     shell: process.platform === 'win32',
     env: runEnv,
   });
+
+  // Clean up temp file
+  try {
+    await fsp.unlink(tmpFile);
+  } catch (_e) {
+    // ignore
+  }
 
   // Forward stderr so trace logs are visible when COMPILED_CLI_TRACE=1
   if (run && typeof run.stderr === 'string' && run.stderr.length) {
@@ -290,6 +373,8 @@ async function processFixture(name) {
   const inputPath = fs.existsSync(inputPathTsx) ? inputPathTsx : inputPathJsx;
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
+  const cfg = await readFixtureConfig(fixtureDir);
+
   const startedAt = Date.now();
 
   const babelOutputs = await generateBabelOutputs(
@@ -297,21 +382,15 @@ async function processFixture(name) {
     inputCode,
     inputPath
   );
-  await writeFileIfChanged(
-    path.join(fixtureDir, 'babel-out.jsx'),
-    formatWithPrettierOrReturn(babelOutputs.code, 'babel-ts')
-  );
+  await writeFileIfChanged(path.join(fixtureDir, 'babel-out.jsx'), babelOutputs.code);
   await writeFileIfChanged(
     path.join(fixtureDir, 'babel-style-rules.json'),
     JSON.stringify(babelOutputs.styleRules, null, 2)
   );
 
-  const swcOutputs = await attemptSwcTransform(inputCode, inputPath);
+  const swcOutputs = await attemptSwcTransform(inputCode, inputPath, cfg);
   if (swcOutputs.success) {
-    await writeFileIfChanged(
-      path.join(fixtureDir, 'out.jsx'),
-      formatWithPrettierOrReturn(swcOutputs.code, 'babel-ts')
-    );
+    await writeFileIfChanged(path.join(fixtureDir, 'out.jsx'), swcOutputs.code);
     await writeFileIfChanged(
       path.join(fixtureDir, 'swc-style-rules.json'),
       JSON.stringify(
