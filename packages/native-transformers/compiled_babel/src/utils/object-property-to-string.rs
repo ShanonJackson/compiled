@@ -230,6 +230,13 @@ pub(crate) fn expression_to_string(expression: &Expr, meta: Metadata) -> String 
                 expression_type(expression)
             );
         }
+        Expr::TsConstAssertion(assertion) => {
+            expression_to_string(&assertion.expr, meta)
+        }
+        Expr::TsAs(assertion) => expression_to_string(&assertion.expr, meta),
+        Expr::TsTypeAssertion(assertion) => expression_to_string(&assertion.expr, meta),
+        Expr::TsNonNull(assertion) => expression_to_string(&assertion.expr, meta),
+        Expr::Paren(paren) => expression_to_string(&paren.expr, meta),
         _ => panic!("{} has no name.'", expression_type(expression)),
     }
 }

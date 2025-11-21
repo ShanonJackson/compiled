@@ -24,6 +24,15 @@ pub fn evaluate_path(
             path_name,
             evaluate_expression,
         ),
+        Expr::TsConstAssertion(assertion) => {
+            evaluate_path(&assertion.expr, meta, path_name, evaluate_expression)
+        }
+        Expr::TsTypeAssertion(assertion) => {
+            evaluate_path(&assertion.expr, meta, path_name, evaluate_expression)
+        }
+        Expr::TsNonNull(assertion) => {
+            evaluate_path(&assertion.expr, meta, path_name, evaluate_expression)
+        }
         Expr::Paren(paren) => evaluate_path(&paren.expr, meta, path_name, evaluate_expression),
         Expr::Ident(_) => {
             evaluate_namespace_import_path(expression, meta.clone(), path_name, evaluate_expression)
