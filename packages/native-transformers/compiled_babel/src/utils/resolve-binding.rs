@@ -338,7 +338,7 @@ fn parse_program(
 }
 
 pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<CachedModule> {
-    let (module_path, code, options, resolver_clone, cwd, root) = {
+    let (module_path, code, options, resolver_clone, cwd, root, shared_module_cache) = {
         let mut state = meta.state_mut();
         let filename = state.filename.clone()?;
 
@@ -365,7 +365,7 @@ pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<Cach
             state.included_files.push(resolved.clone());
         }
 
-        if let Some(cached) = state.module_cache.get(&resolved) {
+        if let Some(cached) = state.module_cache.borrow().get(&resolved) {
             return Some(cached.clone());
         }
 
@@ -390,7 +390,9 @@ pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<Cach
             .map(|value| value.to_string())
             .unwrap_or_else(|| fs::read_to_string(&resolved).expect("module should read"));
 
-        (resolved, code, options, resolver_clone, cwd, root)
+        let shared_module_cache = state.module_cache.clone();
+
+        (resolved, code, options, resolver_clone, cwd, root, shared_module_cache)
     };
 
     let (program, source_map, comments) = parse_program(&module_path, &code, &options)?;
@@ -406,7 +408,15 @@ pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<Cach
         },
     );
 
-    let shared_state = Rc::new(RefCell::new(TransformState::new(transform_file, options)));
+    let shared_state = Rc::new(RefCell::new(TransformState::new(
+        transform_file,
+        options,
+    )));
+
+    {
+        let mut module_state = shared_state.borrow_mut();
+        module_state.module_cache = shared_module_cache.clone();
+    }
 
     {
         let mut module_state = shared_state.borrow_mut();
@@ -429,7 +439,10 @@ pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<Cach
 
     {
         let mut state = meta.state_mut();
-        state.module_cache.insert(module_path, cached.clone());
+        state
+            .module_cache
+            .borrow_mut()
+            .insert(module_path, cached.clone());
     }
 
     Some(cached)

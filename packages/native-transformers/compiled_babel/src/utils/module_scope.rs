@@ -415,7 +415,6 @@ pub fn populate_module_scope(state: &SharedTransformState, module: &Module) {
     {
         let mut state_mut = state.borrow_mut();
         state_mut.module_scope.borrow_mut().clear();
-        state_mut.module_cache.clear();
     }
 
     let metadata = Metadata::new(state.clone());
