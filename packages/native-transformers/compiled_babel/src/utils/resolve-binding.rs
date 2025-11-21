@@ -583,6 +583,18 @@ fn resolve_import_binding(
     kind: &ImportBindingKind,
     meta: Metadata,
 ) -> Option<PartialBindingWithMeta> {
+    // COMPAT: Babel does not eagerly resolve Compiled entrypoints (including the Atlaskit
+    // wrapper) when tracking bindings. Attempting to parse these modules can pull in large
+    // dependency graphs and surface parsing errors for types-only exports that the runtime
+    // transform never evaluates. If the import source is already recognised as a Compiled
+    // entrypoint, short-circuit to the placeholder binding.
+    {
+        let state = meta.state();
+        if state.import_sources.iter().any(|origin| origin == source) {
+            return Some(binding);
+        }
+    }
+
     if source.starts_with("@compiled/") {
         return None;
     }

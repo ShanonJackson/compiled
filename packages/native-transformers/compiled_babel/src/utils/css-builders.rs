@@ -179,6 +179,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
             }
             Expr::Lit(Lit::Null(_)) => "null".to_string(),
             Expr::Lit(Lit::BigInt(bi)) => format!("{}n", bi.value),
+            Expr::Lit(Lit::Regex(regex)) => format!("/{}/{}", regex.exp, regex.flags),
             Expr::Object(obj) => format!("{{\n{}\n}}", print_object_pretty(obj, 0)),
             Expr::Array(arr) => {
                 let mut items: Vec<String> = Vec::new();
