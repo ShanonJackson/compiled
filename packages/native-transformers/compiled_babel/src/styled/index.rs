@@ -276,6 +276,14 @@ where
 
     let css_output = build_css(styled_data.css_node.clone(), meta);
 
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!(
+            "[styled] css_output sizes css={} vars={}",
+            css_output.css.len(),
+            css_output.variables.len()
+        );
+    }
+
     *node = build_styled_component(styled_data.tag, css_output, meta);
 
     if let Some(name) = variable_name {

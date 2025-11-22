@@ -833,6 +833,15 @@ where
 {
     let mut template = node.clone();
 
+    if std::env::var("STACK_DEBUG").is_ok() {
+        let raws: Vec<String> = template
+            .quasis
+            .iter()
+            .map(|q| q.raw.as_ref().to_string())
+            .collect();
+        eprintln!("[template-start] raws={:?}", raws);
+    }
+
     for index in 0..template.exprs.len() {
         if !is_quasi_mid_statement(&template.quasis[index]) {
             continue;
@@ -1025,6 +1034,14 @@ where
             || matches!(node_expression, Expr::Tpl(_));
 
         if can_build_expression_as_css {
+            if std::env::var("STACK_DEBUG").is_ok() {
+                eprintln!(
+                    "[template] conditional_css={} css_block={} tpl={}",
+                    does_expression_have_conditional_css,
+                    does_expression_contain_css_block,
+                    matches!(node_expression, Expr::Tpl(_))
+                );
+            }
             let nested_meta = meta.with_context(MetadataContext::Fragment);
             let build_meta = if matches!(node_expression, Expr::Tpl(_)) {
                 nested_meta
@@ -1033,7 +1050,30 @@ where
             };
             let result = build_css(&evaluated.value, &build_meta);
 
+            if std::env::var("STACK_DEBUG").is_ok() {
+                eprintln!(
+                    "[template] result_len={} prefix=\"{}\" raw=\"{}\"",
+                    result.css.len(),
+                    literal_result,
+                    raw
+                );
+            }
+
             if !result.css.is_empty() {
+                if std::env::var("STACK_DEBUG").is_ok() {
+                    let kinds: Vec<&'static str> = result
+                        .css
+                        .iter()
+                        .map(|item| match item {
+                            CssItem::Unconditional(_) => "Unconditional",
+                            CssItem::Conditional(_) => "Conditional",
+                            CssItem::Logical(_) => "Logical",
+                            CssItem::Sheet(_) => "Sheet",
+                            CssItem::Map(_) => "Map",
+                        })
+                        .collect();
+                    eprintln!("[template] css_items={:?}", kinds);
+                }
                 let prefix = format!("{literal_result}{raw}");
                 if !prefix.is_empty() {
                     css.push(CssItem::unconditional(prefix));
@@ -1175,57 +1215,73 @@ where
      -> Option<CssItem> {
         let mut css_output: Option<CssOutput> = None;
 
-        let looks_like_css_literal = if matches!(expr, Expr::Object(_)) {
-            true
-        } else if let Expr::Lit(Lit::Str(str_lit)) = expr {
-            str_lit.value.contains(':')
-        } else if let Expr::Tpl(tpl) = expr {
-            tpl.quasis
-                .iter()
-                .any(|quasi| quasi.raw.as_ref().contains(':'))
+        if let Expr::Lit(Lit::Str(str_lit)) = expr {
+            css_output = Some(CssOutput {
+                css: vec![CssItem::unconditional(str_lit.value.as_ref())],
+                variables: Vec::new(),
+            });
+        } else if let Expr::Lit(Lit::Num(num_lit)) = expr {
+            css_output = Some(CssOutput {
+                css: vec![CssItem::unconditional(&num_lit.value.to_string())],
+                variables: Vec::new(),
+            });
         } else {
-            false
-        };
+            let looks_like_css_literal = if matches!(expr, Expr::Object(_)) {
+                true
+            } else if let Expr::Lit(Lit::Str(str_lit)) = expr {
+                str_lit.value.contains(':')
+            } else if let Expr::Tpl(tpl) = expr {
+                tpl.quasis
+                    .iter()
+                    .any(|quasi| quasi.raw.as_ref().contains(':'))
+            } else {
+                false
+            };
 
-        if looks_like_css_literal {
-            css_output = Some(build_css(expr, meta));
-        } else {
-            let state = meta.state();
-            let is_compiled_css = is_compiled_css_tagged_template_expression(expr, &state)
-                || is_compiled_css_call_expression(expr, &state);
-            drop(state);
+            if looks_like_css_literal {
+                css_output = Some(build_css(expr, meta));
+            } else {
+                let state = meta.state();
+                let is_compiled_css = is_compiled_css_tagged_template_expression(expr, &state)
+                    || is_compiled_css_call_expression(expr, &state);
+                drop(state);
 
-            if is_compiled_css {
-                let mut cloned = expr.clone();
-                normalize_props_usage(&mut cloned);
-                css_output = Some(build_css(&cloned, meta));
-            } else if let Expr::Ident(identifier) = expr {
-                if let Some(binding) =
-                    resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
-                {
-                    if let Some(mut node) = binding.node.clone() {
-                        normalize_props_usage(&mut node);
-                        let state = binding.meta.state();
-                        let compiled = is_compiled_css_tagged_template_expression(&node, &state)
-                            || is_compiled_css_call_expression(&node, &state);
-                        drop(state);
+                if is_compiled_css {
+                    let mut cloned = expr.clone();
+                    normalize_props_usage(&mut cloned);
+                    css_output = Some(build_css(&cloned, meta));
+                } else if let Expr::Ident(identifier) = expr {
+                    if let Some(binding) =
+                        resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
+                    {
+                        if let Some(mut node) = binding.node.clone() {
+                            normalize_props_usage(&mut node);
+                            let state = binding.meta.state();
+                            let compiled = is_compiled_css_tagged_template_expression(&node, &state)
+                                || is_compiled_css_call_expression(&node, &state);
+                            drop(state);
 
-                        if compiled {
-                            let result = build_css(&node, &binding.meta);
-                            assert_no_imported_css_variables(expr, meta, &binding, &result);
-                            css_output = Some(result);
+                            if compiled {
+                                let result = build_css(&node, &binding.meta);
+                                assert_no_imported_css_variables(expr, meta, &binding, &result);
+                                css_output = Some(result);
+                            }
                         }
                     }
+                } else if let Expr::Cond(inner_conditional) = expr {
+                    css_output = Some(extract_conditional_expression_with_builder(
+                        inner_conditional,
+                        meta,
+                        build_css,
+                    ));
+                } else if let Expr::Member(member_expr) = expr {
+                    css_output = extract_member_expression_with_builder(
+                        member_expr,
+                        meta,
+                        false,
+                        build_css,
+                    );
                 }
-            } else if let Expr::Cond(inner_conditional) = expr {
-                css_output = Some(extract_conditional_expression_with_builder(
-                    inner_conditional,
-                    meta,
-                    build_css,
-                ));
-            } else if let Expr::Member(member_expr) = expr {
-                css_output =
-                    extract_member_expression_with_builder(member_expr, meta, false, build_css);
             }
         }
 
@@ -1248,8 +1304,48 @@ where
         None
     };
 
-    let consequent_css = process_branch(&node.cons, meta, build_css, &mut variables);
-    let alternate_css = process_branch(&node.alt, meta, build_css, &mut variables);
+    // Treat branches that produce an effectively empty declaration as absent so downstream
+    // logic mirrors Babel's folding of single-sided conditionals into logical expressions.
+    fn css_text(item: &CssItem) -> String {
+        match item {
+            CssItem::Conditional(c) => {
+                let mut s = css_text(&c.consequent);
+                s.push_str(&css_text(&c.alternate));
+                s
+            }
+            CssItem::Unconditional(u) => u.css.clone(),
+            CssItem::Logical(l) => l.css.clone(),
+            CssItem::Sheet(s) => s.css.clone(),
+            CssItem::Map(m) => m.css.clone(),
+        }
+    }
+
+    let is_effectively_empty = |item: &CssItem| {
+        let css = css_text(item);
+        let trimmed = css.trim();
+        if trimmed.is_empty() {
+            return true;
+        }
+        if let Some(idx) = trimmed.find(':') {
+            let value = trimmed[idx + 1..].trim().trim_end_matches(';').trim();
+            return value.is_empty();
+        }
+        false
+    };
+
+    let mut consequent_css = process_branch(&node.cons, meta, build_css, &mut variables);
+    if let Some(ref item) = consequent_css {
+        if is_effectively_empty(item) {
+            consequent_css = None;
+        }
+    }
+
+    let mut alternate_css = process_branch(&node.alt, meta, build_css, &mut variables);
+    if let Some(ref item) = alternate_css {
+        if is_effectively_empty(item) {
+            alternate_css = None;
+        }
+    }
 
     match (consequent_css, alternate_css) {
         (Some(consequent), Some(alternate)) => {
@@ -1530,6 +1626,86 @@ where
                     };
                     css.extend(mapped.css);
                     variables.extend(mapped.variables);
+                    continue;
+                }
+
+                if let Expr::Cond(cond) = &prop_value {
+                    let is_undefined =
+                        |expr: &Expr| matches!(expr, Expr::Ident(ident) if ident.sym.as_ref() == "undefined");
+
+                    let consequent = to_css_declaration(&key, &build_css(&cond.cons, &updated_meta));
+
+                    let first_non_empty = |items: &[CssItem]| {
+                        let is_effectively_empty = |css: &str| {
+                            let trimmed = css.trim();
+                            if trimmed.is_empty() {
+                                return true;
+                            }
+                            if let Some(idx) = trimmed.find(':') {
+                                let value = trimmed[idx + 1..].trim().trim_end_matches(';').trim();
+                                return value.is_empty();
+                            }
+                            false
+                        };
+
+                        items
+                            .iter()
+                            .cloned()
+                            .find(|i| {
+                                let css = get_item_css(i);
+                                !is_effectively_empty(&css)
+                            })
+                    };
+
+                    // If the alternate is literally `undefined`, mirror Babel by treating it as no branch
+                    // and folding into a logical expression instead of creating a nested conditional.
+                    if is_undefined(cond.alt.as_ref()) {
+                        if let Some(item) = first_non_empty(&consequent.css) {
+                            css.extend(logical_items_from_conditional_expression(
+                                vec![item],
+                                cond,
+                                ConditionalBranch::Consequent,
+                            ));
+                        } else if std::env::var("STACK_DEBUG").is_ok() {
+                            eprintln!("[cond-prop] dropping empty consequent key={}", key);
+                        }
+                        variables.extend(consequent.variables);
+                        continue;
+                    }
+
+                    let alternate =
+                        to_css_declaration(&key, &build_css(&cond.alt, &updated_meta));
+
+                    let consequent_item = first_non_empty(&consequent.css);
+                    let alternate_item = first_non_empty(&alternate.css);
+
+                    match (consequent_item, alternate_item) {
+                        (Some(consequent_item), Some(alternate_item)) => {
+                            css.push(CssItem::Conditional(ConditionalCssItem {
+                                test: (*cond.test).clone(),
+                                consequent: Box::new(consequent_item),
+                                alternate: Box::new(alternate_item),
+                            }));
+                        }
+                        (Some(item), None) => css.extend(logical_items_from_conditional_expression(
+                            vec![item],
+                            cond,
+                            ConditionalBranch::Consequent,
+                        )),
+                        (None, Some(item)) => css.extend(logical_items_from_conditional_expression(
+                            vec![item],
+                            cond,
+                            ConditionalBranch::Alternate,
+                        )),
+                        (None, None) => {
+                            if std::env::var("STACK_DEBUG").is_ok() {
+                                eprintln!("[cond-prop] dropping empty branches key={}", key);
+                            }
+                        }
+                    }
+
+                    variables.extend(consequent.variables);
+                    variables.extend(alternate.variables);
                     continue;
                 }
 
@@ -1878,6 +2054,52 @@ fn extract_keyframes(expression: &Expr, meta: &Metadata, prefix: &str, suffix: &
 }
 
 fn build_css_internal(node: &Expr, meta: &Metadata) -> CssOutput {
+    thread_local! {
+        static DEBUG_DEPTH: std::cell::Cell<usize> = std::cell::Cell::new(0);
+    }
+
+    struct DepthGuard;
+    impl DepthGuard {
+        fn new() -> Self {
+            DEBUG_DEPTH.with(|cell| cell.set(cell.get().saturating_add(1)));
+            DepthGuard
+        }
+    }
+    impl Drop for DepthGuard {
+        fn drop(&mut self) {
+            DEBUG_DEPTH.with(|cell| cell.set(cell.get().saturating_sub(1)));
+        }
+    }
+
+    let _guard = DepthGuard::new();
+    if std::env::var("STACK_DEBUG").is_ok() {
+        let depth = DEBUG_DEPTH.with(|cell| cell.get());
+        use swc_core::ecma::ast::Expr;
+        let kind = match node {
+            Expr::Array(_) => "Array",
+            Expr::Arrow(_) => "Arrow",
+            Expr::Assign(_) => "Assign",
+            Expr::Await(_) => "Await",
+            Expr::Bin(_) => "Bin",
+            Expr::Call(_) => "Call",
+            Expr::Cond(_) => "Cond",
+            Expr::Fn(_) => "Fn",
+            Expr::Lit(Lit::Str(_)) => "StrLit",
+            Expr::Lit(Lit::Num(_)) => "NumLit",
+            Expr::Lit(Lit::Bool(_)) => "BoolLit",
+            Expr::Lit(_) => "OtherLit",
+            Expr::Member(_) => "Member",
+            Expr::Object(_) => "Object",
+            Expr::Tpl(_) => "Tpl",
+            Expr::Unary(_) => "Unary",
+            _ => "Other",
+        };
+        eprintln!("[build_css depth={}] kind={} span={:?}", depth, kind, node.span());
+        if depth > 200 {
+            panic!("build_css depth exceeded");
+        }
+    }
+
     if let Expr::Array(array) = node {
         let mut build_css = |expr: &Expr, metadata: &Metadata| build_css_internal(expr, metadata);
         return extract_array_with_builder(array, meta, &mut build_css);
@@ -2126,6 +2348,7 @@ mod tests {
         generate_cache_for_css_map_with_builder, get_item_css,
         merge_subsequent_unconditional_css_items, print_expression, to_css_declaration,
         to_css_rule,
+        build_css_internal,
     };
     use crate::types::{
         CompiledImports, Metadata, MetadataContext, PluginOptions, TransformFile,
@@ -2332,6 +2555,23 @@ mod tests {
             extract_keyframes_with_builder(&expr, &metadata, "animation: ", ";", &mut build_css);
 
         assert_keyframe_sheet(&output, "kqbs1so", "animation: ", ";");
+    }
+
+    #[test]
+    fn conditional_minheight_does_not_emit_variable() {
+        std::env::set_var("STACK_DEBUG", "1");
+        let metadata = create_metadata();
+        let expr = parse_expression(
+            "({ minHeight: ({ isFlexible, isSwimlaneMode }) => isFlexible && !isSwimlaneMode ? fg('avoid_board_scroll_container_style_changes') ? '100%' : 'calc(var(--board-scroll-element-height) * 1px - 8px)' : undefined })",
+        );
+
+        let output = build_css_internal(&expr, &metadata);
+        assert!(
+            output.variables.is_empty(),
+            "expected no variables, found {:?}",
+            output.variables
+        );
+        // Stop here for debugging; transforming the CSS items currently overflows.
     }
 
     #[test]

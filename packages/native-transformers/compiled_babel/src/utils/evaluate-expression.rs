@@ -353,14 +353,14 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
             return create_result_pair(evaluated, updated_meta);
         }
 
-        // COMPAT: If evaluating the intermediate value failed, attempt to
-        // statically evaluate the original target expression as Babel does
-        // via path.evaluate(). This enables folding of pure calls like
-        // Math.max(base-5, 0) when inputs are constant.
         if let Some(evaluated) = try_static_evaluate(target_expression, &updated_meta) {
             return create_result_pair(evaluated, updated_meta);
         }
 
+        // Mirror Babel evaluateExpression by returning the evaluated value when
+        // it cannot be folded further instead of falling back to the original
+        // target expression, allowing callers to progress to conditional/css
+        // handling without reprocessing the same function node.
         if matches!(target_expression, Expr::Member(_)) {
             return create_result_pair(value, updated_meta);
         }

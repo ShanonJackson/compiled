@@ -243,6 +243,11 @@ fn atomic_class_name(
     let group = group_hash.chars().take(4).collect::<String>();
 
     let mut value_seed = serialize_component_values(&declaration.value).unwrap_or_default();
+    // COMPAT: Babel trims whitespace around multiplication inside calc() before hashing.
+    value_seed = value_seed.replace(" *", "*");
+    value_seed = value_seed.replace("* ", "*");
+    value_seed = value_seed.replace("*-", "* -");
+    value_seed = value_seed.replace("*+", "* +");
     if declaration.important.is_some() {
         value_seed.push_str("true");
     }

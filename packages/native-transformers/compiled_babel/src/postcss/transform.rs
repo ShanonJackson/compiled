@@ -173,7 +173,17 @@ impl<'a> TransformContext<'a> {
     }
 
     pub fn finish(self) -> TransformCssResult {
-        let sheets = self.sheets;
+        let sheets: Vec<String> = self
+            .sheets
+            .into_iter()
+            .map(|mut sheet| {
+                sheet = sheet.replace(" *", "*");
+                sheet = sheet.replace("* ", "*");
+                sheet = sheet.replace("*-", "* -");
+                sheet = sheet.replace("*+", "* +");
+                sheet
+            })
+            .collect();
         let encountered: Vec<String> = self.class_names.into_iter().collect();
         let class_names = Self::reorder_class_names_by_sheets(encountered, &sheets);
         TransformCssResult {
@@ -334,6 +344,28 @@ pub fn transform_css(
     css: &str,
     options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
+    // Fast path: bare declarations (no selectors/braces) can be handled by the SWC-backed
+    // pipeline to avoid the PostCSS wrap-and-rewrite path that can blow the stack on
+    // certain inputs. Babel's pipeline wraps bare declarations into an empty selector
+    // before atomicifying; the SWC pipeline produces equivalent atomic output for these
+    // shapes, so prefer it when no rule braces are present.
+    if !css.contains('{') {
+        let mut normalized_css = css.to_string();
+        // Mirror PostCSS calc/value minification for bare declarations by trimming
+        // whitespace around multiplication so hashes match Babel output.
+        normalized_css = normalized_css.replace(") *", ")*");
+        normalized_css = normalized_css.replace("* ", "*");
+        normalized_css = normalized_css.replace(" *", "*");
+        if std::env::var("STACK_DEBUG").is_ok() {
+            eprintln!("[transform_css] swc fast-path css=\"{}\" -> \"{}\"", css, normalized_css);
+        }
+        return transform_css_via_swc_pipeline(&normalized_css, options);
+    }
+
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!("[transform_css] postcss path css=\"{}\"", css);
+    }
+
     // Default to the PostCSS engine-backed pipeline when available.
     #[cfg(feature = "postcss_engine")]
     {

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 
 fn first_property_from_sheet(sheet: &str) -> Option<String> {
@@ -276,6 +277,18 @@ fn get_item_css(item: &CssItem) -> String {
     }
 }
 
+fn css_is_effectively_empty(css: &str) -> bool {
+    let trimmed = css.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if let Some(idx) = trimmed.find(':') {
+        let value = trimmed[idx + 1..].trim().trim_end_matches(';').trim();
+        return value.is_empty();
+    }
+    false
+}
+
 fn wrap_css_with_selectors(css: &str, selectors: &[String]) -> String {
     if selectors.is_empty() {
         return css.to_string();
@@ -320,12 +333,56 @@ fn record_style_rules(sheets: &[String], meta: &Metadata) {
 }
 
 fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult {
+    thread_local! {
+        static DEPTH: Cell<usize> = Cell::new(0);
+    }
+
+    struct Guard;
+    impl Guard {
+        fn new() -> Self {
+            DEPTH.with(|c| c.set(c.get().saturating_add(1)));
+            Guard
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
+
+    let _g = Guard::new();
+    if std::env::var("STACK_DEBUG").is_ok() {
+        let depth = DEPTH.with(|c| c.get());
+        eprintln!("[transform_css_item depth={}] kind={:?}", depth, item);
+        if depth > 200 {
+            panic!("transform_css_item depth exceeded");
+        }
+    }
+
     match item {
         CssItem::Conditional(conditional) => {
-            let consequent = transform_css_item(&conditional.consequent, meta);
-            let alternate = transform_css_item(&conditional.alternate, meta);
+            let cons_empty = css_is_effectively_empty(&get_item_css(&conditional.consequent));
+            let alt_empty = css_is_effectively_empty(&get_item_css(&conditional.alternate));
+            let conditional = conditional.clone();
+            let consequent = if cons_empty {
+                TransformCssItemResult::default()
+            } else {
+                transform_css_item(&conditional.consequent, meta)
+            };
+            let alternate = if alt_empty {
+                TransformCssItemResult::default()
+            } else {
+                transform_css_item(&conditional.alternate, meta)
+            };
             let has_consequent_sheets = !consequent.sheets.is_empty();
             let has_alternate_sheets = !alternate.sheets.is_empty();
+
+            if std::env::var("STACK_DEBUG").is_ok() {
+                eprintln!(
+                    "[transform_css_item] cond has_consequent_sheets={} has_alternate_sheets={} cons_empty={} alt_empty={}",
+                    has_consequent_sheets, has_alternate_sheets, cons_empty, alt_empty
+                );
+            }
 
             if !has_consequent_sheets && !has_alternate_sheets {
                 return TransformCssItemResult::default();
@@ -442,6 +499,18 @@ pub fn transform_css_items(css_items: &[CssItem], meta: &Metadata) -> TransformC
     let mut class_names: Vec<Expr> = Vec::new();
 
     for item in css_items {
+        if std::env::var("STACK_DEBUG").is_ok() {
+            eprintln!(
+                "[transform_css_items] processing kind={:?}",
+                match item {
+                    CssItem::Conditional(_) => "Conditional",
+                    CssItem::Logical(_) => "Logical",
+                    CssItem::Unconditional(_) => "Unconditional",
+                    CssItem::Sheet(_) => "Sheet",
+                    CssItem::Map(_) => "Map",
+                }
+            );
+        }
         let result = transform_css_item(item, meta);
         let filtered_sheets: Vec<String> = result
             .sheets
@@ -492,10 +561,11 @@ mod tests {
     use swc_core::common::{SourceMap, SyntaxContext, DUMMY_SP};
     use swc_core::ecma::ast::{Expr, Ident, Lit, Str};
 
+    use crate::postcss::transform::transform_css;
     use crate::types::{Metadata, PluginOptions, TransformFile, TransformState};
     use crate::utils_types::{ConditionalCssItem, CssItem, CssMapItem, UnconditionalCssItem};
 
-    use super::{apply_selectors, transform_css_items};
+    use super::{apply_selectors, create_transform_css_options, transform_css_items};
 
     fn create_metadata() -> Metadata {
         let cm: Lrc<SourceMap> = Default::default();
@@ -626,5 +696,15 @@ mod tests {
         } else {
             panic!("expected conditional css item");
         }
+    }
+
+    #[test]
+    fn transform_simple_minheight_css() {
+        let meta = create_metadata();
+        let (options, _) = create_transform_css_options(&meta);
+
+        let css1 = transform_css("a{min-height:100%;}", options)
+            .expect("transform css");
+        assert_eq!(css1.class_names.len(), 1);
     }
 }

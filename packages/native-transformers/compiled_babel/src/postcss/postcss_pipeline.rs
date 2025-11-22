@@ -2064,6 +2064,9 @@ pub fn transform_css_via_postcss(
     css: &str,
     mut options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!("[postcss] transform start");
+    }
     if std::env::var("COMPILED_DEBUG_COLORMIN").is_ok() {
         eprintln!("[postcss-pipeline] input css: {}", css.replace('\n', "\\n"));
     }
@@ -2106,18 +2109,31 @@ pub fn transform_css_via_postcss(
             }
         }
     };
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!("[postcss] processed");
+    }
     // Force evaluation so plugin visitors run (PostCSS is lazy),
     // but avoid full stringification for performance.
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
         eprintln!("[postcss] ensure visitors run");
     }
     let _ = result.result();
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!("[postcss] result forced");
+    }
 
     // Collect atomic outputs from the plugin.
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
         eprintln!("[postcss] take collector");
     }
     let (mut sheets, mut class_names) = collector.take();
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!(
+            "[postcss] collector len sheets={} classes={}",
+            sheets.len(),
+            class_names.len()
+        );
+    }
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
         for sheet in &sheets {
             eprintln!("[postcss] sheet {}", sheet);
@@ -2405,6 +2421,13 @@ pub fn transform_css_via_postcss(
 
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
         eprintln!("[postcss] via-postcss end");
+    }
+    if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!(
+            "[postcss] end sheets={} classes={}",
+            sheets.len(),
+            class_names.len()
+        );
     }
     Ok(TransformCssResult {
         sheets,
