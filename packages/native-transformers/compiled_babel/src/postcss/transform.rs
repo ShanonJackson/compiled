@@ -359,7 +359,15 @@ pub fn transform_css(
         if std::env::var("STACK_DEBUG").is_ok() {
             eprintln!("[transform_css] swc fast-path css=\"{}\" -> \"{}\"", css, normalized_css);
         }
-        return transform_css_via_swc_pipeline(&normalized_css, options);
+        match transform_css_via_swc_pipeline(&normalized_css, options.clone()) {
+            Ok(res) => return Ok(res),
+            Err(err) => {
+                if std::env::var("STACK_DEBUG").is_ok() {
+                    eprintln!("[transform_css] swc fast-path failed, falling back to postcss: {err}");
+                }
+                // Fall through to postcss below using the original options.
+            }
+        }
     }
 
     if std::env::var("STACK_DEBUG").is_ok() {
