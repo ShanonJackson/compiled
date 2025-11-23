@@ -2085,7 +2085,13 @@ pub fn transform_css_via_postcss(
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
         eprintln!("[postcss] process initial");
     }
-    let mut result = match processor.process(&input_css) {
+    use postcss::processor::ProcessOptions;
+    let process_opts = ProcessOptions {
+        ignore_errors: true,
+        ..ProcessOptions::default()
+    };
+
+    let mut result = match processor.process_with_options(&input_css, process_opts.clone()) {
         Ok(res) => res,
         Err(err) => {
             // Mirror Babel/JS fallback: wrap declarations in a placeholder rule and retry.
@@ -2099,7 +2105,7 @@ pub fn transform_css_via_postcss(
             if std::env::var("COMPILED_CLI_TRACE").is_ok() {
                 eprintln!("[postcss] process wrapped");
             }
-            match processor.process(&wrapped) {
+            match processor.process_with_options(&wrapped, process_opts.clone()) {
                 Ok(res) => res,
                 Err(_) => {
                     return Err(CssTransformError::from_message(format!(
@@ -2141,36 +2147,14 @@ pub fn transform_css_via_postcss(
     }
     // eprintln!("[postcss-pipeline] after first pass, sheets={}", sheets.len());
     // If PostCSS parsed the input as declarations (no rules) successfully,
-    // the pipeline will emit no sheets. To mirror Babel, retry by wrapping
-    // the declarations in a placeholder rule and reprocessing.
+    // the pipeline will emit no sheets. Instead of wrapping in a placeholder
+    // rule, fall back to the SWC pipeline to mirror Babel output without
+    // introducing placeholder selectors.
     if sheets.is_empty() && options.declaration_placeholder.is_none() {
-        const PLACEHOLDER: &str = "__compiled_declaration_wrapper__";
-        let wrapped = format!(".{PLACEHOLDER} {{{}}}", css);
-        options.declaration_placeholder = Some(format!(".{PLACEHOLDER}"));
-        let collector2 = AtomicCollector::default();
-        let processor2 = build_processor(&options, &collector2);
         if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-            eprintln!("[postcss] process wrapped 2");
+            eprintln!("[postcss] empty sheets; falling back to swc pipeline");
         }
-        match processor2.process(&wrapped) {
-            Ok(mut res2) => {
-                // Force evaluation without stringifying output
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                    eprintln!("[postcss] ensure visitors run 2");
-                }
-                let _ = res2.result();
-                if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-                    eprintln!("[postcss] take collector 2");
-                }
-                let (s2, mut c2) = collector2.take();
-                if !s2.is_empty() {
-                    sheets = s2;
-                    // Prefer classes from the second pass when present.
-                    class_names.append(&mut c2);
-                }
-            }
-            Err(_) => {}
-        }
+        return transform_css_via_swc_pipeline(css, options);
     }
     // Reorder sheets to match Babel's sort-atomic-style-sheet order
     fn first_selector_text(sheet: &str) -> String {

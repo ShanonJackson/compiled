@@ -508,6 +508,14 @@ fn clone_decl_with_prop(decl: &Declaration, prop: String) -> Declaration {
 
 fn apply_decl_prefixing(rule: &mut QualifiedRule, config: &AutoprefixerData) {
     let mut new_block: Vec<ComponentValue> = Vec::new();
+    let mut push_decl = |vec: &mut Vec<ComponentValue>, decl: Declaration| {
+        vec.push(ComponentValue::Declaration(Box::new(decl)));
+        // Mirror PostCSS codegen: declarations inside a rule are separated by a semicolon delimiter.
+        vec.push(ComponentValue::Delimiter(Box::new(swc_core::css::ast::Delimiter {
+            span: Default::default(),
+            value: swc_core::css::ast::DelimiterValue::Semicolon,
+        })));
+    };
     for node in std::mem::take(&mut rule.block.value) {
         if let ComponentValue::Declaration(decl_box) = &node {
             let decl = &**decl_box;
@@ -520,10 +528,10 @@ fn apply_decl_prefixing(rule: &mut QualifiedRule, config: &AutoprefixerData) {
                     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
                         eprintln!("[autoprefixer] add-prop {}", prefixed_prop);
                     }
-                    new_block.push(ComponentValue::Declaration(Box::new(clone_decl_with_prop(
-                        decl,
-                        prefixed_prop,
-                    ))));
+                    push_decl(
+                        &mut new_block,
+                        clone_decl_with_prop(decl, prefixed_prop),
+                    );
                 }
             }
 
@@ -555,7 +563,7 @@ fn apply_decl_prefixing(rule: &mut QualifiedRule, config: &AutoprefixerData) {
                         continue 'inject;
                     }
                 }
-                new_block.push(ComponentValue::Declaration(Box::new(v)));
+                push_decl(&mut new_block, v);
             }
 
             // Removal of old props (basic): skip emitting outdated prefixed properties
@@ -631,56 +639,63 @@ fn maybe_prefix_value(
         }
     }
 
-    // display:flex and inline-flex basic prefixes
+    // display:flex and inline-flex basic prefixes. Mirror Babel/PostCSS autoprefixer:
+    // it emits two additional declarations before the unprefixed one.
     if prop == "display" && !value.is_empty() {
         if let ComponentValue::Ident(i) = &value[0] {
             let v = i.value.to_ascii_lowercase();
-            if v == "flex" {
-                let d = Declaration {
-                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
-                        value: prop.into(),
-                        raw: None,
-                        span: Default::default(),
-                    }),
-                    value: vec![make_ident("-webkit-flex")],
-                    important: None,
-                    span: Default::default(),
-                };
-                out.push(d);
-                let d2 = Declaration {
-                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
-                        value: prop.into(),
-                        raw: None,
-                        span: Default::default(),
-                    }),
-                    value: vec![make_ident("-ms-flexbox")],
-                    important: None,
-                    span: Default::default(),
-                };
-                out.push(d2);
-            } else if v == "inline-flex" {
-                let d = Declaration {
-                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
-                        value: prop.into(),
-                        raw: None,
-                        span: Default::default(),
-                    }),
-                    value: vec![make_ident("-webkit-inline-flex")],
-                    important: None,
-                    span: Default::default(),
-                };
-                out.push(d);
-                let d2 = Declaration {
-                    name: DeclarationName::Ident(swc_core::css::ast::Ident {
-                        value: prop.into(),
-                        raw: None,
-                        span: Default::default(),
-                    }),
-                    value: vec![make_ident("-ms-inline-flexbox")],
-                    important: None,
-                    span: Default::default(),
-                };
-                out.push(d2);
+            // Only add display prefixes when autoprefixer data says to.
+            let needs_flex = config.add.get("display-flex");
+            if needs_flex.is_some() {
+                match v.as_str() {
+                    "flex" => {
+                        // 2009 spec
+                        out.push(Declaration {
+                            name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                                value: prop.into(),
+                                raw: None,
+                                span: Default::default(),
+                            }),
+                            value: vec![make_ident("-webkit-box")],
+                            important: None,
+                            span: Default::default(),
+                        });
+                        // 2012 spec
+                        out.push(Declaration {
+                            name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                                value: prop.into(),
+                                raw: None,
+                                span: Default::default(),
+                            }),
+                            value: vec![make_ident("-ms-flexbox")],
+                            important: None,
+                            span: Default::default(),
+                        });
+                    }
+                    "inline-flex" => {
+                        out.push(Declaration {
+                            name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                                value: prop.into(),
+                                raw: None,
+                                span: Default::default(),
+                            }),
+                            value: vec![make_ident("-webkit-inline-box")],
+                            important: None,
+                            span: Default::default(),
+                        });
+                        out.push(Declaration {
+                            name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                                value: prop.into(),
+                                raw: None,
+                                span: Default::default(),
+                            }),
+                            value: vec![make_ident("-ms-inline-flexbox")],
+                            important: None,
+                            span: Default::default(),
+                        });
+                    }
+                    _ => {}
+                }
             }
         }
     }

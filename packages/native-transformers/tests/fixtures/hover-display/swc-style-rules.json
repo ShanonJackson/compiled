@@ -1,7 +1,5 @@
 [
-  "._15y3glyw:hover{--display-icon-before:none}",
-  "._15y31txw:hover{--display-icon-before:flex}",
-  "._oyoh1txw:hover{--display-drag-handle:flex}",
-  "._oyohglyw:hover{--display-drag-handle:none}",
+  "._15y3r8wq:hover{--display-icon-before:var(--_b3nd5v)}",
+  "._oyoh2fjc:hover{--display-drag-handle:var(--_11m4mys)}",
   "._tzy41kuy{opacity:.1}"
 ]

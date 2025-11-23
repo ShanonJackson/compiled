@@ -430,6 +430,19 @@ fn collect_add_sub_items(
         }
         Node::Op { op, left, right } if op == '*' || op == '/' => {
             let reduced = reduce_node(Node::Op { op, left, right }, precision);
+            // Avoid infinite recursion when the multiplicative expression
+            // cannot be reduced to an additive expression. In that case,
+            // carry the math expression forward as a single collectible,
+            // matching postcss-calc behaviour.
+            if let Node::Op { op: reduced_op, .. } = &reduced {
+                if *reduced_op == '*' || *reduced_op == '/' {
+                    collected.push(CollectItem {
+                        sign,
+                        node: reduced,
+                    });
+                    return;
+                }
+            }
             collect_add_sub_items(sign, reduced, collected, precision);
         }
         other => collected.push(CollectItem { sign, node: other }),

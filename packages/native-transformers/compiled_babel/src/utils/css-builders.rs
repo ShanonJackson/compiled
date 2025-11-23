@@ -1023,6 +1023,36 @@ where
             )
         );
 
+        let conditional_branches_look_like_css = if does_expression_have_conditional_css {
+            let looks_like_css_literal = |expr: &Expr| {
+                matches!(expr, Expr::Object(_))
+                    || matches!(expr, Expr::Tpl(tpl) if tpl.quasis.iter().any(|q| q.raw.as_ref().contains(':')))
+                    || matches!(expr, Expr::Lit(Lit::Str(str_lit)) if str_lit.value.contains(':'))
+            };
+
+            let maybe_cond = match node_expression {
+                Expr::Arrow(arrow) => {
+                    if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+                        if let Expr::Cond(cond) = strip_parentheses_expr(body.as_ref()) {
+                            Some(cond)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                Expr::Cond(cond) => Some(cond),
+                _ => None,
+            };
+
+            maybe_cond.map_or(false, |cond| {
+                looks_like_css_literal(&cond.cons) || looks_like_css_literal(&cond.alt)
+            })
+        } else {
+            false
+        };
+
         let state = evaluated.meta.state();
         let does_expression_contain_css_block = matches!(evaluated.value, Expr::Object(_))
             || is_compiled_css_tagged_template_expression(&evaluated.value, &state)
@@ -1030,7 +1060,7 @@ where
         drop(state);
 
         let can_build_expression_as_css = does_expression_contain_css_block
-            || does_expression_have_conditional_css
+            || (does_expression_have_conditional_css && conditional_branches_look_like_css)
             || matches!(node_expression, Expr::Tpl(_));
 
         if can_build_expression_as_css {
@@ -1678,6 +1708,39 @@ where
 
                     let consequent_item = first_non_empty(&consequent.css);
                     let alternate_item = first_non_empty(&alternate.css);
+
+                    let branches_are_unconditional = |items: &[CssItem]| {
+                        items.iter().all(|item| matches!(item, CssItem::Unconditional(_)))
+                    };
+
+                    // Mirror Babel: when a property value is a conditional expression whose
+                    // branches are simple declarations, emit a single rule that reads from a
+                    // runtime CSS variable instead of branching class names. This keeps pseudo
+                    // selectors and conditionals compatible with runtime value injection.
+                    if branches_are_unconditional(&consequent.css)
+                        && branches_are_unconditional(&alternate.css)
+                    {
+                        let (mut variable_expression, variable_name) =
+                            get_variable_declarator_value_for_parent_expr(
+                                &prop_value,
+                                &updated_meta,
+                            );
+                        normalize_props_usage(&mut variable_expression);
+                        let name = format!("--_{}", hash(&variable_name));
+
+                        variables.push(Variable {
+                            name: name.clone(),
+                            expression: variable_expression,
+                            prefix: None,
+                            suffix: None,
+                        });
+
+                        css.push(CssItem::unconditional(format!(
+                            "{}: var({name});",
+                            css_property_name(&key)
+                        )));
+                        continue;
+                    }
 
                     match (consequent_item, alternate_item) {
                         (Some(consequent_item), Some(alternate_item)) => {

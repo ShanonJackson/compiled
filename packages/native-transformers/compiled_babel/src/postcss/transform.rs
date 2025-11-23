@@ -309,7 +309,7 @@ pub(crate) fn transform_css_via_swc_pipeline(
         plugin.run(&mut stylesheet, &mut ctx);
     }
 
-    let serialized_stylesheet = serialize_stylesheet(&stylesheet)?;
+    let mut serialized_stylesheet = serialize_stylesheet(&stylesheet)?;
     let preserved_comments = ctx.take_preserved_comments();
 
     let comment_block = preserved_comments.concat();
@@ -344,31 +344,21 @@ pub fn transform_css(
     css: &str,
     options: TransformCssOptions,
 ) -> Result<TransformCssResult, CssTransformError> {
-    // Fast path: bare declarations (no selectors/braces) can be handled by the SWC-backed
-    // pipeline to avoid the PostCSS wrap-and-rewrite path that can blow the stack on
-    // certain inputs. Babel's pipeline wraps bare declarations into an empty selector
-    // before atomicifying; the SWC pipeline produces equivalent atomic output for these
-    // shapes, so prefer it when no rule braces are present.
-    if !css.contains('{') {
-        let mut normalized_css = css.to_string();
-        // Mirror PostCSS calc/value minification for bare declarations by trimming
-        // whitespace around multiplication so hashes match Babel output.
-        normalized_css = normalized_css.replace(") *", ")*");
-        normalized_css = normalized_css.replace("* ", "*");
-        normalized_css = normalized_css.replace(" *", "*");
-        if std::env::var("STACK_DEBUG").is_ok() {
-            eprintln!("[transform_css] swc fast-path css=\"{}\" -> \"{}\"", css, normalized_css);
-        }
-        match transform_css_via_swc_pipeline(&normalized_css, options.clone()) {
-            Ok(res) => return Ok(res),
-            Err(err) => {
-                if std::env::var("STACK_DEBUG").is_ok() {
-                    eprintln!("[transform_css] swc fast-path failed, falling back to postcss: {err}");
-                }
-                // Fall through to postcss below using the original options.
-            }
-        }
+    // Skip empty inputs (only whitespace/semicolons), mirroring Babel which would
+    // produce no sheets/class names for an empty declaration block.
+    let trimmed = css.trim();
+    if trimmed.is_empty() || trimmed.chars().all(|c| c == ';') {
+        return Ok(TransformCssResult {
+            sheets: Vec::new(),
+            class_names: Vec::new(),
+        });
     }
+
+    // Handle brace-wrapped declaration blocks (e.g. "{color:red;}") by stripping
+    // the braces and reusing the SWC pipeline to mirror Babel's wrap-bare-decls.
+    // Allow bare declarations by letting the PostCSS pipeline run with ignore_errors;
+    // the wrap-bare-decls plugin will lift them into an empty-selector rule as Babel does.
+    // No pre-wrapping here—feed the raw CSS through.
 
     if std::env::var("STACK_DEBUG").is_ok() {
         eprintln!("[transform_css] postcss path css=\"{}\"", css);
