@@ -585,6 +585,16 @@ pub fn merge_subsequent_unconditional_css_items(items: Vec<CssItem>) -> Vec<CssI
       CssItem::Sheet(_) => sheets.push(items[index].clone()),
       CssItem::Unconditional(_) => {
         let mut css = get_item_css(&items[index]);
+        if css.trim_end().ends_with(':') && !css.contains('{') {
+          // Treat selector-looking prefixes as empty so they don't corrupt following
+          // declarations when merged (mirrors Babel which keeps them separate and inert).
+          let has_selector_chars =
+            css.contains('[') || css.contains(']') || css.contains('.') || css.contains('#')
+              || css.contains('&') || css.contains(' ');
+          if has_selector_chars {
+            css.clear();
+          }
+        }
         let mut last_index = index;
 
         let mut lookahead = index + 1;
@@ -910,6 +920,23 @@ where
       })
       .unwrap_or(false);
 
+    if std::env::var("STACK_DEBUG").is_ok() {
+      let expr_kind = match node_expression {
+        Some(Expr::Arrow(_)) => "Arrow",
+        Some(Expr::Cond(_)) => "Cond",
+        Some(Expr::Object(_)) => "Object",
+        Some(Expr::Tpl(_)) => "Tpl",
+        Some(Expr::Lit(Lit::Str(_))) => "Str",
+        Some(Expr::Lit(Lit::Num(_))) => "Num",
+        Some(_) => "Other",
+        None => "None",
+      };
+      eprintln!(
+        "[template] node_expr kind={} raw=\"{}\" literal_prefix=\"{}\"",
+        expr_kind, raw, literal_result
+      );
+    }
+
     if node_expression.is_none() || arrow_has_logical_body {
       let suffix = match meta.context {
         MetadataContext::Keyframes { .. } | MetadataContext::Fragment => "",
@@ -1176,8 +1203,27 @@ where
     }
   }
 
+  let merged = merge_subsequent_unconditional_css_items(css);
+
+  if std::env::var("STACK_DEBUG").is_ok() {
+    let items: Vec<String> = merged
+      .iter()
+      .map(|item| {
+        let kind = match item {
+          CssItem::Unconditional(_) => "Unconditional",
+          CssItem::Conditional(_) => "Conditional",
+          CssItem::Logical(_) => "Logical",
+          CssItem::Sheet(_) => "Sheet",
+          CssItem::Map(_) => "Map",
+        };
+        format!("{kind}:{}", get_item_css(item))
+      })
+      .collect();
+    eprintln!("[template] merged_css {:?}", items);
+  }
+
   CssOutput {
-    css: merge_subsequent_unconditional_css_items(css),
+    css: merged,
     variables,
   }
 }
