@@ -1556,6 +1556,14 @@ where
 
         if let Expr::Call(call) = &prop_value {
           if can_be_statically_concatenated(call) {
+            if std::env::var("STACK_DEBUG_PROP").is_ok() {
+              eprintln!(
+                "[concat-prop] key={} expr_type={} span={:?}",
+                key,
+                super::utils_object_property_to_string::expression_type(&prop_value),
+                prop_value.span()
+              );
+            }
             let value = expression_to_string(&prop_value, updated_meta.clone());
             let value = if key == "content" {
               normalize_content_value(&value)

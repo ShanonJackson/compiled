@@ -1,3 +1,4 @@
+use swc_core::common::Spanned;
 use swc_core::ecma::ast::{
   BinExpr, BinaryOp, CallExpr, Callee, ComputedPropName, Expr, KeyValueProp, Lit, MemberProp,
   Number, PropName, Str, Tpl,
@@ -75,6 +76,11 @@ fn is_string_concat_expression(expression: &Expr) -> Option<&CallExpr> {
 /// Determines whether a string concat expression can be statically concatenated by inspecting
 /// argument types.
 pub(crate) fn can_be_statically_concatenated(call: &CallExpr) -> bool {
+  let expr = Expr::Call(call.clone());
+  if is_string_concat_expression(&expr).is_none() {
+    return false;
+  }
+
   call.args.iter().all(|arg| {
     if arg.spread.is_some() {
       return false;
@@ -247,7 +253,16 @@ pub fn object_property_to_string(prop: &KeyValueProp, meta: Metadata) -> String 
     PropName::Str(str_lit) => str_lit.value.to_string(),
     PropName::Num(num_lit) => num_lit.value.to_string(),
     PropName::BigInt(big) => big.value.to_string(),
-    PropName::Computed(ComputedPropName { expr, .. }) => expression_to_string(expr, meta),
+    PropName::Computed(ComputedPropName { expr, .. }) => {
+      if std::env::var("STACK_DEBUG_PROP").is_ok() {
+        eprintln!(
+          "[object_property_to_string] computed key expr_type={} span={:?}",
+          expression_type(expr),
+          expr.span()
+        );
+      }
+      expression_to_string(expr, meta)
+    }
   }
 }
 
