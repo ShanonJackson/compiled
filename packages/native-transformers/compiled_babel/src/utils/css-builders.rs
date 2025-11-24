@@ -6,7 +6,8 @@ use swc_core::common::{SourceMap, SourceMapper, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
   ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr,
   Expr, ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Pat, Prop,
-  PropName, PropOrSpread, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement, UnaryExpr, UnaryOp,
+  PropName, PropOrSpread, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement, TsType, UnaryExpr,
+  UnaryOp,
 };
 use swc_core::ecma::utils::ExprExt;
 use swc_ecma_codegen::text_writer::JsWriter;
@@ -78,6 +79,26 @@ fn print_statement(stmt: &Stmt) -> String {
   }
 
   String::from_utf8(buffer).expect("statement to utf8 string")
+}
+
+fn print_ts_type(ty: &TsType) -> String {
+  let cm: Lrc<SourceMap> = Default::default();
+  let mut buffer = Vec::new();
+
+  {
+    let mut writer = JsWriter::new(cm.clone(), "\n", &mut buffer, None);
+    writer.set_indent_str("  ");
+    let mut emitter = Emitter {
+      cfg: Config::default(),
+      comments: None,
+      cm,
+      wr: writer,
+    };
+
+    ty.emit_with(&mut emitter).expect("emit ts type");
+  }
+
+  String::from_utf8(buffer).expect("ts type to utf8 string")
 }
 
 fn print_pattern(pat: &Pat) -> String {
@@ -179,7 +200,13 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
       Expr::Lit(Lit::Null(_)) => "null".to_string(),
       Expr::Lit(Lit::BigInt(bi)) => format!("{}n", bi.value),
       Expr::Lit(Lit::Regex(regex)) => format!("/{}/{}", regex.exp, regex.flags),
-      Expr::Object(obj) => format!("{{\n{}\n}}", print_object_pretty(obj, 0)),
+      Expr::Object(obj) => {
+        if obj.props.is_empty() {
+          "{}".to_string()
+        } else {
+          format!("{{\n{}\n}}", print_object_pretty(obj, 0))
+        }
+      }
       Expr::Array(arr) => {
         let mut items: Vec<String> = Vec::new();
         for el in &arr.elems {
@@ -244,6 +271,20 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
           }
         }
       }
+      Expr::TsAs(ts_as) => format!(
+        "{} as {}",
+        print_expr(&ts_as.expr),
+        print_ts_type(&ts_as.type_ann)
+      ),
+      Expr::TsTypeAssertion(assertion) => format!(
+        "<{}> {}",
+        print_ts_type(&assertion.type_ann),
+        print_expr(&assertion.expr)
+      ),
+      Expr::TsConstAssertion(assertion) => {
+        format!("{} as const", print_expr(&assertion.expr))
+      }
+      Expr::TsNonNull(non_null) => format!("{}!", print_expr(&non_null.expr)),
       Expr::Paren(p) => format!("({})", print_expr(&p.expr)),
       Expr::Unary(un) => {
         let op = match un.op {
@@ -906,6 +947,7 @@ where
   for index in 0..template.quasis.len() {
     let raw = template.quasis[index].raw.as_ref().to_string();
     let node_expression = template.exprs.get(index).map(|expr| expr.as_ref());
+    let is_mid_statement = is_quasi_mid_statement(&template.quasis[index]);
 
     let arrow_has_logical_body = node_expression
       .and_then(|expr| match expr {
@@ -1073,11 +1115,27 @@ where
       || is_compiled_css_call_expression(&evaluated.value, &state);
     drop(state);
 
+    let prefix = raw.trim_end();
+    let property_like_prefix = {
+      let key = prefix.trim_end_matches(':').trim();
+      !key.is_empty()
+        && !key.chars().any(|ch| {
+          matches!(
+            ch,
+            '[' | ']' | '.' | '#' | '&' | '>' | '+' | '~' | ':' | ' ' | '\t' | '\n' | '\r'
+              | '{' | '}' | '(' | ')' | '@' | ','
+          )
+        })
+    };
+
+    let avoid_mid_statement_css_block =
+      is_mid_statement && does_expression_contain_css_block && property_like_prefix;
+
     let can_build_expression_as_css = does_expression_contain_css_block
       || (does_expression_have_conditional_css && conditional_branches_look_like_css)
       || matches!(node_expression, Expr::Tpl(_));
 
-    if can_build_expression_as_css {
+    if !avoid_mid_statement_css_block && can_build_expression_as_css {
       if std::env::var("STACK_DEBUG").is_ok() {
         eprintln!(
           "[template] conditional_css={} css_block={} tpl={}",
