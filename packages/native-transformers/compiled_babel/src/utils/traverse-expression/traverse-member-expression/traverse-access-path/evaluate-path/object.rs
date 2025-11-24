@@ -9,35 +9,9 @@ pub fn evaluate_object_path(
   meta: Metadata,
   property_name: &str,
 ) -> ResultPair {
-  let debug = std::env::var("STACK_DEBUG_BINDING").is_ok()
-    || std::env::var("STACK_DEBUG_SHARED")
-      .map(|value| value == property_name)
-      .unwrap_or(false)
-    || matches!(property_name, "columnMinWidth" | "sharedStyles");
   if let Some(result) = get_object_property_value(expression, property_name) {
-    if debug {
-      eprintln!(
-        "[evaluate_object_path] hit prop='{}' span={:?} expr_kind={}",
-        property_name,
-        result.span,
-        match &result.node {
-          Expr::Lit(_) => "Lit",
-          Expr::Object(_) => "Object",
-          Expr::Ident(_) => "Ident",
-          Expr::Member(_) => "Member",
-          Expr::Call(_) => "Call",
-          _ => "Other",
-        }
-      );
-    }
     return create_result_pair(result.node, meta);
   }
 
-  if debug {
-    eprintln!(
-      "[evaluate_object_path] miss prop='{}', returning object",
-      property_name
-    );
-  }
   create_result_pair(Expr::Object(expression.clone()), meta)
 }

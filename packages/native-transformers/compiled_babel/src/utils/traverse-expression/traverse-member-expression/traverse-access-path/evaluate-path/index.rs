@@ -16,26 +16,6 @@ pub fn evaluate_path(
   path_name: &str,
   evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
-  let debug = std::env::var("STACK_DEBUG_BINDING").is_ok()
-    || std::env::var("STACK_DEBUG_SHARED")
-      .map(|value| value == path_name)
-      .unwrap_or(false)
-    || matches!(path_name, "columnMinWidth" | "sharedStyles");
-  if debug {
-    eprintln!(
-      "[evaluate_path] path='{}' expr_kind={}",
-      path_name,
-      match expression {
-        Expr::Ident(_) => "Ident",
-        Expr::Object(_) => "Object",
-        Expr::Member(_) => "Member",
-        Expr::Call(_) => "Call",
-        Expr::Tpl(_) => "Tpl",
-        Expr::Lit(_) => "Lit",
-        _ => "Other",
-      }
-    );
-  }
   match expression {
     Expr::Object(object) => evaluate_object_path(object, meta, path_name),
     Expr::TsAs(ts_as) => evaluate_path(

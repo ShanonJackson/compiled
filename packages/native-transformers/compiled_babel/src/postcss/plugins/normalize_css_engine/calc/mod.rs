@@ -723,84 +723,7 @@ pub fn plugin() -> pc::BuiltPlugin {
           return;
         }
 
-        // Directly reduce simple calc() expressions before value-parser walk, mirroring
-        // postcss-calc stringifier output for operator spacing.
-        let try_reduce_raw = |raw: &str| -> Option<String> {
-          let lower = raw.to_ascii_lowercase();
-          let (idx, name_len) = if let Some(i) = lower.find("calc(") {
-            (i, "calc".len())
-          } else if let Some(i) = lower.find("-webkit-calc(") {
-            (i, "-webkit-calc".len())
-          } else if let Some(i) = lower.find("-moz-calc(") {
-            (i, "-moz-calc".len())
-          } else {
-            return None;
-          };
-          let start = idx + name_len;
-          let paren = raw[start..].find('(')? + start;
-          let mut depth = 0i32;
-          let mut end = None;
-          for (offset, ch) in raw[paren..].char_indices() {
-            match ch {
-              '(' => depth += 1,
-              ')' => {
-                depth -= 1;
-                if depth == 0 {
-                  end = Some(paren + offset);
-                  break;
-                }
-              }
-              _ => {}
-            }
-          }
-          let end_idx = end?;
-          let inner = raw[paren + 1..end_idx].trim();
-          let ast = parse_calc_expression(inner)?;
-          let reduced = reduce_node(ast, opt.precision);
-          let expr = match reduced {
-            Node::Value(ValueKind { num, unit }) => {
-              let mut v = fmt_number(num, opt.precision);
-              if let Some(u) = unit {
-                v.push_str(&u);
-              }
-              v
-            }
-            other => stringify_ast(&other, opt.precision),
-          };
-          let name = &raw[idx..paren];
-          let mut out = String::new();
-          out.push_str(&raw[..idx]);
-          out.push_str(name);
-          out.push('(');
-          out.push_str(&expr);
-          out.push(')');
-          out.push_str(&raw[end_idx + 1..]);
-          Some(out)
-        };
-
         let mut parsed = vp::parse(&value);
-        let mut changed = false;
-        if value.contains("board-scroll-element-height") || value.contains("topNavigationHeight") {
-          let kinds: Vec<String> = parsed
-            .nodes
-            .iter()
-            .map(|n| match n {
-              vp::Node::Function { value: n, .. } => format!("Function({})", n),
-              vp::Node::Word { value } => format!("Word({})", value),
-              vp::Node::Space { .. } => "Space".to_string(),
-              vp::Node::Div { value, .. } => format!("Div({})", value),
-              other => format!("{:?}", other),
-            })
-            .collect();
-          eprintln!(
-            "[calc] target parsed prop='{}' value='{}' nodes={:?}",
-            decl.prop(),
-            value,
-            kinds
-          );
-        }
-        let debug =
-          std::env::var("COMPILED_CLI_TRACE").is_ok() || std::env::var("STACK_DEBUG").is_ok();
         for n in parsed.nodes.iter_mut() {
           if let vp::Node::Function {
             value: name, nodes, ..
@@ -813,21 +736,9 @@ pub fn plugin() -> pc::BuiltPlugin {
             }
 
             let inner = vp::stringify(nodes);
-            let target_debug =
-              std::env::var("STACK_DEBUG").is_ok() || std::env::var("COMPILED_CLI_TRACE").is_ok();
-            if target_debug
-              && (value.contains("board-scroll-element-height")
-                || value.contains("topNavigationHeight"))
-            {
-              eprintln!("[calc] target inner='{}' from value='{}'", inner, value);
-            }
 
             if let Some(ast) = parse_calc_expression(&inner) {
               let reduced = reduce_node(ast, opt.precision);
-              if std::env::var("COMPILED_CLI_TRACE").is_ok() || std::env::var("STACK_DEBUG").is_ok()
-              {
-                eprintln!("[calc] normalize input='{}' reduced={:?}", inner, reduced);
-              }
               match reduced {
                 Node::Value(ValueKind { num, unit }) => {
                   let mut v = fmt_number(num, opt.precision);
@@ -842,21 +753,6 @@ pub fn plugin() -> pc::BuiltPlugin {
                   *n = vp::Node::Word { value: wrapped };
                 }
               }
-              changed = true;
-              if std::env::var("COMPILED_CLI_TRACE").is_ok() || std::env::var("STACK_DEBUG").is_ok()
-              {
-                eprintln!(
-                  "[calc] reduced -> '{}'",
-                  match n {
-                    vp::Node::Word { value } => value.as_str(),
-                    _ => "",
-                  }
-                );
-              }
-            } else if std::env::var("COMPILED_CLI_TRACE").is_ok()
-              || std::env::var("STACK_DEBUG").is_ok()
-            {
-              eprintln!("[calc] failed to parse '{}'", inner);
             }
           }
         }
