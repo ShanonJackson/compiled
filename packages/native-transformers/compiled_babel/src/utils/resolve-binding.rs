@@ -645,6 +645,10 @@ fn resolve_import_binding(
   // dependency graphs and surface parsing errors for types-only exports that the runtime
   // transform never evaluates. If the import source is already recognised as a Compiled
   // entrypoint, short-circuit to the placeholder binding.
+  if crate::constants::DEFAULT_IMPORT_SOURCES.iter().any(|s| s == &source) {
+    return Some(binding);
+  }
+
   let cached = load_or_parse_module(&meta, source)?;
 
   match kind {
@@ -695,6 +699,14 @@ pub fn resolve_binding(
     binding.path.as_ref().map(|path| &path.kind),
     Some(BindingPathKind::Import { .. })
   );
+  if std::env::var("STACK_DEBUG_BINDING").is_ok() && reference_name == "styles" {
+    eprintln!(
+      "[resolve_binding] scoped binding for 'styles' kind={:?} has_node={} file={:?}",
+      binding.path.as_ref().map(|p| &p.kind),
+      binding.node.is_some(),
+      meta.state().file().filename
+    );
+  }
   if debug_shared {
     eprintln!(
       "[resolve_binding] ref='{}' path={:?} node_present={} constant={}",

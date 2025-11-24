@@ -4,5 +4,8 @@
   "._2rko1mok{border-radius:var(--ds-radius-large,8px)}",
   "._1h6dmuej{border-color:var(--ds-border,#091e4224)}",
   "._1dqonqa1{border-style:solid}",
-  "._1e0c1txw{display:flex}"
+  "._1e0c1txw{display:flex}",
+  "._1reo15vq{overflow-x:hidden}",
+  "._18m915vq{overflow-y:hidden}",
+  "._kqswh2mm{position:relative}"
 ]
