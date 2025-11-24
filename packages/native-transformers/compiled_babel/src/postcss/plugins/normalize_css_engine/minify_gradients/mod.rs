@@ -5,68 +5,69 @@ use regex::Regex;
 use std::str::FromStr;
 
 fn split_args_indices(nodes: &Vec<vp::Node>) -> Vec<Vec<usize>> {
-    let mut args: Vec<Vec<usize>> = vec![Vec::new()];
-    let mut depth = 0i32;
-    for (i, n) in nodes.iter().enumerate() {
-        match n {
-            vp::Node::Function { .. } => {
-                args.last_mut().unwrap().push(i);
-                depth += 1;
-            }
-            vp::Node::Div { value, .. } if depth == 0 && value == "," => {
-                args.push(Vec::new());
-            }
-            _ => {
-                args.last_mut().unwrap().push(i);
-                if matches!(n, vp::Node::Function { .. }) {
-                    depth -= 1;
-                }
-            }
+  let mut args: Vec<Vec<usize>> = vec![Vec::new()];
+  let mut depth = 0i32;
+  for (i, n) in nodes.iter().enumerate() {
+    match n {
+      vp::Node::Function { .. } => {
+        args.last_mut().unwrap().push(i);
+        depth += 1;
+      }
+      vp::Node::Div { value, .. } if depth == 0 && value == "," => {
+        args.push(Vec::new());
+      }
+      _ => {
+        args.last_mut().unwrap().push(i);
+        if matches!(n, vp::Node::Function { .. }) {
+          depth -= 1;
         }
+      }
     }
-    args
+  }
+  args
 }
 
 fn unit_of(value: &str) -> Option<(String, String)> {
-    vp::unit::unit(value).map(|u| (u.number, u.unit.to_lowercase()))
+  vp::unit::unit(value).map(|u| (u.number, u.unit.to_lowercase()))
 }
 
 fn is_css_length_unit(unit: &str) -> bool {
-    matches!(
-        unit.to_uppercase().as_str(),
-        "PX" | "IN"
-            | "CM"
-            | "MM"
-            | "EM"
-            | "REM"
-            | "POINTS"
-            | "PC"
-            | "EX"
-            | "CH"
-            | "VW"
-            | "VH"
-            | "VMIN"
-            | "VMAX"
-            | "%"
-    )
+  matches!(
+    unit.to_uppercase().as_str(),
+    "PX"
+      | "IN"
+      | "CM"
+      | "MM"
+      | "EM"
+      | "REM"
+      | "POINTS"
+      | "PC"
+      | "EX"
+      | "CH"
+      | "VW"
+      | "VH"
+      | "VMIN"
+      | "VMAX"
+      | "%"
+  )
 }
 
 fn is_stop(stop: Option<&str>) -> bool {
-    if let Some(s) = stop {
-        if let Some((num, uni)) = unit_of(s) {
-            return num == "0" || is_css_length_unit(&uni);
-        }
-        return Regex::new(r"^calc\(\S+\)$").unwrap().is_match(s);
+  if let Some(s) = stop {
+    if let Some((num, uni)) = unit_of(s) {
+      return num == "0" || is_css_length_unit(&uni);
     }
-    true
+    return Regex::new(r"^calc\(\S+\)$").unwrap().is_match(s);
+  }
+  true
 }
 
 fn is_color_stop(color: &str, stop: Option<&str>) -> bool {
-    csscolorparser::Color::from_str(color).is_ok() && is_stop(stop)
+  csscolorparser::Color::from_str(color).is_ok() && is_stop(stop)
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
-    pc::plugin("postcss-minify-gradients")
+  pc::plugin("postcss-minify-gradients")
         .decl(|decl, _| {
             let value = decl.value(); if value.is_empty() { return Ok(()); }
             let normalized = value.to_ascii_lowercase();

@@ -39,6 +39,11 @@ This is the quickest loop to capture a Jira breakage into a fixture, debug it, a
 - If you change Rust code, rebuild the CLI before rerunning fixtures so the collector sees your changes:
   - From `platform/crates/scompiled`: `cargo build -p fixtures_cli --bin style_rules_cli --release`
 
+### 5a) Fidelity over surface fixes
+- Never “fix” by only matching the emitted output while leaving divergent internals. We must mirror Babel’s logic, quirks, and file locations 1:1.
+- When unsure, open the JS source in the equivalent folder (Babel plugin or PostCSS plugin) and port the exact behavior. Do not invent string replaces, regex hacks, or selector tweaks that aren’t present upstream.
+- If a deviation is unavoidable, add a `// COMPAT:` note explaining why we can’t do it exactly like Babel. Otherwise, the default assumption is identical implementation, not just identical snapshots.
+
 ## 6) Re-run fixture and verify
 - Re-run: `node scripts/update-fixtures.js --only <name>`.
 - Confirm the fixture now passes (green output, updated `swc-style-rules.json` matches `babel-style-rules.json` and `out.js` aligns with `babel-out.js`).

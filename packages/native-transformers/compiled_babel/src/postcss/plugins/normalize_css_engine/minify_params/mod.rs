@@ -2,28 +2,28 @@ use crate::postcss::value_parser as vp;
 use postcss as pc;
 
 fn gcd(mut a: i64, mut b: i64) -> i64 {
-    while b != 0 {
-        let t = b;
-        b = a % b;
-        a = t;
-    }
-    a.abs()
+  while b != 0 {
+    let t = b;
+    b = a % b;
+    a = t;
+  }
+  a.abs()
 }
 
 fn aspect_ratio(a: i64, b: i64) -> (i64, i64) {
-    let d = gcd(a, b);
-    (a / d, b / d)
+  let d = gcd(a, b);
+  (a / d, b / d)
 }
 
 fn split_arg(arg: &[vp::Node]) -> String {
-    vp::stringify(arg)
+  vp::stringify(arg)
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
-    // Default: no IE10/11 "all" bug handling (legacy=false). Browserslist gating can be added later.
-    let legacy = false;
+  // Default: no IE10/11 "all" bug handling (legacy=false). Browserslist gating can be added later.
+  let legacy = false;
 
-    pc::plugin("postcss-minify-params")
+  pc::plugin("postcss-minify-params")
         // Operate directly on @rules to avoid full-tree once_exit traversal (prevents stalls).
         .at_rule_filter("*", move |at, _| {
             let name = at.name().to_lowercase();

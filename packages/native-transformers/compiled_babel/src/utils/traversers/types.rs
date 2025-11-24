@@ -4,6 +4,6 @@ use swc_core::common::Span;
 /// its span so that future passes can recover contextual metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraverserResult<T> {
-    pub node: T,
-    pub span: Span,
+  pub node: T,
+  pub span: Span,
 }

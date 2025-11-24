@@ -67,19 +67,19 @@ use swc_core::css::ast::Stylesheet;
 /// Placeholder representing yet-to-be-ported cssnano plugins.
 #[derive(Debug, Clone)]
 pub struct CssnanoPlaceholder {
-    name: &'static str,
+  name: &'static str,
 }
 
 impl CssnanoPlaceholder {
-    pub fn new(name: &'static str) -> Self {
-        Self { name }
-    }
+  pub fn new(name: &'static str) -> Self {
+    Self { name }
+  }
 }
 
 impl Plugin for CssnanoPlaceholder {
-    fn name(&self) -> &'static str {
-        self.name
-    }
+  fn name(&self) -> &'static str {
+    self.name
+  }
 
-    fn run(&self, _stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {}
+  fn run(&self, _stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {}
 }

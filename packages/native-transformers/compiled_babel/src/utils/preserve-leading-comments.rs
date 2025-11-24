@@ -7,28 +7,28 @@ use crate::types::TransformState;
 /// top of the file after additional nodes are inserted ahead of the program body.
 pub fn preserve_leading_comments<T>(items: &[T], state: &mut TransformState)
 where
-    T: Spanned,
+  T: Spanned,
 {
-    if state.file.comments.is_empty() {
-        return;
-    }
+  if state.file.comments.is_empty() {
+    return;
+  }
 
-    let Some(first) = items.first() else {
-        return;
-    };
+  let Some(first) = items.first() else {
+    return;
+  };
 
-    let cutoff = first.span().lo();
+  let cutoff = first.span().lo();
 
-    let (leading, trailing): (Vec<_>, Vec<_>) = state
-        .file
-        .comments
-        .iter()
-        .cloned()
-        .partition(|comment| comment.span.hi <= cutoff);
+  let (leading, trailing): (Vec<_>, Vec<_>) = state
+    .file
+    .comments
+    .iter()
+    .cloned()
+    .partition(|comment| comment.span.hi <= cutoff);
 
-    if leading.is_empty() {
-        return;
-    }
+  if leading.is_empty() {
+    return;
+  }
 
-    state.file.comments = leading.into_iter().chain(trailing.into_iter()).collect();
+  state.file.comments = leading.into_iter().chain(trailing.into_iter()).collect();
 }
