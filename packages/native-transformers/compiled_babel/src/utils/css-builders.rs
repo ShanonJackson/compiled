@@ -1113,21 +1113,29 @@ where
     }
 
     let does_expression_have_conditional_css = matches!(
-        node_expression,
-        Expr::Arrow(arrow) if matches!(
-            arrow.body.as_ref(),
-            BlockStmtOrExpr::Expr(expr) if matches!(
-                strip_parentheses_expr(expr.as_ref()),
-                Expr::Cond(_)
-            )
-        )
+      node_expression,
+      Expr::Arrow(arrow) if matches!(
+          arrow.body.as_ref(),
+          BlockStmtOrExpr::Expr(expr) if matches!(
+              strip_parentheses_expr(expr.as_ref()),
+              Expr::Cond(_)
+          )
+      )
     );
 
+    let state = evaluated.meta.state();
+    let does_expression_contain_css_block = matches!(evaluated.value, Expr::Object(_))
+      || is_compiled_css_tagged_template_expression(&evaluated.value, &state)
+      || is_compiled_css_call_expression(&evaluated.value, &state);
+    drop(state);
+
     let conditional_branches_look_like_css = if does_expression_have_conditional_css {
-      let looks_like_css_literal = |expr: &Expr| {
+      let looks_like_css_literal = |expr: &Expr, state: &_| {
         matches!(expr, Expr::Object(_))
           || matches!(expr, Expr::Tpl(tpl) if tpl.quasis.iter().any(|q| q.raw.as_ref().contains(':')))
           || matches!(expr, Expr::Lit(Lit::Str(str_lit)) if str_lit.value.contains(':'))
+          || is_compiled_css_tagged_template_expression(expr, state)
+          || is_compiled_css_call_expression(expr, state)
       };
 
       let maybe_cond = match node_expression {
@@ -1146,22 +1154,35 @@ where
         _ => None,
       };
 
-      maybe_cond.map_or(false, |cond| {
-        looks_like_css_literal(&cond.cons) || looks_like_css_literal(&cond.alt)
-      })
+      let state = evaluated.meta.state();
+      let looks = maybe_cond.map_or(false, |cond| {
+        looks_like_css_literal(&cond.cons, &state) || looks_like_css_literal(&cond.alt, &state)
+      });
+      drop(state);
+      looks
     } else {
       false
     };
 
-    let state = evaluated.meta.state();
-    let does_expression_contain_css_block = matches!(evaluated.value, Expr::Object(_))
-      || is_compiled_css_tagged_template_expression(&evaluated.value, &state)
-      || is_compiled_css_call_expression(&evaluated.value, &state);
-    drop(state);
+    // COMPAT: Avoid treating computed member lookups (e.g. () => MAP[size]) that evaluate
+    // to an object literal as CSS blocks. Babel keeps these as value interpolations so the
+    // result flows through the variable path instead of being expanded into CSS text.
+    let is_computed_member_arrow_returning_object = matches!(
+      (node_expression, &evaluated.value),
+      (
+        Expr::Arrow(arrow),
+        Expr::Object(_)
+      ) if matches!(
+        arrow.body.as_ref(),
+        BlockStmtOrExpr::Expr(expr) if matches!(
+            strip_parentheses_expr(expr.as_ref()),
+            Expr::Member(member) if matches!(member.prop, MemberProp::Computed(_))
+        )
+      )
+    );
 
-    let prefix = raw.trim_end();
     let property_like_prefix = {
-      let key = prefix.trim_end_matches(':').trim();
+      let key = raw.trim_end_matches(':').trim();
       !key.is_empty()
         && !key.chars().any(|ch| {
           matches!(
@@ -1172,10 +1193,17 @@ where
         })
     };
 
-    let avoid_mid_statement_css_block =
-      is_mid_statement && does_expression_contain_css_block && property_like_prefix;
+    let avoid_mid_statement_css_block = is_mid_statement
+      && does_expression_contain_css_block
+      && property_like_prefix
+      && !is_computed_member_arrow_returning_object;
 
-    let can_build_expression_as_css = does_expression_contain_css_block
+    let can_build_expression_as_css = (does_expression_contain_css_block
+      && !is_computed_member_arrow_returning_object)
+      // COMPAT: Babel always attempts to build conditional expressions as CSS, even when the
+      // branches don't obviously look like CSS literals (e.g. css() calls). This mirrors the
+      // original behaviour so conditional css blocks aren't treated as value interpolations,
+      // but only when the branches actually resemble CSS structures.
       || (does_expression_have_conditional_css && conditional_branches_look_like_css)
       || matches!(node_expression, Expr::Tpl(_));
 
