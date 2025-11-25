@@ -937,7 +937,7 @@ fn normalize_ampersand_combinators(selector: &str) -> String {
   }
 
   fn needs_space_before_target(ch: Option<char>) -> bool {
-    matches!(ch, Some(c) if c.is_alphanumeric() || matches!(c, '-' | '_'))
+    matches!(ch, Some(c) if c.is_alphanumeric() || matches!(c, '-' | '_' | '['))
   }
 
   let chars: Vec<char> = selector.chars().collect();
@@ -949,7 +949,9 @@ fn normalize_ampersand_combinators(selector: &str) -> String {
     if ch == '&' {
       out.push('&');
       i += 1;
+      let mut saw_ws = false;
       while i < len && chars[i].is_whitespace() {
+        saw_ws = true;
         i += 1;
       }
       if let Some(len_comb) = combinator_length(&chars, i) {
@@ -962,7 +964,7 @@ fn normalize_ampersand_combinators(selector: &str) -> String {
         }
         continue;
       }
-      if needs_space_before_target(chars.get(i).copied()) {
+      if saw_ws && needs_space_before_target(chars.get(i).copied()) {
         out.push(' ');
       }
       continue;
