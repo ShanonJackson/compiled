@@ -32,6 +32,120 @@ use crate::utils_types::{
   BindingPathKind, EvaluateExpression, ImportBindingKind, PartialBindingWithMeta,
 };
 
+fn expression_references_import(
+  expr: &Expr,
+  meta: &Metadata,
+  visited: &mut IndexSet<String>,
+  evaluate_expression: EvaluateExpression,
+) -> bool {
+  match expr {
+    Expr::Ident(ident) => {
+      if !visited.insert(ident.sym.to_string()) {
+        return false;
+      }
+
+      if let Some(binding) = resolve_binding(ident.sym.as_ref(), meta.clone(), evaluate_expression)
+      {
+        if matches!(binding.source, crate::utils_types::BindingSource::Import) {
+          return true;
+        }
+
+        if let Some(node) = &binding.node {
+          return expression_references_import(
+            node,
+            &binding.meta,
+            visited,
+            evaluate_expression,
+          );
+        }
+      }
+
+      false
+    }
+    Expr::Member(member) => {
+      let obj_refs =
+        expression_references_import(&member.obj, meta, visited, evaluate_expression);
+
+      let prop_refs = match &member.prop {
+        swc_core::ecma::ast::MemberProp::Ident(ident) => {
+          expression_references_import(&Expr::Ident(ident.clone().into()), meta, visited, evaluate_expression)
+        }
+        swc_core::ecma::ast::MemberProp::Computed(comp) => {
+          expression_references_import(&comp.expr, meta, visited, evaluate_expression)
+        }
+        swc_core::ecma::ast::MemberProp::PrivateName(_) => false,
+      };
+
+      obj_refs || prop_refs
+    }
+    Expr::Call(call) => {
+      let callee_refs = match &call.callee {
+        swc_core::ecma::ast::Callee::Expr(expr) => {
+          expression_references_import(expr, meta, visited, evaluate_expression)
+        }
+        _ => false,
+      };
+
+      callee_refs
+        || call
+          .args
+          .iter()
+          .any(|arg| expression_references_import(&arg.expr, meta, visited, evaluate_expression))
+    }
+    Expr::Array(array) => array
+      .elems
+      .iter()
+      .flatten()
+      .any(|elem| expression_references_import(&elem.expr, meta, visited, evaluate_expression)),
+    Expr::Object(object) => object.props.iter().any(|prop| match prop {
+      PropOrSpread::Prop(prop) => match prop.as_ref() {
+        Prop::KeyValue(kv) => expression_references_import(&kv.value, meta, visited, evaluate_expression),
+        Prop::Assign(assign) => expression_references_import(&assign.value, meta, visited, evaluate_expression),
+        Prop::Method(_) | Prop::Getter(_) | Prop::Setter(_) => false,
+        _ => false,
+      },
+      PropOrSpread::Spread(spread) => expression_references_import(&spread.expr, meta, visited, evaluate_expression),
+    }),
+    Expr::Tpl(tpl) => tpl
+      .exprs
+      .iter()
+      .any(|expr| expression_references_import(expr, meta, visited, evaluate_expression)),
+    Expr::TaggedTpl(tagged) => {
+      expression_references_import(&tagged.tag, meta, visited, evaluate_expression)
+        || expression_references_import(&Expr::Tpl(*tagged.tpl.clone()), meta, visited, evaluate_expression)
+    }
+    Expr::Bin(bin) => {
+      expression_references_import(&bin.left, meta, visited, evaluate_expression)
+        || expression_references_import(&bin.right, meta, visited, evaluate_expression)
+    }
+    Expr::Cond(cond) => {
+      expression_references_import(&cond.test, meta, visited, evaluate_expression)
+        || expression_references_import(&cond.cons, meta, visited, evaluate_expression)
+        || expression_references_import(&cond.alt, meta, visited, evaluate_expression)
+    }
+    Expr::Paren(paren) => expression_references_import(&paren.expr, meta, visited, evaluate_expression),
+    Expr::Unary(unary) => expression_references_import(&unary.arg, meta, visited, evaluate_expression),
+    Expr::Assign(assign) => expression_references_import(&assign.right, meta, visited, evaluate_expression),
+    Expr::Seq(seq) => seq
+      .exprs
+      .iter()
+      .any(|expr| expression_references_import(expr, meta, visited, evaluate_expression)),
+    Expr::New(new_expr) => {
+      expression_references_import(&new_expr.callee, meta, visited, evaluate_expression)
+        || new_expr
+          .args
+          .as_ref()
+          .map(|args| {
+            args
+              .iter()
+              .any(|arg| expression_references_import(&arg.expr, meta, visited, evaluate_expression))
+          })
+          .unwrap_or(false)
+    }
+    _ => false,
+  }
+}
+
 fn parse_current_module(meta: &Metadata) -> Option<Program> {
   let state = meta.state();
   let Some(path) = state.filename.clone() else {
@@ -445,7 +559,7 @@ pub(crate) fn load_or_parse_module(meta: &Metadata, source: &str) -> Option<Cach
   };
 
   {
-    let mut state = meta.state_mut();
+    let state = meta.state_mut();
     state
       .module_cache
       .borrow_mut()
@@ -631,20 +745,22 @@ fn resolve_variable_binding(
   let mut resolved = binding.clone();
   resolved.node = Some(pair.value);
   resolved.meta = pair.meta;
-  // COMPAT: Babel does not inline imported bindings that are strings or template literals when
-  // generating CSS variables (e.g., padding shorthands built from imported templates). Preserve
-  // that behaviour by marking those bindings as non-constant and clearing the resolved node so
-  // downstream evaluation keeps the identifier.
+  // COMPAT: Babel avoids inlining string/template literals when they are derived from imported
+  // values (e.g., padding shorthands built from imported constants). Preserve that behaviour by
+  // only skipping inlining when the expression references an import.
   let mut resolved = resolved;
-  let is_stringy = match resolved.node.as_ref() {
-    Some(swc_core::ecma::ast::Expr::Lit(swc_core::ecma::ast::Lit::Str(_))) => true,
-    Some(swc_core::ecma::ast::Expr::Tpl(_)) => true,
-    Some(swc_core::ecma::ast::Expr::TaggedTpl(_)) => true,
-    _ => false,
-  };
-  if is_stringy {
-    resolved.constant = false;
-    resolved.node = None;
+  if matches!(
+    resolved.node.as_ref(),
+    Some(
+      swc_core::ecma::ast::Expr::Lit(swc_core::ecma::ast::Lit::Str(_))
+        | swc_core::ecma::ast::Expr::Tpl(_)
+    )
+  ) {
+    let mut visited = IndexSet::new();
+    if expression_references_import(base, &binding.meta, &mut visited, evaluate_expression) {
+      resolved.constant = false;
+      resolved.node = None;
+    }
   }
 
   Some(resolved)

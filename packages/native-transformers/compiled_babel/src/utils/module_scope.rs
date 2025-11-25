@@ -29,6 +29,17 @@ fn insert_module_binding(
   source: BindingSource,
 ) {
   let binding = PartialBindingWithMeta::new(node, path, constant, metadata.clone(), source);
+  if std::env::var("STACK_DEBUG_SCOPE").is_ok() {
+    let kind = binding
+      .path
+      .as_ref()
+      .map(|p| format!("{:?}", p.kind))
+      .unwrap_or_else(|| "None".into());
+    eprintln!(
+      "[module_scope] insert name='{}' kind={} constant={}",
+      name, kind, constant
+    );
+  }
   metadata.insert_parent_binding(name, binding);
 }
 
@@ -190,11 +201,11 @@ fn register_pattern(
     Pat::Ident(binding) => {
       let name = binding.id.sym.as_ref();
       let span = span.unwrap_or(binding.id.span);
-      let binding_path = if !path.is_empty() || default_value.is_some() {
-        Some(BindingPath::variable(Some(span), path, default_value))
-      } else {
-        Some(BindingPath::new(Some(span)))
-      };
+      // Treat all variable declarators as `BindingPathKind::Variable` to mirror Babel's
+      // path metadata, even when there is no nested destructuring. This allows downstream
+      // resolution to apply variable-specific compat hooks (e.g., avoiding string inlining
+      // for imported shorthands).
+      let binding_path = Some(BindingPath::variable(Some(span), path, default_value));
 
       insert_module_binding(
         metadata,

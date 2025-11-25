@@ -2052,11 +2052,10 @@ impl CssPropVisitor {
       Pat::Ident(binding) => {
         let name = binding.id.sym.as_ref();
         let span = span.unwrap_or(binding.id.span);
-        let binding_path = if !path.is_empty() || default_value.is_some() {
-          Some(BindingPath::variable(span.into(), path, default_value))
-        } else {
-          Some(BindingPath::new(span.into()))
-        };
+        // Always store variable bindings with the `Variable` path kind (even when there is
+        // no nested destructuring) to mirror Babel's metadata and allow downstream helpers
+        // to apply variable-specific compatibility logic.
+        let binding_path = Some(BindingPath::variable(span.into(), path, default_value));
 
         self.insert_binding(name, init.cloned(), binding_path, constant);
       }
