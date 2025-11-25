@@ -631,6 +631,22 @@ fn resolve_variable_binding(
   let mut resolved = binding.clone();
   resolved.node = Some(pair.value);
   resolved.meta = pair.meta;
+  // COMPAT: Babel does not inline imported bindings that are strings or template literals when
+  // generating CSS variables (e.g., padding shorthands built from imported templates). Preserve
+  // that behaviour by marking those bindings as non-constant and clearing the resolved node so
+  // downstream evaluation keeps the identifier.
+  let mut resolved = resolved;
+  let is_stringy = match resolved.node.as_ref() {
+    Some(swc_core::ecma::ast::Expr::Lit(swc_core::ecma::ast::Lit::Str(_))) => true,
+    Some(swc_core::ecma::ast::Expr::Tpl(_)) => true,
+    Some(swc_core::ecma::ast::Expr::TaggedTpl(_)) => true,
+    _ => false,
+  };
+  if is_stringy {
+    resolved.constant = false;
+    resolved.node = None;
+  }
+
   Some(resolved)
 }
 
@@ -651,7 +667,7 @@ fn resolve_import_binding(
 
   let cached = load_or_parse_module(&meta, source)?;
 
-  match kind {
+  let resolved = match kind {
     ImportBindingKind::Namespace => Some(binding),
     ImportBindingKind::Default => {
       let result = get_default_export(&cached.program)?;
@@ -661,7 +677,9 @@ fn resolve_import_binding(
       let result = get_named_export(&cached.program, name)?;
       Some(build_import_binding(binding, result, cached.state))
     }
-  }
+  }?;
+
+  Some(resolved)
 }
 
 fn build_import_binding(

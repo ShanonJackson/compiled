@@ -644,12 +644,6 @@ fn get_variable_declarator_value_for_parent_expr(expr: &Expr, meta: &Metadata) -
     if let Some(binding) = resolve_binding(base_name, meta.clone(), evaluate_expression) {
       if let Some(node) = &binding.node {
         expression = node.clone();
-        variable_name = match &meta.context {
-          MetadataContext::Keyframes { keyframe } => {
-            format!("{keyframe}:{base_name}")
-          }
-          _ => babel_like_expression(node, meta),
-        };
       }
     }
   }
@@ -1296,6 +1290,24 @@ where
     let mut name = format!("--_{}", hash(&variable_name));
     if before.variable_prefix == "-" {
       name.push('-');
+    }
+
+    // If the interpolation fully reduces to a static literal, inline it instead of creating
+    // a CSS variable. This mirrors Babel, which inlines template literals whose expressions
+    // are resolved locally.
+    if let Expr::Lit(lit) = &evaluated.value {
+      let value_text = match lit {
+        swc_core::ecma::ast::Lit::Str(str_lit) => str_lit.value.to_string(),
+        swc_core::ecma::ast::Lit::Num(num_lit) => num_lit.value.to_string(),
+        _ => String::new(),
+      };
+      if !value_text.is_empty() {
+        literal_result.push_str(&before.css);
+        literal_result.push_str(&value_text);
+        next_quasi.raw = after.css.clone().into();
+        next_quasi.cooked = Some(after.css.clone().into());
+        continue;
+      }
     }
 
     variables.push(Variable {
