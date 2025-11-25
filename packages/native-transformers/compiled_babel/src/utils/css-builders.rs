@@ -5,9 +5,9 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{SourceMap, SourceMapper, Spanned, DUMMY_SP};
 use swc_core::ecma::ast::{
   ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr,
-  Expr, ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, Pat, Prop,
-  PropName, PropOrSpread, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement, TsType, UnaryExpr,
-  UnaryOp,
+  Expr, ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, OptChainBase,
+  Pat, Prop, PropName, PropOrSpread, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement, TsType,
+  UnaryExpr, UnaryOp,
 };
 use swc_core::ecma::utils::ExprExt;
 use swc_ecma_codegen::text_writer::JsWriter;
@@ -340,6 +340,50 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
         print_expr(&cond.cons),
         print_expr(&cond.alt)
       ),
+      Expr::Arrow(arrow) => {
+        let params_code = format_arrow_params(arrow);
+        let body_code = match arrow.body.as_ref() {
+          BlockStmtOrExpr::Expr(body) => {
+            let body = strip_parentheses_expr(body);
+            babel_like_code_for_hash(body)
+          }
+          BlockStmtOrExpr::BlockStmt(block) => {
+            let stmt = Stmt::Block(block.clone());
+            print_statement(&stmt).trim().to_string()
+          }
+        };
+        format!("{params_code} => {body_code}")
+      }
+      Expr::OptChain(opt) => {
+        match opt.base.as_ref() {
+          OptChainBase::Member(member) => {
+            let obj = print_expr(&member.obj);
+            let accessor = match &member.prop {
+              MemberProp::Ident(prop) => {
+                format!("{}{}", if opt.optional { "?." } else { "." }, prop.sym.as_ref())
+              }
+              MemberProp::Computed(c) => format!(
+                "{}[{}]",
+                if opt.optional { "?." } else { "." },
+                print_expr(&c.expr)
+              ),
+              MemberProp::PrivateName(_) => {
+                panic!("unsupported private name in optional chain for keyframes hash")
+              }
+            };
+            format!("{obj}{accessor}")
+          }
+          OptChainBase::Call(call) => {
+            let callee = print_expr(&call.callee);
+            let mut args: Vec<String> = Vec::with_capacity(call.args.len());
+            for arg in &call.args {
+              args.push(print_expr(&arg.expr));
+            }
+            let call_prefix = if opt.optional { "?." } else { "" };
+            format!("{callee}{call_prefix}({})", args.join(", "))
+          }
+        }
+      }
       other => panic!(
         "unsupported expression in keyframes hash serialization: {:?}",
         other
@@ -1505,7 +1549,7 @@ where
   // for the subset we use (TaggedTemplate and Call with literals), and ensures stable
   // cross-implementation hashing. If a snippet can't be retrieved, fall back to SWC printing.
   // Use Babel-like serialization for hashing to match original plugin
-  let mut code = babel_like_code_for_hash(expression);
+  let mut code = babel_like_expression(expression, meta);
   // COMPAT: Normalize newlines
   if code.contains('\r') {
     code = code.replace("\r\n", "\n").replace('\r', "");
@@ -2196,6 +2240,29 @@ fn build_css_internal(node: &Expr, meta: &Metadata) -> CssOutput {
   }
 
   if let Expr::Ident(identifier) = node {
+    if std::env::var("STACK_DEBUG_BINDING").is_ok() {
+      let own_keys = meta
+        .own_scope()
+        .map(|scope| {
+          scope
+            .borrow()
+            .keys()
+            .map(|k| k.as_str().to_string())
+            .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+      let parent_keys = meta
+        .parent_scope
+        .borrow()
+        .keys()
+        .map(|k| k.as_str().to_string())
+        .collect::<Vec<String>>();
+      eprintln!(
+        "[build_css][ident] name={} own_scope_keys={:?} parent_scope_keys={:?}",
+        identifier.sym, own_keys, parent_keys
+      );
+    }
+
     let binding = resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
       .unwrap_or_else(|| {
         let error =

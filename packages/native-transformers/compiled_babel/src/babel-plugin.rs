@@ -2027,7 +2027,9 @@ impl CssPropVisitor {
     path: Option<BindingPath>,
     constant: bool,
   ) {
-    let binding_meta = self.meta.with_parent_scope(self.current_scope());
+    // Use the merged scope so bindings retain visibility of outer scopes (mirrors Babel's
+    // scope chain resolution when evaluating identifiers).
+    let binding_meta = self.meta.with_parent_scope(self.merged_scope());
     let binding =
       PartialBindingWithMeta::new(init, path, constant, binding_meta, BindingSource::Module);
 

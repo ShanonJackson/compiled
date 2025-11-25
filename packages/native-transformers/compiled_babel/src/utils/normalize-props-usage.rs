@@ -254,6 +254,25 @@ fn build_binding_maps(pat: &Pat) -> (BindingChains, BindingDefaults) {
 struct ReplaceBindingsVisitor<'a> {
   chains: &'a BindingChains,
   defaults: &'a BindingDefaults,
+  targets: std::collections::HashSet<BindingId>,
+}
+
+fn pattern_binds_target(
+  pat: &Pat,
+  targets: &std::collections::HashSet<BindingId>,
+) -> bool {
+  match pat {
+    Pat::Ident(binding) => targets.contains(&(binding.id.sym.clone(), binding.id.ctxt)),
+    Pat::Array(array) => array.elems.iter().flatten().any(|elem| pattern_binds_target(elem, targets)),
+    Pat::Object(obj) => obj.props.iter().any(|prop| match prop {
+      ObjectPatProp::KeyValue(kv) => pattern_binds_target(&kv.value, targets),
+      ObjectPatProp::Assign(assign) => targets.contains(&(assign.key.sym.clone(), assign.key.ctxt)),
+      ObjectPatProp::Rest(rest) => pattern_binds_target(&rest.arg, targets),
+    }),
+    Pat::Assign(assign) => pattern_binds_target(&assign.left, targets),
+    Pat::Rest(rest) => pattern_binds_target(&rest.arg, targets),
+    _ => false,
+  }
 }
 
 impl<'a> ReplaceBindingsVisitor<'a> {
@@ -276,11 +295,36 @@ impl<'a> ReplaceBindingsVisitor<'a> {
 }
 
 impl<'a> VisitMut for ReplaceBindingsVisitor<'a> {
-  fn visit_mut_arrow_expr(&mut self, _: &mut ArrowExpr) {}
+  fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
+    let shadows = arrow
+      .params
+      .iter()
+      .any(|param| pattern_binds_target(param, &self.targets));
+    if !shadows {
+      arrow.body.visit_mut_with(self);
+    }
+  }
 
-  fn visit_mut_fn_expr(&mut self, _: &mut FnExpr) {}
+  fn visit_mut_fn_expr(&mut self, func: &mut FnExpr) {
+    let shadows = func
+      .function
+      .params
+      .iter()
+      .any(|param| pattern_binds_target(&param.pat, &self.targets));
+    if !shadows {
+      func.function.body.visit_mut_with(self);
+    }
+  }
 
-  fn visit_mut_function(&mut self, _: &mut Function) {}
+  fn visit_mut_function(&mut self, func: &mut Function) {
+    let shadows = func
+      .params
+      .iter()
+      .any(|param| pattern_binds_target(&param.pat, &self.targets));
+    if !shadows {
+      func.body.visit_mut_with(self);
+    }
+  }
 
   fn visit_mut_expr(&mut self, expr: &mut Expr) {
     if let Expr::Ident(ident) = expr {
@@ -299,7 +343,12 @@ fn replace_bindings(
   chains: &BindingChains,
   defaults: &BindingDefaults,
 ) {
-  let mut visitor = ReplaceBindingsVisitor { chains, defaults };
+  let targets = chains.keys().cloned().collect();
+  let mut visitor = ReplaceBindingsVisitor {
+    chains,
+    defaults,
+    targets,
+  };
   body.visit_mut_with(&mut visitor);
 }
 
