@@ -758,8 +758,10 @@ fn resolve_variable_binding(
   ) {
     let mut visited = IndexSet::new();
     if expression_references_import(base, &binding.meta, &mut visited, evaluate_expression) {
+      // Mirror Babel: treat import-derived string/template bindings as dynamic so they are not
+      // eagerly inlined, but still preserve the node for consumers (e.g., styled tagged
+      // templates) that need the original template literal to build CSS.
       resolved.constant = false;
-      resolved.node = None;
     }
   }
 
