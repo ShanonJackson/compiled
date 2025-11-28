@@ -23,17 +23,9 @@ pub fn text_decoration(value: &ValuesRoot) -> Vec<LonghandDeclaration> {
           }
           line_values.push(word.to_string());
         } else if is_color(node) {
-          if color.is_some() {
-            return true;
-          }
           color = Some(word.to_string());
         } else if is_style_value(word) {
-          if style.is_some() {
-            return true;
-          }
           style = Some(word.to_string());
-        } else {
-          return true;
         }
       }
     }
