@@ -2,12 +2,12 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use swc_core::common::comments::CommentKind;
 use swc_core::common::sync::Lrc;
-use swc_core::common::{SourceMap, SourceMapper, Spanned, DUMMY_SP};
+use swc_core::common::{SourceMap, SourceMapper, Spanned, SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
   ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr,
   Expr, ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, OptChainBase,
-  Pat, Prop, PropName, PropOrSpread, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement, TsType,
-  UnaryExpr, UnaryOp,
+  Pat, Prop, PropName, PropOrSpread, ReturnStmt, SpreadElement, Stmt, TaggedTpl, Tpl, TplElement,
+  TsType, UnaryExpr, UnaryOp,
 };
 use swc_core::ecma::utils::ExprExt;
 use swc_ecma_codegen::text_writer::JsWriter;
@@ -1724,6 +1724,16 @@ where
         let mut prop_value = evaluated.value;
         let updated_meta = evaluated.meta;
 
+        if std::env::var("COMPILED_TRACE_PROP_EVAL").is_ok() {
+          eprintln!(
+            "[compiled][prop-eval] key={} before={} after={} span={:?}",
+            key,
+            expression_type(key_value.value.as_ref()),
+            expression_type(&prop_value),
+            key_value.value.span()
+          );
+        }
+
         callback_if_file_included(meta, &updated_meta);
 
         if let Expr::Lit(Lit::Str(str_lit)) = &prop_value {
@@ -1879,7 +1889,198 @@ where
           continue;
         }
 
-        if let Expr::Arrow(arrow) = &mut prop_value {
+        if let Expr::Arrow(mut arrow) = prop_value.clone() {
+          if std::env::var("COMPILED_TRACE_ARROW").is_ok() {
+            eprintln!(
+              "[compiled][arrow] key={} params={} entry",
+              key,
+              arrow.params.len()
+            );
+          }
+          if std::env::var("COMPILED_TRACE_ARROW").is_ok() && key.starts_with('&') {
+            let body_expr: Expr = match arrow.body.as_ref() {
+              swc_core::ecma::ast::BlockStmtOrExpr::BlockStmt(_) => Expr::Ident(Ident::new(
+                "block".into(),
+                DUMMY_SP,
+                SyntaxContext::empty(),
+              )),
+              swc_core::ecma::ast::BlockStmtOrExpr::Expr(expr) => (**expr).clone(),
+            };
+            eprintln!(
+              "[compiled][arrow] key={} params={} body_kind={}",
+              key,
+              arrow.params.len(),
+              expression_type(&body_expr)
+            );
+          }
+
+          // If the function returns a literal early (e.g., an if/return block), mirror
+          // Babel by treating the property as static using the first literal return.
+          fn literal_from_stmt(stmt: &Stmt) -> Option<Expr> {
+            match stmt {
+              Stmt::Return(ReturnStmt { arg: Some(arg), .. }) => match arg.as_ref() {
+                Expr::Lit(_) => Some((**arg).clone()),
+                Expr::Tpl(tpl) if tpl.exprs.is_empty() => Some((**arg).clone()),
+                _ => None,
+              },
+              Stmt::Block(block) => {
+                for inner in &block.stmts {
+                  if let Some(found) = literal_from_stmt(inner) {
+                    return Some(found);
+                  }
+                }
+                None
+              }
+              Stmt::If(if_stmt) => {
+                if let Some(found) = literal_from_stmt(&*if_stmt.cons) {
+                  return Some(found);
+                }
+                if let Some(alt) = &if_stmt.alt {
+                  return literal_from_stmt(alt);
+                }
+                None
+              }
+              _ => None,
+            }
+          }
+
+          fn literal_return_value(arrow: &ArrowExpr) -> Option<Expr> {
+            match arrow.body.as_ref() {
+              BlockStmtOrExpr::BlockStmt(block) => {
+                for stmt in &block.stmts {
+                  if let Some(found) = literal_from_stmt(stmt) {
+                    return Some(found);
+                  }
+                }
+                None
+              }
+              BlockStmtOrExpr::Expr(expr) => match expr.as_ref() {
+                Expr::Lit(_) => Some((**expr).clone()),
+                Expr::Tpl(tpl) if tpl.exprs.is_empty() => Some((**expr).clone()),
+                _ => None,
+              },
+            }
+          }
+
+          fn literal_return_from_function(expr: &Expr, meta: &Metadata) -> Option<Expr> {
+            match expr {
+              Expr::Arrow(arrow) => literal_return_value(arrow),
+              Expr::Fn(fn_expr) => {
+                if let Some(body) = &fn_expr.function.body {
+                  for stmt in &body.stmts {
+                    if let Stmt::Return(ReturnStmt { arg: Some(arg), .. }) = stmt {
+                      match arg.as_ref() {
+                        Expr::Lit(_) => return Some((**arg).clone()),
+                        Expr::Tpl(tpl) if tpl.exprs.is_empty() => return Some((**arg).clone()),
+                        _ => {}
+                      }
+                    }
+                  }
+                }
+                None
+              }
+              Expr::Ident(ident) => {
+                resolve_binding(ident.sym.as_ref(), meta.clone(), evaluate_expression).and_then(
+                  |binding| {
+                    binding.node.as_ref().and_then(|node| {
+                      let lit = literal_return_from_function(node, meta);
+                      if let Some(ref value) = lit {
+                        if std::env::var("COMPILED_TRACE_ARROW").is_ok() {
+                          eprintln!(
+                            "[compiled][literal-return] ident={} using bound function lit_kind={}",
+                            ident.sym,
+                            expression_type(value)
+                          );
+                        }
+                      }
+                      lit
+                    })
+                  },
+                )
+              }
+              _ => None,
+            }
+          }
+
+          let literal_return = literal_return_value(&arrow);
+
+          if literal_return.is_none() {
+            if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+              if let Expr::Call(call) = body.as_ref() {
+                if let Callee::Expr(callee_expr) = &call.callee {
+                  if let Expr::Ident(ident) = callee_expr.as_ref() {
+                    if let Some(binding) =
+                      resolve_binding(ident.sym.as_ref(), updated_meta.clone(), evaluate_expression)
+                    {
+                      if let Some(node) = binding.node.as_ref() {
+                        if let Some(lit) =
+                          literal_return_from_function(node, &binding.meta)
+                        {
+                          if std::env::var("COMPILED_TRACE_ARROW").is_ok() {
+                            eprintln!(
+                              "[compiled][literal-return] via binding ident={} lit_kind={}",
+                              ident.sym,
+                              expression_type(&lit)
+                            );
+                          }
+                          prop_value = lit;
+                        }
+                      }
+                    }
+                  }
+                  if let Some(lit) = literal_return_from_function(callee_expr.as_ref(), &updated_meta) {
+                    if std::env::var("COMPILED_TRACE_ARROW").is_ok() {
+                      eprintln!(
+                        "[compiled][literal-return] direct callee kind={} lit_kind={}",
+                        expression_type(callee_expr.as_ref()),
+                        expression_type(&lit)
+                      );
+                    }
+                    prop_value = lit;
+                  }
+                }
+              }
+            }
+          }
+
+          // If the arrow directly returns an object expression, mirror Babel by treating it
+          // as a nested rule (keeping dynamic values as runtime variables) instead of
+          // serializing the selector as a property name.
+          if let BlockStmtOrExpr::Expr(body) = arrow.body.as_ref() {
+            let mut inner = body.as_ref();
+            while let Expr::Paren(paren) = inner {
+              inner = &paren.expr;
+            }
+            if let Expr::Object(object) = inner {
+              let result = build_css_internal(&Expr::Object(object.clone()), &updated_meta);
+              let mapped = to_css_rule(&key, &result);
+              css.extend(mapped.css);
+              variables.extend(mapped.variables);
+              continue;
+            }
+          }
+
+          if let Some(lit) = literal_return {
+            prop_value = lit;
+          }
+
+          if let Expr::Lit(Lit::Str(str_lit)) = &prop_value {
+            css.push(CssItem::unconditional(format!(
+              "{}: {};",
+              css_property_name(&key),
+              str_lit.value.as_ref()
+            )));
+            continue;
+          }
+
+          if let Expr::Lit(Lit::Num(num_lit)) = &prop_value {
+            css.push(CssItem::unconditional(format!(
+              "{}: {};",
+              css_property_name(&key),
+              add_unit_if_needed(&key, CssValue::Number(num_lit.value))
+            )));
+            continue;
+          }
           enum TemplateInfo {
             Direct {
               span: swc_core::common::Span,

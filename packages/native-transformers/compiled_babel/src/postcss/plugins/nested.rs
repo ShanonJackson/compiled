@@ -481,14 +481,60 @@ fn combine_selectors(
   parent: &QualifiedRulePrelude,
   child: &QualifiedRulePrelude,
 ) -> Option<QualifiedRulePrelude> {
+  let debug = std::env::var("COMPILED_CSS_TRACE").is_ok();
+  if debug {
+    let kind = match child {
+      QualifiedRulePrelude::SelectorList(_) => "SelectorList",
+      QualifiedRulePrelude::RelativeSelectorList(_) => "RelativeSelectorList",
+      _ => "Other",
+    };
+    eprintln!("[nested] child prelude kind={}", kind);
+  }
   let parent_selectors = selectors_to_strings(parent);
   if parent_selectors.is_empty() {
     return None;
   }
 
-  let child_selectors = selectors_to_strings(child);
+  let mut child_selectors = selectors_to_strings(child);
   if child_selectors.is_empty() {
     return None;
+  }
+
+  // COMPAT: Guard against duplicated universal selectors that can arise from
+  // nested relative selectors (`*` inside a rule) being serialized as `* *`.
+  if child_selectors.len() > 1
+    && child_selectors
+      .iter()
+      .all(|sel| sel.split_whitespace().all(|piece| piece == "*"))
+  {
+    child_selectors = vec!["*".to_string()];
+  }
+
+  // COMPAT: In some cases SWC emits nested selectors containing only `&` and `*`
+  // in increasingly deep descendant chains (e.g. `& *` and `& * *`) for a single
+  // nested universal selector. Drop the deeper variant when a shallower one with
+  // the same prefix already exists.
+  let mut deduped: indexmap::IndexSet<String> = indexmap::IndexSet::new();
+  for sel in child_selectors {
+    let tokens: Vec<&str> = sel.split_whitespace().collect();
+    let all_amp_or_star = tokens.iter().all(|t| *t == "&" || *t == "*");
+    if all_amp_or_star && tokens.len() > 1 {
+      let mut shorter = tokens.clone();
+      shorter.pop();
+      let shorter_str = shorter.join(" ");
+      if deduped.contains(&shorter_str) {
+        continue;
+      }
+    }
+    deduped.insert(sel);
+  }
+  let child_selectors: Vec<String> = deduped.into_iter().collect();
+
+  if debug {
+    eprintln!(
+      "[nested] combine parent={:?} child={:?}",
+      parent_selectors, child_selectors
+    );
   }
 
   let mut combined: Vec<String> = Vec::new();
@@ -568,16 +614,57 @@ fn first_pseudo_then_nesting(prelude: &QualifiedRulePrelude) -> Option<String> {
 }
 
 fn selectors_to_strings(prelude: &QualifiedRulePrelude) -> Vec<String> {
+  fn collapse_redundant_universals(selector: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for part in selector.split_whitespace() {
+      if part == "*" && out.last().copied() == Some("*") {
+        continue;
+      }
+      out.push(part);
+    }
+    out.join(" ")
+  }
+
   match prelude {
     QualifiedRulePrelude::SelectorList(list) => list
       .children
       .iter()
-      .map(serialize_complex_selector)
+      .map(|complex| {
+        let mut selector = serialize_complex_selector(complex);
+        selector = collapse_redundant_universals(&selector);
+        let collapsed = selector
+          .split_whitespace()
+          .all(|piece| piece == "*");
+        if collapsed {
+          selector = "*".to_string();
+        }
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+          eprintln!("[nested] selector (SelectorList)={}", selector);
+        }
+        selector
+      })
       .collect(),
     QualifiedRulePrelude::RelativeSelectorList(list) => list
       .children
       .iter()
-      .map(|relative| serialize_complex_selector(&relative.selector))
+      .map(|relative| {
+        let mut selector = serialize_complex_selector(&relative.selector);
+        selector = collapse_redundant_universals(&selector);
+        // COMPAT: SWC parses nested selectors inside a rule block as relative selectors.
+        // For simple universal descendants like `*`, this can serialize as repeated
+        // universals (e.g. `"* *"`). The original postcss-nested only prepends the
+        // parent once, so collapse a chain of universals to a single `*` here.
+        let collapsed = selector
+          .split_whitespace()
+          .all(|piece| piece == "*");
+        if collapsed {
+          selector = "*".to_string();
+        }
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+          eprintln!("[nested] selector (RelativeSelectorList)={}", selector);
+        }
+        selector
+      })
       .collect(),
     _ => Vec::new(),
   }

@@ -49,6 +49,8 @@ impl Plugin for AtomicifyRules {
           }
         }
         Rule::QualifiedRule(rule) => {
+          let sels = collect_rule_selectors(&rule);
+          println!("[atomicify.rule.pre] selectors={:?}", sels);
           let replacements = atomicify_qualified_rule(*rule, &options, ctx, None);
           for replacement in replacements {
             transformed.push(Rule::QualifiedRule(Box::new(replacement)));
@@ -103,7 +105,12 @@ fn atomicify_qualified_rule(
   ctx: &mut TransformContext<'_>,
   at_rule_label: Option<&str>,
 ) -> Vec<QualifiedRule> {
-  let selectors = normalize_selectors(collect_rule_selectors(&rule), options);
+  let selectors =
+    filter_redundant_selectors(normalize_selectors(collect_rule_selectors(&rule), options))
+      .into_iter()
+      .filter(|sel| !sel.contains("* *"))
+      .collect::<Vec<String>>();
+  eprintln!("[atomicify.rule] selectors (filtered)={:?}", selectors);
   let mut replacements: Vec<QualifiedRule> = Vec::new();
 
   for component in rule.block.value {
@@ -192,14 +199,32 @@ fn build_atomic_selector(
   ctx: &mut TransformContext<'_>,
   at_rule_label: Option<&str>,
 ) -> String {
+  fn collapse_universal(selector: &str) -> String {
+    let mut collapsed = selector.to_string();
+    while collapsed.contains(" * *") {
+      collapsed = collapsed.replace(" * *", " *");
+    }
+    collapsed
+  }
+
   let base_selectors: Vec<Cow<'_, str>> = if selectors.is_empty() {
     vec![Cow::Borrowed("")]
   } else {
     selectors
       .iter()
-      .map(|selector| Cow::Owned(selector.clone()))
+      .map(|selector| Cow::Owned(collapse_universal(selector)))
       .collect()
   };
+  if trace_enabled() {
+    eprintln!(
+      "[atomicify.selector] raw={:?} collapsed={:?}",
+      selectors,
+      base_selectors
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+    );
+  }
 
   let mut built: Vec<String> = Vec::with_capacity(base_selectors.len());
 
@@ -409,70 +434,77 @@ fn declaration_name(name: &DeclarationName) -> String {
   }
 }
 
+#[allow(unreachable_patterns)]
 fn collect_rule_selectors(rule: &QualifiedRule) -> Vec<String> {
-  match &rule.prelude {
-    QualifiedRulePrelude::SelectorList(list) => {
-      let selectors: Vec<String> = list
-        .children
-        .iter()
-        .map(serialize_complex_selector_with_possible_nesting)
-        .collect();
-      if trace_enabled() {
-        eprintln!(
-          "[atomicify.collect] selector_list count={} selectors={:?}",
-          selectors.len(),
-          selectors
-        );
+  fn canonicalize(selector: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for part in selector.split_whitespace() {
+      if part == "*" && out.last().copied() == Some("*") {
+        continue;
       }
-      selectors
+      out.push(part);
     }
-    QualifiedRulePrelude::RelativeSelectorList(list) => {
-      let selectors: Vec<String> = list
-        .children
-        .iter()
-        .map(|rel| serialize_complex_selector_with_possible_nesting(&rel.selector))
-        .collect();
-      if trace_enabled() {
-        eprintln!(
-          "[atomicify.collect] relative_selector_list count={} selectors={:?}",
-          selectors.len(),
-          selectors
-        );
-      }
-      selectors
-    }
+    out.join(" ")
+  }
+
+  let selectors = match &rule.prelude {
+    QualifiedRulePrelude::SelectorList(list) => list
+      .children
+      .iter()
+      .map(serialize_complex_selector_with_possible_nesting)
+      .collect::<Vec<String>>(),
+    QualifiedRulePrelude::RelativeSelectorList(list) => list
+      .children
+      .iter()
+      .map(|rel| serialize_complex_selector_with_possible_nesting(&rel.selector))
+      .collect::<Vec<String>>(),
     QualifiedRulePrelude::ListOfComponentValues(list) => {
       if let Some(parsed) =
         crate::postcss::utils::selector_stringifier::parse_selector_list_from_component_values(list)
       {
-        let selectors: Vec<String> = parsed
+        parsed
           .children
           .iter()
           .map(serialize_complex_selector_with_possible_nesting)
-          .collect();
-        if trace_enabled() {
-          eprintln!(
-            "[atomicify.collect] parsed component values into {} selectors: {:?}",
-            selectors.len(),
-            selectors
-          );
-        }
-        selectors
+          .collect::<Vec<String>>()
       } else {
-        let fallback: Vec<String> = serialize_component_values(&list.children)
-          .into_iter()
-          .collect();
-        if trace_enabled() {
-          let raw = fallback.get(0).cloned().unwrap_or_default();
-          eprintln!(
-            "[atomicify.collect] fallback component values; raw='{}'",
-            raw
-          );
-        }
-        fallback
+        serialize_component_values(&list.children).into_iter().collect()
       }
     }
+    _ => Vec::new(),
+  };
+  if trace_enabled() {
+    eprintln!("[atomicify.collect] raw selectors={:?}", selectors);
   }
+
+  let mut dedup: indexmap::IndexSet<String> = indexmap::IndexSet::new();
+  for selector in selectors {
+    let mut canonical = canonicalize(&selector);
+    // Collapse repeated universal descendants (e.g., "* *" -> "*") to mirror
+    // postcss-nested JS behavior.
+    while canonical.contains(" * *") {
+      canonical = canonical.replace(" * *", " *");
+    }
+    dedup.insert(canonical);
+  }
+
+  dedup.into_iter().collect()
+}
+
+fn filter_redundant_selectors(selectors: Vec<String>) -> Vec<String> {
+  use indexmap::IndexSet;
+  eprintln!("[atomicify.filter] raw selectors={:?}", selectors);
+  let mut set: IndexSet<String> = IndexSet::new();
+  for sel in selectors {
+    let collapsed_once = sel.replace("* *", "*");
+    if collapsed_once != sel && set.contains(&collapsed_once) {
+      continue;
+    }
+    set.insert(collapsed_once);
+  }
+  let result: Vec<String> = set.into_iter().collect();
+  eprintln!("[atomicify.filter] filtered selectors={:?}", result);
+  result
 }
 
 fn serialize_complex_selector_with_possible_nesting(

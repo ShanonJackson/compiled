@@ -652,6 +652,14 @@ pub fn build_styled_component(tag: Tag, css_output: CssOutput, meta: &Metadata) 
   let (unconditional_css, conditional_items) = serialize_css_items(&css_output.css);
   let (options, compression_map) = create_transform_css_options(meta);
 
+  if std::env::var("COMPILED_TRACE_TRANSFORM_CSS").is_ok() {
+    eprintln!(
+      "[compiled][transform-css] unconditional_css=`{}` options={:?}",
+      unconditional_css.trim(),
+      options
+    );
+  }
+
   let css_result =
     transform_css(&unconditional_css, options.clone()).unwrap_or_else(|err| panic!("{err}"));
 

@@ -15,6 +15,16 @@ pub fn traverse_member_access_path(
   call_arguments: Option<&[ExprOrSpread]>,
   evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
+  if std::env::var("COMPILED_TRACE_MEMBER_PATH").is_ok() {
+    let path: Vec<String> = access_path.iter().map(|id| id.sym.to_string()).collect();
+    eprintln!(
+      "[compiled][member-path] expr={} access_path={:?} span={:?}",
+      expression_name,
+      path,
+      member_expression.span
+    );
+  }
+
   let result = resolve_expression_in_member(
     expression,
     meta,

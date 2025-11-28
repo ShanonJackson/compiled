@@ -1084,6 +1084,13 @@ fn extract_stylesheets_plugin(
     for p in parents {
       for c in &child_parts {
         let trimmed = c.trim();
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+          eprintln!("[engine.combine] parent='{}' child='{}'", p, trimmed);
+        }
+        if trimmed == "*" && p.trim() == "*" {
+          out.push("*".to_string());
+          continue;
+        }
         if trimmed.contains('&') {
           out.push(trimmed.replace('&', &p));
         } else if p == "&" {
@@ -1427,6 +1434,13 @@ fn atomicify_rules_plugin(
     for p in parents {
       for c in &child_parts {
         let trimmed = c.trim();
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+          eprintln!("[engine.combine] parent='{}' child='{}'", p, trimmed);
+        }
+        if trimmed == "*" && p.trim() == "*" {
+          out.push("*".to_string());
+          continue;
+        }
         if trimmed.contains('&') {
           out.push(trimmed.replace('&', &p));
         } else if p == "&" {
@@ -1437,6 +1451,9 @@ fn atomicify_rules_plugin(
           out.push(format!("{} {}", p, trimmed));
         }
       }
+    }
+    if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+      eprintln!("[engine.combine] result={:?}", out);
     }
     out
   }
@@ -1571,6 +1588,13 @@ fn atomicify_rules_plugin(
   }
 
   fn process_rule(rule: &PcRule, ctx: &mut Ctx) {
+    if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+      eprintln!(
+        "[engine.process_rule] selectors={:?} rule.selector()='{}'",
+        ctx.selectors,
+        rule.selector()
+      );
+    }
     // Do not emit atomic rules when nested under ignored at-rules like @property.
     if ctx.at_chain.iter().any(|(n, _)| {
       matches!(
@@ -1754,10 +1778,11 @@ fn atomicify_rules_plugin(
           prefixed_decl_entries(autoprefixer_ref, &prop, &normalized_value, has_important);
         let decls = serialize_decl_entries(&prefixed_entries);
 
-        let mut normalized_list: Vec<String> =
-          selectors.iter().map(|s| normalized_selector(s)).collect();
-        normalized_list.sort();
-        for norm in normalized_list {
+        let mut normalized_list: indexmap::IndexSet<String> = selectors
+          .iter()
+          .map(|s| normalized_selector(s))
+          .collect();
+        for norm in normalized_list.drain(..) {
           let mut group_seed = String::new();
           if let Some(prefix) = &opts.class_hash_prefix {
             group_seed.push_str(prefix);
@@ -1837,6 +1862,12 @@ fn atomicify_rules_plugin(
           .cloned()
           .unwrap_or_else(|| vec!["&".to_string()]);
         let mut raw_selector = rule.selector();
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+          eprintln!(
+            "[engine.rule_filter] parent={:?} raw_selector='{}'",
+            parent, raw_selector
+          );
+        }
         if let Some(ph) = &opts.declaration_placeholder {
           if raw_selector.contains(ph) {
             let cleaned = raw_selector.replace(ph, "").trim().to_string();

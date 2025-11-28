@@ -10,7 +10,15 @@ const monorepoRoot = path.resolve(repoRoot, '..', '..', '..');
 const monorepoNodeModules = path.join(monorepoRoot, 'node_modules');
 process.chdir(repoRoot);
 
-const babel = require('@babel/core');
+// Toggle to resolve Babel/Compiled plugins from Jira workspace to mirror collector versions.
+const USE_JIRA_COMPILED = false;
+const jiraRoot = path.resolve(monorepoRoot, 'jira');
+const jiraNodeModules = path.join(jiraRoot, 'node_modules');
+const monorepoBabel = require('@babel/core');
+const jiraBabel = require(path.join(jiraNodeModules, '@babel/core'));
+const babel = USE_JIRA_COMPILED ? jiraBabel : monorepoBabel;
+const resolveFromJira = (id) =>
+  USE_JIRA_COMPILED ? require.resolve(id, { paths: [jiraNodeModules] }) : require.resolve(id);
 
 const fixtureRoot = path.join(
   repoRoot,
@@ -32,13 +40,6 @@ const BABEL_OPTIONS = {
   sourceMaps: false,
   ast: false,
   caller: { name: 'compiled-native-transformers-fixtures' },
-  plugins: [
-    [
-      require.resolve('@compiled/babel-plugin'),
-      { cache: false, optimizeCss: true, importReact: true, extract: true },
-    ],
-    [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
-  ],
 };
 
 function splitTopLevelSegments(body) {
@@ -114,40 +115,6 @@ function formatWithPrettierOrReturn(code, parser = 'babel-ts') {
   }
   // Formatting is intentionally skipped to avoid Prettier parser/plugin crashes on generated code.
   return code;
-  try {
-    const prettier = require('prettier');
-    const format = (parserName) =>
-      prettier.format(code, {
-        parser: parserName,
-        useTabs: true,
-        tabWidth: 2,
-        singleQuote: false,
-        trailingComma: 'es5',
-        printWidth: 100,
-      });
-
-    try {
-      const output = format(parser);
-      if (output && typeof output.then === 'function') {
-        return code;
-      }
-      return output;
-    } catch (_primaryErr) {
-      // Fallback to plain babel parser if TS/JSX parse fails.
-      try {
-        const fallback = format('babel');
-        if (fallback && typeof fallback.then === 'function') {
-          return code;
-        }
-        return fallback;
-      } catch (_secondaryErr) {
-        return code;
-      }
-    }
-  } catch (_err) {
-    // If prettier itself blows up (e.g. plugin mismatch), return unformatted code.
-    return code;
-  }
 }
 
 function loadTokensPlugin() {
@@ -242,7 +209,6 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   const t0 = Date.now();
   const cfg = await readFixtureConfig(fixtureDir);
   const tokenized = applyTokensPrepass(inputCode, inputPath);
-  const plugins = [];
   const compiledOptions = {
     cache: false,
     optimizeCss: true,
@@ -257,9 +223,8 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
     ...BABEL_OPTIONS,
     filename: inputPath,
     plugins: [
-      ...plugins,
-      [require.resolve('@compiled/babel-plugin'), compiledOptions],
-      [require.resolve('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
+      [resolveFromJira('@compiled/babel-plugin'), compiledOptions],
+      [resolveFromJira('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
     ],
   });
 

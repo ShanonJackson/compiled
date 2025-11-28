@@ -16,6 +16,7 @@ use compiled_strip_runtime::{transform as strip_transform, TransformConfig as St
 struct Request {
   filename: String,
   source: String,
+  extract: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -54,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cache: Some(CacheBehavior::Enabled(false)),
     import_react: Some(true),
     optimize_css: Some(true),
-    extract: Some(true),
+    extract: Some(request.extract.unwrap_or(true)),
     ..CompiledOptions::default()
   };
 

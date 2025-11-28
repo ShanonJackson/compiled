@@ -272,6 +272,9 @@ impl StripRuntimeTransform {
       }
     }
 
+    // COMPAT: Deduplicate redundant universal descendant selectors (e.g., " * *")
+    // that can arise from nested universal rules. Babel's postcss pipeline emits
+    // only a single level of universal descendant for this pattern.
     let reported = self.config.filename.as_deref().unwrap_or("undefined");
     if self.config.filename.is_none() || reported.is_empty() {
       panic!(
@@ -502,6 +505,27 @@ impl StripRuntimeTransform {
 
 impl VisitMut for StripRuntimeTransform {
   noop_visit_mut_type!();
+
+  fn visit_mut_jsx_fragment(&mut self, fragment: &mut swc_core::ecma::ast::JSXFragment) {
+    fragment.visit_mut_children_with(self);
+
+    // Unwrap any CC children inside fragments (common for return <>...).
+    for child in &mut fragment.children {
+      if let swc_core::ecma::ast::JSXElementChild::JSXElement(child_el) = child {
+        let is_cc = matches!(
+            child_el.opening.name,
+            swc_core::ecma::ast::JSXElementName::Ident(ref ident) if ident.sym.as_ref() == "CC"
+        );
+        if is_cc {
+          if let Some(replacement) = self.replace_cc_jsx(child_el) {
+            if let Some(new_child) = Self::expr_to_jsx_child(replacement) {
+              *child = new_child;
+            }
+          }
+        }
+      }
+    }
+  }
 
   fn visit_mut_expr(&mut self, expr: &mut Expr) {
     expr.visit_mut_children_with(self);

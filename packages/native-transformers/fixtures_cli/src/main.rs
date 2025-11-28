@@ -87,6 +87,7 @@ fn main() {
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] entry");
   }
+  let debug_rules = std::env::var("COMPILED_CLI_DEBUG_STYLE_RULES").is_ok();
   let mut args = env::args().skip(1);
   let input_path = args.next().expect("usage: fixtures_cli <input_path>");
 
@@ -137,6 +138,15 @@ fn main() {
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] compiled done");
   }
+  if debug_rules {
+    let compiled_code = print_program(&cm, &out1.program);
+    eprintln!("[cli] compiled code:\n{}", compiled_code);
+    eprintln!(
+      "[cli] compiled metadata: {} style_rules: {:?}",
+      out1.metadata.style_rules.len(),
+      out1.metadata.style_rules
+    );
+  }
 
   // Pass through strip-runtime
   let strip_cfg = StripConfig {
@@ -153,6 +163,15 @@ fn main() {
   let out2 = strip_transform(out1.program, strip_cfg);
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] strip done");
+  }
+  if debug_rules {
+    let stripped_code = print_program(&cm, &out2.program);
+    eprintln!("[cli] strip code:\n{}", stripped_code);
+    eprintln!(
+      "[cli] strip metadata: {} style_rules: {:?}",
+      out2.metadata.style_rules.len(),
+      out2.metadata.style_rules
+    );
   }
 
   // Prefer strip-runtime style rules if available, else compiled

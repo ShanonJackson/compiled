@@ -317,10 +317,27 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
         updated_meta = pair.meta;
       }
     }
-    Expr::Fn(_) | Expr::Arrow(_) => {
-      let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
-      evaluated_value = Some(pair.value);
-      updated_meta = pair.meta;
+    Expr::Fn(fn_expr) => {
+      // Mirror Babel: do not execute functions that accept parameters; leave them dynamic.
+      let has_params = !fn_expr.function.params.is_empty();
+      if !has_params {
+        let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
+        evaluated_value = Some(pair.value);
+        updated_meta = pair.meta;
+      } else {
+        evaluated_value = Some(target_expression.clone());
+      }
+    }
+    Expr::Arrow(arrow) => {
+      // Mirror Babel: only inline parameterless arrows; otherwise keep as-is for runtime.
+      let has_params = !arrow.params.is_empty();
+      if !has_params {
+        let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
+        evaluated_value = Some(pair.value);
+        updated_meta = pair.meta;
+      } else {
+        evaluated_value = Some(target_expression.clone());
+      }
     }
     Expr::Call(call) => {
       let pair = traverse_call_expression(call, updated_meta.clone(), evaluate_expression);

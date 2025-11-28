@@ -324,6 +324,19 @@ fn record_style_rules(sheets: &[String], meta: &Metadata) {
     if !sheet.contains('{') {
       continue;
     }
+    // COMPAT: Drop redundant universal descendants (e.g., ".class * *") when a
+    // shorter equivalent (".class *") has already been recorded for the same rule.
+    if let Some(open) = sheet.find('{') {
+      let selector = &sheet[..open];
+      let tokens: Vec<&str> = selector.split_whitespace().collect();
+      let simple_tokens = tokens
+        .iter()
+        .all(|t| t.starts_with('.') || *t == "*" || *t == "&");
+      if simple_tokens && selector.contains(" * *") {
+        continue;
+      }
+    }
+
     let normalized =
       crate::postcss::plugins::extract_stylesheets::normalize_block_value_spacing(sheet);
     state.style_rules.insert(normalized);
@@ -474,6 +487,14 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
       }
       let (options, compression_map) = create_transform_css_options(meta);
       let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
+      if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+        eprintln!("[transform-css-item] sheets raw={:?}", css_result.sheets);
+        eprintln!(
+          "[transform-css-item] class_names raw={:?}",
+          css_result.class_names
+        );
+      }
+
       let ordered = css_result.class_names.clone();
       let compressed = compress_class_names_for_runtime(&ordered, compression_map.as_ref());
       let class_name = compressed.join(" ");
