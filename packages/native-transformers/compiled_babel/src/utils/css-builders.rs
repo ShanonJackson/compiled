@@ -1512,21 +1512,26 @@ where
       CssItem::Unconditional(u) => u.css.clone(),
       CssItem::Logical(l) => l.css.clone(),
       CssItem::Sheet(s) => s.css.clone(),
+      // Mirror Babel: cssMap branches are considered meaningful even when the backing css
+      // string is empty, so don't let them be folded away.
       CssItem::Map(m) => m.css.clone(),
     }
   }
 
-  let is_effectively_empty = |item: &CssItem| {
-    let css = css_text(item);
-    let trimmed = css.trim();
-    if trimmed.is_empty() {
-      return true;
+  let is_effectively_empty = |item: &CssItem| match item {
+    CssItem::Map(_) => false,
+    _ => {
+      let css = css_text(item);
+      let trimmed = css.trim();
+      if trimmed.is_empty() {
+        return true;
+      }
+      if let Some(idx) = trimmed.find(':') {
+        let value = trimmed[idx + 1..].trim().trim_end_matches(';').trim();
+        return value.is_empty();
+      }
+      false
     }
-    if let Some(idx) = trimmed.find(':') {
-      let value = trimmed[idx + 1..].trim().trim_end_matches(';').trim();
-      return value.is_empty();
-    }
-    false
   };
 
   let mut consequent_css = process_branch(&node.cons, meta, build_css, &mut variables);

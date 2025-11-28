@@ -207,6 +207,17 @@ pub fn visit_css_prop_on_element(element: &mut JSXElement, meta: &Metadata) {
       });
 
   let Some(index) = css_prop_index else {
+    if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+      use swc_core::ecma::ast::JSXElementName;
+      let name = match &element.opening.name {
+        JSXElementName::Ident(id) => id.sym.as_ref().to_string(),
+        _ => String::from("<complex>"),
+      };
+      eprintln!(
+        "[css-prop:on-element] no css attribute on element name={} span={:?}",
+        name, element.opening.span
+      );
+    }
     return;
   };
 
@@ -229,6 +240,14 @@ pub fn visit_css_prop_on_element(element: &mut JSXElement, meta: &Metadata) {
 
   // Remove the css attribute regardless of whether CSS was produced
   element.opening.attrs.remove(index);
+
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    eprintln!(
+      "[css-prop:on-element] built css items={} span={:?}",
+      css_output.css.len(),
+      element.opening.span
+    );
+  }
 
   if css_output.css.is_empty() {
     return;

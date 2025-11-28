@@ -70,10 +70,8 @@ where
 
       let mut total_sheets: Vec<String> = Vec::new();
       let mut new_properties: Vec<PropOrSpread> = Vec::with_capacity(object_lit.props.len());
-      let previous_extract = meta.state().opts.extract;
       let initial_style_rules = meta.state().style_rules.clone();
       let initial_sheets = meta.state().sheets.clone();
-      meta.state_mut().opts.extract = Some(false);
 
       for property in &object_lit.props {
         error_if_not_valid_object_property(property, meta);
@@ -139,13 +137,22 @@ where
         new_properties.push(PropOrSpread::Prop(Box::new(new_prop)));
       }
 
+      if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!(
+          "[css-map] cached {} sheets for {} => {:?}",
+          total_sheets.len(),
+          binding_identifier.sym,
+          total_sheets
+        );
+      }
+
       meta
         .state_mut()
         .css_map
         .insert(binding_identifier.sym.to_string(), total_sheets);
       {
         let mut state = meta.state_mut();
-        state.opts.extract = previous_extract;
+        // Avoid surfacing style_rules/sheets from cssMap definitions; Babel leaves metadata empty.
         state.style_rules = initial_style_rules;
         state.sheets = initial_sheets;
       }

@@ -1883,18 +1883,18 @@ impl CompiledBabelTransform {
       visitor.insert_display_names(module);
     }
 
+    if has_css_map_import {
+      let metadata = Metadata::new(self.state());
+      let mut visitor = CssMapVisitor::new(metadata);
+      module.visit_mut_with(&mut visitor);
+    }
+
     if css_prop_enabled {
       let metadata = Metadata::new(self.state());
       if std::env::var("COMPILED_CLI_TRACE").is_ok() {
         eprintln!("[transform] CssPropVisitor active");
       }
       let mut visitor = CssPropVisitor::new(metadata);
-      module.visit_mut_with(&mut visitor);
-    }
-
-    if has_css_map_import {
-      let metadata = Metadata::new(self.state());
-      let mut visitor = CssMapVisitor::new(metadata);
       module.visit_mut_with(&mut visitor);
     }
 
@@ -2171,6 +2171,13 @@ impl VisitMut for CssPropVisitor {
     expr.visit_mut_children_with(self);
 
     if matches!(expr, Expr::JSXElement(_)) {
+      if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        let state = self.meta.state();
+        eprintln!(
+          "[css-prop] state css_map keys={:?}",
+          state.css_map.keys().collect::<Vec<&String>>()
+        );
+      }
       let meta = self
         .scoped_meta()
         .with_parent_expr(Some(expr))

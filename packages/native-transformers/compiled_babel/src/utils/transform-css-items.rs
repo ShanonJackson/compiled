@@ -372,8 +372,16 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
 
   match item {
     CssItem::Conditional(conditional) => {
-      let cons_empty = css_is_effectively_empty(&get_item_css(&conditional.consequent));
-      let alt_empty = css_is_effectively_empty(&get_item_css(&conditional.alternate));
+      let cons_empty = if matches!(&*conditional.consequent, CssItem::Map(_)) {
+        false
+      } else {
+        css_is_effectively_empty(&get_item_css(&conditional.consequent))
+      };
+      let alt_empty = if matches!(&*conditional.alternate, CssItem::Map(_)) {
+        false
+      } else {
+        css_is_effectively_empty(&get_item_css(&conditional.alternate))
+      };
       let conditional = conditional.clone();
       let consequent = if cons_empty {
         TransformCssItemResult::default()
@@ -474,6 +482,14 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
         .get(&map.name)
         .cloned()
         .unwrap_or_default();
+      if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!(
+          "[transform_css_item] map name={} sheets={} values={:?}",
+          map.name,
+          sheets.len(),
+          sheets
+        );
+      }
 
       TransformCssItemResult {
         sheets,
