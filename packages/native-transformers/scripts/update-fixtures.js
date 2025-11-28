@@ -19,6 +19,9 @@ const jiraBabel = require(path.join(jiraNodeModules, '@babel/core'));
 const babel = USE_JIRA_COMPILED ? jiraBabel : monorepoBabel;
 const resolveFromJira = (id) =>
   USE_JIRA_COMPILED ? require.resolve(id, { paths: [jiraNodeModules] }) : require.resolve(id);
+const jiraCompiledConfigPath = path.join(jiraRoot, '.compiledcssrc');
+let cachedCompiledConfig = null;
+let cachedTokensOptions = null;
 
 const fixtureRoot = path.join(
   repoRoot,
@@ -145,6 +148,45 @@ function loadTokensPlugin() {
   return null;
 }
 
+function loadCompiledConfig() {
+  if (cachedCompiledConfig !== null) {
+    return cachedCompiledConfig;
+  }
+  try {
+    const raw = fs.readFileSync(jiraCompiledConfigPath, 'utf8');
+    cachedCompiledConfig = JSON.parse(raw);
+  } catch (_e) {
+    cachedCompiledConfig = {};
+  }
+  return cachedCompiledConfig;
+}
+
+function getTokensPrepassOptions() {
+  if (cachedTokensOptions !== null) {
+    return cachedTokensOptions;
+  }
+  const config = loadCompiledConfig();
+  const plugins = Array.isArray(config.transformerBabelPlugins)
+    ? config.transformerBabelPlugins
+    : [];
+  let options = {};
+  for (const entry of plugins) {
+    if (entry === '@atlaskit/tokens/babel-plugin') {
+      options = {};
+      break;
+    }
+    if (Array.isArray(entry) && entry[0] === '@atlaskit/tokens/babel-plugin') {
+      const opts = entry[1];
+      if (opts && typeof opts === 'object') {
+        options = opts;
+      }
+      break;
+    }
+  }
+  cachedTokensOptions = { shouldInsertStyles: false, ...options };
+  return cachedTokensOptions;
+}
+
 function shouldPrepassTokens(inputCode) {
   return (
     inputCode.includes('@atlaskit/tokens') ||
@@ -172,7 +214,7 @@ function applyTokensPrepass(code, filename) {
         sourceType: 'module',
         plugins: ['typescript', 'jsx'],
       },
-      plugins: [[tokensPlugin]],
+      plugins: [[tokensPlugin, getTokensPrepassOptions()]],
       envName: 'test',
     });
     return (result && result.code) || code;
@@ -342,11 +384,7 @@ async function processFixture(name) {
 
   const startedAt = Date.now();
 
-  const babelOutputs = await generateBabelOutputs(
-    fixtureDir,
-    inputCode,
-    inputPath
-  );
+  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath, cfg);
   await writeFileIfChanged(path.join(fixtureDir, 'babel-out.jsx'), babelOutputs.code);
   await writeFileIfChanged(
     path.join(fixtureDir, 'babel-style-rules.json'),
