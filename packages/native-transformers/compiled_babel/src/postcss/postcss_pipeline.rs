@@ -16,6 +16,40 @@ use crate::postcss::plugins::vendor_autoprefixer::{AutoprefixerData, PrefixedDec
 use crate::postcss::utils::value_minifier::minify_value_whitespace;
 use std::sync::{Arc, Mutex};
 
+fn collapse_adjacent_ampersands(selector: &str) -> String {
+  let mut out = String::with_capacity(selector.len());
+  let mut chars = selector.chars().peekable();
+
+  while let Some(ch) = chars.next() {
+    if ch == '&' {
+      out.push('&');
+
+      let mut saw_ws = false;
+      while let Some(&next) = chars.peek() {
+        if next.is_whitespace() {
+          saw_ws = true;
+          chars.next();
+        } else {
+          break;
+        }
+      }
+
+      if let Some('&') = chars.peek() {
+        chars.next();
+        out.push('&');
+      } else if saw_ws {
+        out.push(' ');
+      }
+
+      continue;
+    }
+
+    out.push(ch);
+  }
+
+  out
+}
+
 #[cfg(feature = "postcss_engine")]
 #[derive(Clone, Default)]
 struct AtomicCollector {
@@ -927,55 +961,6 @@ fn sort_atomic_style_sheet_plugin() -> pc::BuiltPlugin {
     .build()
 }
 
-fn normalize_ampersand_combinators(selector: &str) -> String {
-  fn combinator_length(chars: &[char], start: usize) -> Option<usize> {
-    match chars.get(start) {
-      Some('>') | Some('+') | Some('~') => Some(1),
-      Some('|') if matches!(chars.get(start + 1), Some('|')) => Some(2),
-      _ => None,
-    }
-  }
-
-  fn needs_space_before_target(ch: Option<char>) -> bool {
-    matches!(ch, Some(c) if c.is_alphanumeric() || matches!(c, '-' | '_' | '['))
-  }
-
-  let chars: Vec<char> = selector.chars().collect();
-  let len = chars.len();
-  let mut out = String::with_capacity(selector.len());
-  let mut i = 0;
-  while i < len {
-    let ch = chars[i];
-    if ch == '&' {
-      out.push('&');
-      i += 1;
-      let mut saw_ws = false;
-      while i < len && chars[i].is_whitespace() {
-        saw_ws = true;
-        i += 1;
-      }
-      if let Some(len_comb) = combinator_length(&chars, i) {
-        for offset in 0..len_comb {
-          out.push(chars[i + offset]);
-        }
-        i += len_comb;
-        while i < len && chars[i].is_whitespace() {
-          i += 1;
-        }
-        continue;
-      }
-      if saw_ws && needs_space_before_target(chars.get(i).copied()) {
-        out.push(' ');
-      }
-      continue;
-    }
-    out.push(ch);
-    i += 1;
-  }
-
-  out
-}
-
 #[cfg(feature = "postcss_engine")]
 fn extract_stylesheets_plugin(
   collector: AtomicCollector,
@@ -1000,77 +985,16 @@ fn extract_stylesheets_plugin(
   }
 
   fn normalized_selector(selector: &str) -> String {
-    fn collapse_initial_combinator_whitespace(value: &str) -> String {
-      let mut chars = value.chars().peekable();
-      let mut result = String::new();
-
-      if let Some(first) = chars.next() {
-        result.push(first);
-        let mut skip_whitespace = matches!(first, '>' | '+' | '~');
-
-        if first == '|' {
-          if let Some(&next) = chars.peek() {
-            if next == '|' {
-              result.push(next);
-              chars.next();
-              skip_whitespace = true;
-            }
-          }
-        }
-
-        if skip_whitespace {
-          while let Some(&ch) = chars.peek() {
-            if ch.is_whitespace() {
-              chars.next();
-            } else {
-              break;
-            }
-          }
-        }
-
-        while let Some(ch) = chars.next() {
-          result.push(ch);
-        }
-      }
-
-      result
-    }
-
-    fn requires_ampersand_separator(selector: &str) -> bool {
-      match selector.chars().next() {
-        Some(ch)
-          if ch.is_alphanumeric()
-            || matches!(ch, '*' | '>' | '+' | '~' | '|')
-            || matches!(ch, '.' | '#' | '[') =>
-        {
-          true
-        }
-        Some(ch) if matches!(ch, '-' | '_') => true,
-        _ => false,
-      }
-    }
-
     let trimmed = selector.trim();
     if trimmed.is_empty() {
       return "&".to_string();
     }
 
     if trimmed.contains('&') {
-      if trimmed.starts_with(':') && !trimmed.starts_with('&') {
-        return normalize_ampersand_combinators(&format!("&{}", trimmed));
-      }
-      return normalize_ampersand_combinators(trimmed);
+      return collapse_adjacent_ampersands(trimmed);
     }
 
-    let selector_body = collapse_initial_combinator_whitespace(trimmed);
-
-    let separator = if requires_ampersand_separator(&selector_body) {
-      " "
-    } else {
-      ""
-    };
-
-    format!("&{}{}", separator, selector_body)
+    format!("& {}", trimmed)
   }
 
   fn combine_selectors(parent: &[String], child: &str) -> Vec<String> {
@@ -1459,77 +1383,16 @@ fn atomicify_rules_plugin(
   }
 
   fn normalized_selector(selector: &str) -> String {
-    fn collapse_initial_combinator_whitespace(value: &str) -> String {
-      let mut chars = value.chars().peekable();
-      let mut result = String::new();
-
-      if let Some(first) = chars.next() {
-        result.push(first);
-        let mut skip_whitespace = matches!(first, '>' | '+' | '~');
-
-        if first == '|' {
-          if let Some(&next) = chars.peek() {
-            if next == '|' {
-              result.push(next);
-              chars.next();
-              skip_whitespace = true;
-            }
-          }
-        }
-
-        if skip_whitespace {
-          while let Some(&ch) = chars.peek() {
-            if ch.is_whitespace() {
-              chars.next();
-            } else {
-              break;
-            }
-          }
-        }
-
-        while let Some(ch) = chars.next() {
-          result.push(ch);
-        }
-      }
-
-      result
-    }
-
-    fn requires_ampersand_separator(selector: &str) -> bool {
-      match selector.chars().next() {
-        Some(ch)
-          if ch.is_alphanumeric()
-            || matches!(ch, '*' | '>' | '+' | '~' | '|')
-            || matches!(ch, '.' | '#' | '[') =>
-        {
-          true
-        }
-        Some(ch) if matches!(ch, '-' | '_') => true,
-        _ => false,
-      }
-    }
-
     let trimmed = selector.trim();
     if trimmed.is_empty() {
       return "&".to_string();
     }
 
     if trimmed.contains('&') {
-      if trimmed.starts_with(':') && !trimmed.starts_with('&') {
-        return normalize_ampersand_combinators(&format!("&{}", trimmed));
-      }
-      return normalize_ampersand_combinators(trimmed);
+      return collapse_adjacent_ampersands(trimmed);
     }
 
-    let selector_body = collapse_initial_combinator_whitespace(trimmed);
-
-    let separator = if requires_ampersand_separator(&selector_body) {
-      " "
-    } else {
-      ""
-    };
-
-    format!("&{}{}", separator, selector_body)
+    format!("& {}", trimmed)
   }
 
   fn at_chain_label(at_chain: &[(String, String)]) -> String {
