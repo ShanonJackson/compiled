@@ -7,5 +7,11 @@
   "._1e0c1txw{display:flex}",
   "._kqswh2mm{position:relative}",
   "._bfhkhp5a{background-color:var(--ds-surface-raised,#fff)}",
-  "._16qszucj{box-shadow:var(--ds-shadow-raised,0 1px 1px #091e4240,0 0 1px #091e424f)}"
+  "._16qszucj{box-shadow:var(--ds-shadow-raised,0 1px 1px #091e4240,0 0 1px #091e424f)}",
+  "._2lx2vrvc{flex-direction:row}",
+  "._4cvr1h6o{align-items:center}",
+  "._1reo15vq{overflow-x:hidden}",
+  "._18m915vq{overflow-y:hidden}",
+  "._19bv1ejb{padding-left:var(--ds-space-300,24px)}",
+  "._19pk1b66{margin-top:var(--ds-space-050,4px)}"
 ]
