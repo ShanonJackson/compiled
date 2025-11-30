@@ -1,8 +1,10 @@
-use swc_core::common::DUMMY_SP;
+use swc_core::common::{input::StringInput, FileName, SourceMap, DUMMY_SP};
 use swc_core::css::ast::{
   CombinatorValue, ComplexSelector, ComplexSelectorChildren, ComponentValue, NestingSelector,
   QualifiedRule, QualifiedRulePrelude, Rule, SimpleBlock, Stylesheet, SubclassSelector,
 };
+use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
+use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
 use super::super::transform::{Plugin, TransformContext};
 
@@ -86,8 +88,56 @@ fn normalize_qualified_rule(rule: &mut QualifiedRule) {
 }
 
 fn normalize_complex_selector(complex: &mut ComplexSelector) {
-  if let Some(compound) = first_compound_selector(complex) {
-    if selector_starts_with_pseudo(compound) && compound.nesting_selector.is_none() {
+  let trace = std::env::var("COMPILED_CSS_TRACE").is_ok();
+  let original = serialize_selector(complex);
+  if trace {
+    eprintln!("[parent-orphaned] inspecting selector={}", original);
+  }
+  if original.starts_with(':') || original.starts_with("&:") {
+    // Fast path for top-level orphaned pseudos: insert nesting before each pseudo.
+    let rewritten = add_nesting_before_pseudos(&original);
+    if let Some(new_sel) = parse_selector(&rewritten) {
+      if trace {
+        eprintln!(
+          "[parent-orphaned] rewritten (fast) selector={} -> {}",
+          original,
+          serialize_selector(&new_sel)
+        );
+      }
+      *complex = new_sel;
+      return;
+    }
+  }
+  let mut should_rewrite = false;
+  {
+    if let Some(compound) = first_compound_selector(complex) {
+      if selector_starts_with_pseudo(compound) && compound.nesting_selector.is_none() {
+        should_rewrite = true;
+      }
+    }
+  }
+
+  if should_rewrite {
+    // Mirror JS parent-orphaned-pseudos: insert nesting before each pseudo in the
+    // orphaned selector, which results in selectors like "&:focus&::before".
+    if trace {
+      eprintln!(
+        "[parent-orphaned] candidate selector={}",
+        serialize_selector(complex)
+      );
+    }
+    if let Some(rewritten) = rewrite_orphaned_selector(complex) {
+      if trace {
+        eprintln!(
+          "[parent-orphaned] rewritten selector={}",
+          serialize_selector(&rewritten)
+        );
+      }
+      *complex = rewritten;
+      return;
+    }
+
+    if let Some(compound) = first_compound_selector(complex) {
       compound.nesting_selector = Some(NestingSelector { span: DUMMY_SP });
     }
   }
@@ -119,6 +169,88 @@ fn selector_starts_with_pseudo(compound: &swc_core::css::ast::CompoundSelector) 
     Some(SubclassSelector::PseudoClass(_) | SubclassSelector::PseudoElement(_)) => true,
     _ => false,
   }
+}
+
+/// Serialize a complex selector to a string.
+fn serialize_selector(complex: &ComplexSelector) -> String {
+  let mut output = String::new();
+  {
+    let wr = BasicCssWriter::new(&mut output, None, Default::default());
+    let mut gen = CodeGenerator::new(wr, CodegenConfig { minify: true });
+    gen.emit(complex).expect("write selector");
+  }
+  output
+}
+
+/// Parse a complex selector from a string.
+fn parse_selector(selector: &str) -> Option<ComplexSelector> {
+  let css = format!("{selector}{{}}");
+  let cm: std::sync::Arc<SourceMap> = Default::default();
+  let fm = cm.new_source_file(FileName::Custom("selector.css".into()).into(), css.into());
+  let mut errors = vec![];
+  let stylesheet = parse_string_input::<Stylesheet>(
+    StringInput::from(&*fm),
+    None,
+    ParserConfig::default(),
+    &mut errors,
+  )
+  .ok()?;
+  if !errors.is_empty() {
+    return None;
+  }
+  for rule in stylesheet.rules {
+    if let Rule::QualifiedRule(rule) = rule {
+      if let QualifiedRulePrelude::SelectorList(list) = rule.prelude {
+        if let Some(first) = list.children.into_iter().next() {
+          return Some(first);
+        }
+      }
+    }
+  }
+  None
+}
+
+/// Insert a nesting selector before each pseudo in an orphaned selector string.
+fn add_nesting_before_pseudos(selector: &str) -> String {
+  let mut out = String::with_capacity(selector.len() + 4);
+  let mut chars = selector.chars().peekable();
+  let mut _saw_pseudo = false;
+  while let Some(ch) = chars.next() {
+    if ch == ':' {
+      // Consume a run of ':' characters (handles ::before)
+      let mut colons = String::from(":");
+      while let Some(':') = chars.peek() {
+        colons.push(':');
+        chars.next();
+      }
+      if !selector.starts_with('&') {
+        out.push('&');
+      }
+      out.push_str(&colons);
+      _saw_pseudo = true;
+    } else {
+      out.push(ch);
+    }
+  }
+  out
+}
+
+/// Attempt to rewrite an orphaned selector (starts with pseudo, no nesting) to match
+/// JS behaviour by inserting a nesting selector before each pseudo component.
+fn rewrite_orphaned_selector(complex: &ComplexSelector) -> Option<ComplexSelector> {
+  let serialized = serialize_selector(complex);
+  if !(serialized.starts_with(':') || serialized.starts_with("&:")) {
+    return None;
+  }
+  if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+    eprintln!("[parent-orphaned] original selector='{}'", serialized);
+  }
+  // Insert nesting before each pseudo so `:focus::before` becomes `&:focus&::before`.
+  let rewritten = add_nesting_before_pseudos(&serialized);
+  if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+    eprintln!("[parent-orphaned] orphan selector serialized='{}' rewritten='{}'", serialized, rewritten);
+  }
+  parse_selector(&rewritten)
 }
 
 #[cfg(test)]

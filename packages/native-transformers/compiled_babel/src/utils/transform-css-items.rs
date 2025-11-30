@@ -501,6 +501,13 @@ fn transform_css_item(item: &CssItem, meta: &Metadata) -> TransformCssItemResult
       if std::env::var("COMPILED_CSS_TRACE").is_ok() {
         eprintln!("[swc][transform-css-item] css={}", css);
       }
+      if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+        if let Some(filename) = &meta.state().filename {
+          if filename.contains(&label) {
+            eprintln!("[css-debug] fixture={label} item_css=`{}`", css.trim());
+          }
+        }
+      }
       let (options, compression_map) = create_transform_css_options(meta);
       let css_result = transform_css(&css, options).unwrap_or_else(|err| panic!("{err}"));
       if std::env::var("COMPILED_CSS_TRACE").is_ok() {

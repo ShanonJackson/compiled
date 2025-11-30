@@ -551,10 +551,36 @@ fn combine_selectors(
         continue;
       }
 
-      // If child already has a nesting selector, keep it; substitution
-      // happens later in the pipeline.
       if trimmed.contains('&') {
-        combined.push(trimmed.to_string());
+        // Mirror postcss-nested selectors(): when child has nesting, replace each '&'
+        // with the parent selector without inserting combinators/spaces.
+        let mut out = String::new();
+        let mut parts = trimmed.split('&').peekable();
+        if let Some(first) = parts.next() {
+          out.push_str(first);
+        }
+        while let Some(_) = parts.peek() {
+          parts.next();
+          out.push_str(parent_selector);
+          if let Some(next) = parts.peek() {
+            out.push_str(next);
+          }
+        }
+        let mut cleaned = out.replace(" &", "&").replace("& ", "&");
+        // Collapse descendant gap when replacement produced ".hash:focus .hash:before"
+        if cleaned.contains(' ') {
+          let tokens: Vec<&str> = cleaned.split_whitespace().collect();
+          if tokens.len() == 2 {
+            let left = tokens[0];
+            let right = tokens[1];
+            let left_base = left.split(':').next().unwrap_or(left);
+            let right_base = right.split(':').next().unwrap_or(right);
+            if left_base == right_base {
+              cleaned = format!("{}{}", left, right);
+            }
+          }
+        }
+        combined.push(cleaned);
       } else {
         combined.push(format!("{parent_selector} {}", trimmed));
       }

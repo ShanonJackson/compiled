@@ -385,23 +385,62 @@ fn parent_orphaned_pseudos_plugin() -> pc::BuiltPlugin {
   use postcss::ast::nodes::as_rule;
 
   fn add_nesting(selector: &str) -> Option<String> {
+    if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+      eprintln!("[postcss-engine][parent-orphaned] selector_in='{}'", selector);
+    }
+    fn insert_nesting(body: &str) -> String {
+      // Insert '&' immediately before each pseudo group, keeping pseudos on the same
+      // compound (no descendant space). If the selector doesn't start with '&', also
+      // insert before the first pseudo.
+      let mut out = String::with_capacity(body.len() + 4);
+      let mut chars = body.chars().peekable();
+      let mut _saw_pseudo = false;
+      while let Some(ch) = chars.next() {
+        if ch == ':' {
+          let mut colons = String::from(":");
+          while let Some(':') = chars.peek() {
+            colons.push(':');
+            chars.next();
+          }
+          if !body.starts_with('&') {
+            out.push('&');
+          }
+          out.push_str(&colons);
+          _saw_pseudo = true;
+        } else {
+          out.push(ch);
+        }
+      }
+      out
+    }
+
     let parts = postcss::list::comma(selector);
     let mut changed = false;
     let mut updated: Vec<String> = Vec::with_capacity(parts.len());
     for part in parts {
       let trimmed = part.trim_start();
-      if trimmed.starts_with(':') {
+      if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+        eprintln!("[postcss-engine][parent-orphaned] raw part='{}'", part);
+      }
+      if trimmed.starts_with(':') || trimmed.starts_with("&:") {
         let offset = part
           .char_indices()
           .find(|(_, ch)| !ch.is_whitespace())
           .map(|(idx, _)| idx)
           .unwrap_or(0);
-        let mut rebuilt = String::with_capacity(part.len() + 1);
+        let rebuilt_body = insert_nesting(&part[offset..]);
+        // Avoid introducing descendant whitespace; keep pseudos on the same compound.
+        let mut rebuilt = String::with_capacity(part.len() + 2);
         rebuilt.push_str(&part[..offset]);
-        rebuilt.push('&');
-        rebuilt.push_str(&part[offset..]);
+        rebuilt.push_str(&rebuilt_body);
         updated.push(rebuilt);
         changed = true;
+        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+          eprintln!(
+            "[postcss-engine][parent-orphaned] rebuilt='{}' from part='{}'",
+            rebuilt_body, part
+          );
+        }
       } else {
         updated.push(part);
       }
@@ -1016,7 +1055,15 @@ fn extract_stylesheets_plugin(
           continue;
         }
         if trimmed.contains('&') {
-          out.push(trimmed.replace('&', &p));
+          let mut child_clean = trimmed.to_string();
+          // Align with Babel: whitespace immediately before an ampersand that begins
+          // a pseudo segment should not introduce a descendant combinator.
+          child_clean = child_clean.replace(" &:","&:");
+          child_clean = child_clean.replace("&: ","&:");
+          if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+            eprintln!("[engine.combine] child_clean='{}'", child_clean);
+          }
+          out.push(child_clean.replace('&', &p));
         } else if p == "&" {
           out.push(trimmed.to_string());
         } else if trimmed.is_empty() {
@@ -1366,7 +1413,15 @@ fn atomicify_rules_plugin(
           continue;
         }
         if trimmed.contains('&') {
-          out.push(trimmed.replace('&', &p));
+          let mut child_clean = trimmed.to_string();
+          // Align with Babel: whitespace immediately before an ampersand that begins
+          // a pseudo segment should not introduce a descendant combinator.
+          child_clean = child_clean.replace(" &:","&:");
+          child_clean = child_clean.replace("&: ","&:");
+          if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+            eprintln!("[engine.combine] child_clean='{}'", child_clean);
+          }
+          out.push(child_clean.replace('&', &p));
         } else if p == "&" {
           out.push(trimmed.to_string());
         } else if trimmed.is_empty() {

@@ -105,12 +105,54 @@ fn atomicify_qualified_rule(
   ctx: &mut TransformContext<'_>,
   at_rule_label: Option<&str>,
 ) -> Vec<QualifiedRule> {
-  let selectors =
-    filter_redundant_selectors(normalize_selectors(collect_rule_selectors(&rule), options))
-      .into_iter()
-      .filter(|sel| !sel.contains("* *"))
-      .collect::<Vec<String>>();
-  eprintln!("[atomicify.rule] selectors (filtered)={:?}", selectors);
+    let selectors =
+      filter_redundant_selectors(normalize_selectors(collect_rule_selectors(&rule), options))
+        .into_iter()
+        .map(|sel| {
+          let mut cleaned = sel.replace(" &", "&").replace("& ", "&");
+          // COMPAT: collapse descendant gap between repeated class in orphaned pseudo chains
+          // e.g. "._a:focus ._a:before" or "._a:focus-within ._a:before" -> "._a:focus._a:before"
+          if let Some((left, right)) = cleaned.split_once(' ') {
+            if left.starts_with("._") && right.starts_with('.') {
+              let left_parts: Vec<&str> = left.split('.').collect();
+              let right_parts: Vec<&str> = right.split('.').collect();
+              if left_parts.get(1) == right_parts.get(1) {
+                cleaned = format!("{}{}", left, right);
+              }
+            }
+          }
+          // Regex-ish collapse for descendant between identical class hashes followed by pseudos
+          // to mirror Babel combined pseudo selectors.
+          if let Some(idx) = cleaned.find(" ._") {
+            let (l, r) = cleaned.split_at(idx);
+            let right = &r[1..]; // drop leading space
+            if l.starts_with("._") && right.starts_with("._") {
+              let lhash = l.split(':').next().unwrap_or(l);
+              let rhash = right.split(':').next().unwrap_or(right);
+              if lhash == rhash {
+                cleaned = format!("{}{}", l, right);
+              }
+            }
+          }
+          // Final fallback: if cleaned still has ' ._' and both sides share the same hash, strip the space.
+          if let Some(idx) = cleaned.find(" ._") {
+            let (l, r) = cleaned.split_at(idx);
+            let right = &r[1..];
+            if l.starts_with("._") && right.starts_with("._") {
+              let lhash = l.split(':').next().unwrap_or(l);
+              let rhash = right.split(':').next().unwrap_or(right);
+              if lhash == rhash {
+                cleaned = format!("{}{}", l, right);
+              }
+            }
+          }
+          if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+            eprintln!("[atomicify.rule] selector raw='{}' cleaned='{}'", sel, cleaned);
+          }
+          cleaned
+        })
+        .filter(|sel| !sel.contains("* *"))
+        .collect::<Vec<String>>();
   let mut replacements: Vec<QualifiedRule> = Vec::new();
 
   for component in rule.block.value {
@@ -333,6 +375,9 @@ fn normalize_selector(selector: &str) -> String {
   }
 
   let trimmed = selector.trim();
+  if std::env::var("COMPILED_CSS_TRACE").is_ok() {
+    eprintln!("[atomicify] normalize_selector input='{}'", trimmed);
+  }
   if trimmed.contains('&') {
     return collapse_adjacent_ampersands(trimmed);
   }
