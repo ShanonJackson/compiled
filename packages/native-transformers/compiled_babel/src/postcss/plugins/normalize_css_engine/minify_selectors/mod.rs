@@ -148,9 +148,9 @@ fn process_pseudo_class_selector(selector: &mut PseudoClassSelector) {
   if let Some(children) = &mut selector.children {
     for child in children.iter_mut() {
       match child {
-        PseudoClassSelectorChildren::SelectorList(list) => process_selector_list(list),
+        PseudoClassSelectorChildren::SelectorList(list) => process_selector_list(list, false),
         PseudoClassSelectorChildren::RelativeSelectorList(list) => {
-          process_relative_selector_list(list)
+          process_relative_selector_list(list, false)
         }
         PseudoClassSelectorChildren::ForgivingSelectorList(list) => {
           for selector in &mut list.children {
@@ -292,14 +292,16 @@ fn format_relative(sel: &RelativeSelector) -> String {
   serialize_relative_selector(sel)
 }
 
-fn process_selector_list(list: &mut SelectorList) {
+fn process_selector_list(list: &mut SelectorList, allow_reorder: bool) {
   for complex in &mut list.children {
     process_complex_selector(complex);
   }
   dedupe_complex_selectors(&mut list.children);
-  sort_complex_selectors(&mut list.children);
+  if allow_reorder {
+    sort_complex_selectors(&mut list.children);
+  }
 }
-fn process_relative_selector_list(list: &mut RelativeSelectorList) {
+fn process_relative_selector_list(list: &mut RelativeSelectorList, allow_reorder: bool) {
   for rel in &mut list.children {
     if let Some(c) = &mut rel.combinator {
       process_combinator(c);
@@ -307,7 +309,9 @@ fn process_relative_selector_list(list: &mut RelativeSelectorList) {
     process_complex_selector(&mut rel.selector);
   }
   dedupe_relative_selectors(&mut list.children);
-  sort_relative_selectors(&mut list.children);
+  if allow_reorder {
+    sort_relative_selectors(&mut list.children);
+  }
 }
 
 fn starts_with_relative_combinator(selector: &str) -> bool {
@@ -319,6 +323,36 @@ fn starts_with_relative_combinator(selector: &str) -> bool {
 }
 
 fn minify_selector_string(selector: &str) -> Option<String> {
+  let trace = std::env::var("COMPILED_CSS_TRACE").is_ok();
+  fn log_nth(list: &SelectorList, label: &str) {
+    if std::env::var("COMPILED_CSS_TRACE").is_err() {
+      return;
+    }
+    for complex in &list.children {
+      for child in &complex.children {
+        if let ComplexSelectorChildren::CompoundSelector(compound) = child {
+          for subclass in &compound.subclass_selectors {
+            if let SubclassSelector::PseudoClass(pc) = subclass {
+              if pc.name.value.eq_ignore_ascii_case("nth-of-type") {
+                if let Some(children) = &pc.children {
+                  if let Some(PseudoClassSelectorChildren::AnPlusB(AnPlusB::AnPlusBNotation(
+                    notation,
+                  ))) = children.first()
+                  {
+                    eprintln!(
+                      "[minify-selectors] {} a_raw={:?} a={:?} b_raw={:?} b={:?}",
+                      label, notation.a_raw, notation.a, notation.b_raw, notation.b
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // COMPAT: cssnano postcss-minify-selectors replaces keyframe step tags
   // literally using postcss-selector-parser, so 'from' -> '0%' and '100%' -> 'to'
   // without going through a selector AST/codegen. Mirroring this avoids SWC
@@ -335,6 +369,12 @@ fn minify_selector_string(selector: &str) -> Option<String> {
     return Some(String::new());
   }
   let parse_relative = starts_with_relative_combinator(trimmed);
+  if trace {
+    eprintln!(
+      "[minify-selectors] input='{}' parse_relative={}",
+      trimmed, parse_relative
+    );
+  }
   let cm: SourceMap = Default::default();
   let fm = cm.new_source_file(
     FileName::Custom("sel.css".into()).into(),
@@ -350,10 +390,34 @@ fn minify_selector_string(selector: &str) -> Option<String> {
     )
     .ok()?;
     if !errors.is_empty() {
+      if trace {
+        eprintln!(
+          "[minify-selectors] parse errors relative for '{}': {:?}",
+          selector, errors
+        );
+      }
       return None;
     }
-    process_relative_selector_list(&mut list);
-    return Some(serialize_relative_selector_list(&list));
+    process_relative_selector_list(&mut list, true);
+    log_nth(&SelectorList {
+      span: Default::default(),
+      children: list
+        .children
+        .iter()
+        .map(|rel| ComplexSelector {
+          span: rel.span,
+          children: rel.selector.children.clone(),
+        })
+        .collect(),
+    }, "relative-an+b");
+    let optimized = serialize_relative_selector_list(&list);
+    if std::env::var("COMPILED_CSS_TRACE").is_ok() && selector.contains("nth-of-type") {
+      eprintln!(
+        "[minify-selectors] relative in='{}' out='{}'",
+        selector, optimized
+      );
+    }
+    return Some(optimized);
   }
   let mut list = parse_string_input::<SelectorList>(
     StringInput::from(&*fm),
@@ -363,10 +427,24 @@ fn minify_selector_string(selector: &str) -> Option<String> {
   )
   .ok()?;
   if !errors.is_empty() {
+    if trace {
+      eprintln!(
+        "[minify-selectors] parse errors selector for '{}': {:?}",
+        selector, errors
+      );
+    }
     return None;
   }
-  process_selector_list(&mut list);
-  Some(serialize_selector_list(&list))
+  process_selector_list(&mut list, true);
+  log_nth(&list, "an+b");
+  let optimized = serialize_selector_list(&list);
+  if std::env::var("COMPILED_CSS_TRACE").is_ok() && selector.contains("nth-of-type") {
+    eprintln!("[minify-selectors] in='{}' out='{}'", selector, optimized);
+  }
+  if trace {
+    eprintln!("[minify-selectors] optimized '{}' -> '{}'", selector, optimized);
+  }
+  Some(optimized)
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
@@ -432,6 +510,12 @@ mod tests {
   fn trims_whitespace_inside_is_arguments() {
     let optimized = minify_selector_string(">:is(div, button)").unwrap();
     assert_eq!(optimized, ">:is(div,button)");
+  }
+
+  #[test]
+  fn keeps_explicit_one_multiplier_in_an_plus_b() {
+    let optimized = minify_selector_string("div:nth-of-type(1n+4)").unwrap();
+    assert_eq!(optimized, "div:nth-of-type(1n+4)");
   }
 
   #[test]

@@ -14,6 +14,8 @@ use super::transform::{
 use crate::postcss::plugins::vendor_autoprefixer::{AutoprefixerData, PrefixedDecl};
 #[cfg(feature = "postcss_engine")]
 use crate::postcss::utils::value_minifier::minify_value_whitespace;
+#[cfg(feature = "postcss_engine")]
+use crate::postcss::plugins::normalize_css_engine::minify_selector_whitespace;
 use std::sync::{Arc, Mutex};
 
 fn collapse_adjacent_ampersands(selector: &str) -> String {
@@ -24,21 +26,35 @@ fn collapse_adjacent_ampersands(selector: &str) -> String {
     if ch == '&' {
       out.push('&');
 
-      let mut saw_ws = false;
-      while let Some(&next) = chars.peek() {
-        if next.is_whitespace() {
-          saw_ws = true;
-          chars.next();
-        } else {
-          break;
+      loop {
+        let mut consumed_ws = false;
+        while let Some(&next) = chars.peek() {
+          if next.is_whitespace() {
+            consumed_ws = true;
+            chars.next();
+          } else {
+            break;
+          }
         }
-      }
 
-      if let Some('&') = chars.peek() {
-        chars.next();
-        out.push('&');
-      } else if saw_ws {
-        out.push(' ');
+        match chars.peek() {
+          Some('&') => {
+            // Collapse any chain of ampersands separated by whitespace.
+            chars.next();
+            out.push('&');
+            continue;
+          }
+          Some(_) => {
+            if consumed_ws {
+              // Preserve a single space when whitespace wasn't between two ampersands.
+              out.push(' ');
+            }
+          }
+          None => {
+            // Do not emit trailing whitespace at end of selector.
+          }
+        }
+        break;
       }
 
       continue;
@@ -53,21 +69,30 @@ fn collapse_adjacent_ampersands(selector: &str) -> String {
 #[cfg(feature = "postcss_engine")]
 #[derive(Clone, Default)]
 struct AtomicCollector {
-  sheets: Arc<Mutex<Vec<String>>>,
+  sheets: Arc<Mutex<Vec<CollectedSheet>>>,
   class_names: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Clone, Default)]
+struct CollectedSheet {
+  path: Vec<(String, String, usize)>,
+  css: String,
 }
 
 #[cfg(feature = "postcss_engine")]
 impl AtomicCollector {
-  fn push_sheet(&self, css: String) {
-    self.sheets.lock().unwrap().push(css);
+  fn push_sheet(&self, path: Vec<(String, String, usize)>, css: String) {
+    self.sheets
+      .lock()
+      .unwrap()
+      .push(CollectedSheet { path, css });
   }
 
   fn push_class(&self, class: String) {
     self.class_names.lock().unwrap().push(class);
   }
 
-  fn take(self) -> (Vec<String>, Vec<String>) {
+  fn take(self) -> (Vec<CollectedSheet>, Vec<String>) {
     // Do not rely on Arc::try_unwrap since plugin closures may still
     // hold references while the processor struct is alive. Instead,
     // extract contents under the mutex and leave the Arc in place.
@@ -1025,18 +1050,48 @@ fn extract_stylesheets_plugin(
 
   fn normalized_selector(selector: &str) -> String {
     let trimmed = selector.trim();
-    if trimmed.is_empty() {
+    let collapsed = minify_selector_whitespace(trimmed);
+    if collapsed.is_empty() {
       return "&".to_string();
     }
 
-    if trimmed.contains('&') {
-      return collapse_adjacent_ampersands(trimmed);
-    }
+    let cleaned = if collapsed.contains('&') {
+      collapse_adjacent_ampersands(&collapsed)
+    } else {
+      collapsed
+    };
 
-    format!("& {}", trimmed)
+    if cleaned.contains('&') {
+      cleaned
+    } else {
+      format!("& {}", cleaned)
+    }
   }
 
   fn combine_selectors(parent: &[String], child: &str) -> Vec<String> {
+    fn strip_redundant_universal(selector: &str) -> String {
+      let mut out = String::with_capacity(selector.len());
+      let mut chars = selector.chars().peekable();
+      while let Some(ch) = chars.next() {
+        if ch == '*' {
+          // Look back to find the last non-whitespace character.
+          let prev = out.chars().rev().find(|c| !c.is_whitespace());
+          let next = chars.peek().copied();
+          let next_is_simple =
+            matches!(next, Some(':') | Some('.') | Some('[') | Some('#'));
+          let prev_is_combinator_or_start = match prev {
+            None => true,
+            Some(c) => matches!(c, '>' | '+' | '~' | '|' | ','),
+          };
+          if next_is_simple && prev_is_combinator_or_start {
+            continue;
+          }
+        }
+        out.push(ch);
+      }
+      out
+    }
+
     let child_parts = comma(child);
     let parents = if parent.is_empty() {
       vec!["&".to_string()]
@@ -1063,25 +1118,26 @@ fn extract_stylesheets_plugin(
           if std::env::var("COMPILED_CSS_TRACE").is_ok() {
             eprintln!("[engine.combine] child_clean='{}'", child_clean);
           }
-          out.push(child_clean.replace('&', &p));
+          let replaced = child_clean.replace('&', &p);
+          out.push(strip_redundant_universal(&replaced));
         } else if p == "&" {
-          out.push(trimmed.to_string());
+          out.push(strip_redundant_universal(trimmed));
         } else if trimmed.is_empty() {
           out.push(p.clone());
         } else {
-          out.push(format!("{} {}", p, trimmed));
+          out.push(strip_redundant_universal(&format!("{} {}", p, trimmed)));
         }
       }
     }
     out
   }
 
-  fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
+  fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String, usize)]) -> String {
     if at_chain.is_empty() {
       return rule_css.to_string();
     }
     let mut out = String::new();
-    for (n, p) in at_chain {
+    for (n, p, _) in at_chain {
       if p.is_empty() {
         out.push_str(&format!("@{}{{", n));
       } else {
@@ -1112,7 +1168,7 @@ fn extract_stylesheets_plugin(
   fn walk_and_emit(
     node: &postcss::ast::NodeRef,
     selectors: &[String],
-    at_chain: &[(String, String)],
+    at_chain: &[(String, String, usize)],
     collector: &AtomicCollector,
     opts: &TransformCssOptions,
     autoprefixer: Option<&AutoprefixerData>,
@@ -1120,7 +1176,7 @@ fn extract_stylesheets_plugin(
     let borrowed = node.borrow();
     let children = borrowed.nodes.clone();
     drop(borrowed);
-    for child in children {
+    for (idx, child) in children.into_iter().enumerate() {
       if let Some(rule) = as_rule(&child) {
         let raw_selector = rule.selector();
         let sels = if let Some(ph) = &opts.declaration_placeholder {
@@ -1154,7 +1210,7 @@ fn extract_stylesheets_plugin(
               if let Some(prefix) = &opts.class_hash_prefix {
                 group_seed.push_str(prefix);
               }
-              for (n, p) in at_chain {
+              for (n, p, _) in at_chain {
                 group_seed.push_str(n);
                 group_seed.push_str(p);
               }
@@ -1210,12 +1266,12 @@ fn extract_stylesheets_plugin(
             for variant in selector_variants {
               for (emit_prop, emit_value) in &decls_to_emit {
                 let css = format!("{}{{{}:{}}}", variant, emit_prop, emit_value);
-                collector.push_sheet(wrap_in_at_rules(&css, at_chain));
+                collector.push_sheet(at_chain.to_vec(), wrap_in_at_rules(&css, at_chain));
               }
             }
             for (emit_prop, emit_value) in &decls_to_emit {
               let css = format!("{}{{{}:{}}}", selector_joined, emit_prop, emit_value);
-              collector.push_sheet(wrap_in_at_rules(&css, at_chain));
+              collector.push_sheet(at_chain.to_vec(), wrap_in_at_rules(&css, at_chain));
             }
           } else if let Some(_nested_rule) = as_rule(&gc) {
             // Recurse into nested rules (should be flattened earlier, but handle just in case)
@@ -1244,7 +1300,7 @@ fn extract_stylesheets_plugin(
             let mut next_chain = at_chain.to_vec();
             let params = nested_at.params();
             if can_atomicify_at_rule(&name) {
-              next_chain.push((name, params));
+              next_chain.push((name, params, idx));
             }
             walk_and_emit(
               &nested_at.to_node(),
@@ -1278,7 +1334,7 @@ fn extract_stylesheets_plugin(
         let params = at.params();
         let mut next = at_chain.to_vec();
         if can_atomicify_at_rule(&name) {
-          next.push((name, params));
+          next.push((name, params, idx));
         }
         walk_and_emit(
           &at.to_node(),
@@ -1321,7 +1377,7 @@ fn extract_stylesheets_plugin(
                 tmp.append(at.to_node());
                 if let Ok(mut res) = tmp.to_result() {
                   let css = res.css().to_string();
-                  collector.push_sheet(css);
+                  collector.push_sheet(Vec::new(), css);
                 }
               }
               true
@@ -1349,7 +1405,7 @@ fn extract_stylesheets_plugin(
                 tmp.append(at.to_node());
                 if let Ok(mut res) = tmp.to_result() {
                   let css = res.css().to_string();
-                  collector.push_sheet(css);
+                  collector.push_sheet(Vec::new(), css);
                 }
               }
               true
@@ -1373,7 +1429,7 @@ fn atomicify_rules_plugin(
 
   #[derive(Clone)]
   struct Ctx<'a> {
-    at_chain: Vec<(String, String)>, // (name, params)
+    at_chain: Vec<(String, String, usize)>, // (name, params, occurrence index)
     selectors: Vec<String>,          // combined selectors at this depth
     opts: &'a TransformCssOptions,
     collector: AtomicCollector,
@@ -1395,6 +1451,28 @@ fn atomicify_rules_plugin(
   }
 
   fn combine_selectors(parent: &[String], child: &str) -> Vec<String> {
+    fn strip_redundant_universal(selector: &str) -> String {
+      let mut out = String::with_capacity(selector.len());
+      let mut chars = selector.chars().peekable();
+      while let Some(ch) = chars.next() {
+        if ch == '*' {
+          let prev = out.chars().rev().find(|c| !c.is_whitespace());
+          let next = chars.peek().copied();
+          let next_is_simple =
+            matches!(next, Some(':') | Some('.') | Some('[') | Some('#'));
+          let prev_is_combinator_or_start = match prev {
+            None => true,
+            Some(c) => matches!(c, '>' | '+' | '~' | '|' | ','),
+          };
+          if next_is_simple && prev_is_combinator_or_start {
+            continue;
+          }
+        }
+        out.push(ch);
+      }
+      out
+    }
+
     let child_parts = comma(child);
     let parents = if parent.is_empty() {
       vec!["&".to_string()]
@@ -1421,13 +1499,14 @@ fn atomicify_rules_plugin(
           if std::env::var("COMPILED_CSS_TRACE").is_ok() {
             eprintln!("[engine.combine] child_clean='{}'", child_clean);
           }
-          out.push(child_clean.replace('&', &p));
+          let replaced = child_clean.replace('&', &p);
+          out.push(strip_redundant_universal(&replaced));
         } else if p == "&" {
-          out.push(trimmed.to_string());
+          out.push(strip_redundant_universal(trimmed));
         } else if trimmed.is_empty() {
           out.push(p.clone());
         } else {
-          out.push(format!("{} {}", p, trimmed));
+          out.push(strip_redundant_universal(&format!("{} {}", p, trimmed)));
         }
       }
     }
@@ -1439,32 +1518,39 @@ fn atomicify_rules_plugin(
 
   fn normalized_selector(selector: &str) -> String {
     let trimmed = selector.trim();
-    if trimmed.is_empty() {
+    let collapsed = minify_selector_whitespace(trimmed);
+    if collapsed.is_empty() {
       return "&".to_string();
     }
 
-    if trimmed.contains('&') {
-      return collapse_adjacent_ampersands(trimmed);
-    }
+    let cleaned = if collapsed.contains('&') {
+      collapse_adjacent_ampersands(&collapsed)
+    } else {
+      collapsed
+    };
 
-    format!("& {}", trimmed)
+    if cleaned.contains('&') {
+      cleaned
+    } else {
+      format!("& {}", cleaned)
+    }
   }
 
-  fn at_chain_label(at_chain: &[(String, String)]) -> String {
+  fn at_chain_label(at_chain: &[(String, String, usize)]) -> String {
     let mut s = String::new();
-    for (n, p) in at_chain {
+    for (n, p, _) in at_chain {
       s.push_str(n);
       s.push_str(p);
     }
     s
   }
 
-  fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String)]) -> String {
+  fn wrap_in_at_rules(rule_css: &str, at_chain: &[(String, String, usize)]) -> String {
     if at_chain.is_empty() {
       return rule_css.to_string();
     }
     let mut out = String::new();
-    for (n, p) in at_chain {
+    for (n, p, _) in at_chain {
       if p.is_empty() {
         out.push_str(&format!("@{}{{", n));
       } else {
@@ -1514,7 +1600,7 @@ fn atomicify_rules_plugin(
       );
     }
     // Do not emit atomic rules when nested under ignored at-rules like @property.
-    if ctx.at_chain.iter().any(|(n, _)| {
+    if ctx.at_chain.iter().any(|(n, _, _)| {
       matches!(
         n.to_ascii_lowercase().as_str(),
         "color-profile"
@@ -1605,7 +1691,7 @@ fn atomicify_rules_plugin(
           if std::env::var("COMPILED_CLI_TRACE").is_ok() {
             eprintln!("[engine.atomic] sheet='{}'", wrapped);
           }
-          ctx.collector.push_sheet(wrapped);
+          ctx.collector.push_sheet(ctx.at_chain.clone(), wrapped);
         }
       } else if let Some(nested) = as_rule(&child) {
         // Recurse nested rules
@@ -1617,7 +1703,9 @@ fn atomicify_rules_plugin(
     }
   }
 
-  let at_stack = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+  let at_stack = Arc::new(Mutex::new(Vec::<(String, String, usize)>::new()));
+  let at_depth_counts = Arc::new(Mutex::new(Vec::<usize>::new()));
+  let sheet_count_stack = Arc::new(Mutex::new(Vec::<usize>::new()));
   let sel_stack = Arc::new(Mutex::new(vec![vec!["&".to_string()]]));
 
   postcss::plugin("atomicify-rules")
@@ -1744,7 +1832,7 @@ fn atomicify_rules_plugin(
           for variant in selector_variants {
             let rule_css = format!("{}{{{}}}", variant, decls);
             let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
-            collector.push_sheet(wrapped);
+            collector.push_sheet(at_chain.clone(), wrapped);
           }
         }
         Ok(())
@@ -1752,17 +1840,52 @@ fn atomicify_rules_plugin(
     })
     .at_rule_filter("*", {
       let at_stack = at_stack.clone();
+      let at_depth_counts = at_depth_counts.clone();
+      let sheet_count_stack = sheet_count_stack.clone();
+      let collector = collector.clone();
       move |at, _| {
         if can_atomicify_at_rule(&at.name()) {
-          at_stack.lock().unwrap().push((at.name(), at.params()));
+          let mut counts = at_depth_counts.lock().unwrap();
+          let depth = at_stack.lock().unwrap().len();
+          if counts.len() <= depth {
+            counts.resize(depth + 1, 0);
+          }
+          counts[depth] += 1;
+          let idx = counts[depth];
+          at_stack
+            .lock()
+            .unwrap()
+            .push((at.name(), at.params(), idx));
+          let current_len = collector.sheets.lock().unwrap().len();
+          sheet_count_stack.lock().unwrap().push(current_len);
         }
         Ok(())
       }
     })
     .at_rule_filter_exit("*", {
       let at_stack = at_stack.clone();
-      move |_, _| {
-        let _ = at_stack.lock().unwrap().pop();
+      let at_depth_counts = at_depth_counts.clone();
+      let sheet_count_stack = sheet_count_stack.clone();
+      let collector = collector.clone();
+      move |at, _| {
+        if can_atomicify_at_rule(&at.name()) {
+          if let Some(start_len) = sheet_count_stack.lock().unwrap().pop() {
+            let end_len = collector.sheets.lock().unwrap().len();
+            if end_len == start_len {
+              let at_chain = at_stack.lock().unwrap().clone();
+              let empty = wrap_in_at_rules("", &at_chain);
+              collector.push_sheet(at_chain, empty);
+            }
+          }
+          {
+            let mut counts = at_depth_counts.lock().unwrap();
+            let depth = at_stack.lock().unwrap().len();
+            if counts.len() > depth {
+              counts.truncate(depth);
+            }
+          }
+          let _ = at_stack.lock().unwrap().pop();
+        }
         Ok(())
       }
     })
@@ -1906,7 +2029,7 @@ fn atomicify_rules_plugin(
               for variant in selector_variants {
                 let rule_css = format!("{}{{{}}}", variant, decls);
                 let wrapped = wrap_in_at_rules(&rule_css, &at_chain);
-                collector.push_sheet(wrapped);
+                collector.push_sheet(at_chain.clone(), wrapped);
               }
             }
           } else if let Some(nested) = as_rule(&child) {
@@ -1973,7 +2096,7 @@ fn atomicify_rules_plugin(
                     selector_variants_with_autoprefixer(autoprefixer_ref, &selector_text);
                   for variant in selector_variants {
                     let css = format!("{}{{{}}}", variant, decls);
-                    collector.push_sheet(wrap_in_at_rules(&css, &at_chain));
+                    collector.push_sheet(at_chain.clone(), wrap_in_at_rules(&css, &at_chain));
                   }
                 }
               }
@@ -2065,17 +2188,17 @@ pub fn transform_css_via_postcss(
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[postcss] take collector");
   }
-  let (mut sheets, mut class_names) = collector.take();
+  let (collected_sheets, mut class_names) = collector.take();
   if std::env::var("STACK_DEBUG").is_ok() {
     eprintln!(
       "[postcss] collector len sheets={} classes={}",
-      sheets.len(),
+      collected_sheets.len(),
       class_names.len()
     );
   }
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
-    for sheet in &sheets {
-      eprintln!("[postcss] sheet {}", sheet);
+    for sheet in &collected_sheets {
+      eprintln!("[postcss] sheet {}", sheet.css);
     }
   }
   // eprintln!("[postcss-pipeline] after first pass, sheets={}", sheets.len());
@@ -2083,7 +2206,7 @@ pub fn transform_css_via_postcss(
   // the pipeline will emit no sheets. Instead of wrapping in a placeholder
   // rule, fall back to the SWC pipeline to mirror Babel output without
   // introducing placeholder selectors.
-  if sheets.is_empty() && options.declaration_placeholder.is_none() {
+  if collected_sheets.is_empty() && options.declaration_placeholder.is_none() {
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
       eprintln!("[postcss] empty sheets; falling back to swc pipeline");
     }
@@ -2124,6 +2247,7 @@ pub fn transform_css_via_postcss(
   struct SheetInfo {
     idx: usize,
     text: String,
+    path: Vec<(String, String, usize)>,
   }
   #[derive(Clone)]
   enum SheetKind {
@@ -2210,11 +2334,20 @@ pub fn transform_css_via_postcss(
       }
     }
   }
-  let mut paired: Vec<(SheetKind, SheetInfo)> = sheets
+  let mut paired: Vec<(SheetKind, SheetInfo)> = collected_sheets
     .iter()
     .cloned()
     .enumerate()
-    .map(|(i, s)| (classify(&s), SheetInfo { idx: i, text: s }))
+    .map(|(i, s)| {
+      (
+        classify(&s.css),
+        SheetInfo {
+          idx: i,
+          text: s.css,
+          path: s.path,
+        },
+      )
+    })
     .collect();
   paired.sort_by(|(ka, ia), (kb, ib)| {
     use std::cmp::Ordering;
@@ -2251,54 +2384,55 @@ pub fn transform_css_via_postcss(
     }
     ord
   });
-  // Group identical at-rules into a single sheet with concatenated inner rules, preserving first appearance order.
-  use std::collections::{HashMap, HashSet};
+  fn path_key(path: &[(String, String, usize)]) -> String {
+    path
+      .iter()
+      .map(|(n, p, idx)| format!("{}|{}|{}", n, p, idx))
+      .collect::<Vec<_>>()
+      .join(">")
+  }
+  use std::collections::HashMap;
+  use std::collections::HashSet;
+  let mut group_map: HashMap<String, (String, Vec<String>)> = HashMap::new();
   let mut group_order: Vec<String> = Vec::new();
-  let mut group_map: HashMap<String, Vec<String>> = HashMap::new();
-  let mut non_at_indices: Vec<(usize, String)> = Vec::new();
-  for (idx, (_kind, info)) in paired.iter().enumerate() {
-    let s = &info.text;
-    if s.starts_with('@') {
-      // Key: "@name query"
-      if let Some(brace_pos) = s.find('{') {
-        let key = s[..brace_pos].to_string();
-        let inner = &s[brace_pos + 1..s.rfind('}').unwrap_or(s.len())];
-        group_map
-          .entry(key.clone())
-          .or_default()
-          .push(inner.to_string());
-        if !group_order.contains(&key) {
-          group_order.push(key);
-        }
+  for (kind, info) in &paired {
+    if matches!(kind, SheetKind::AtRule { .. }) {
+      let brace_pos = info.text.find('{').unwrap_or(info.text.len());
+      let header = info.text[..brace_pos].to_string();
+      let inner = info.text[brace_pos + 1..info.text.rfind('}').unwrap_or(info.text.len())]
+        .to_string();
+      let key = path_key(&info.path);
+      group_map
+        .entry(key.clone())
+        .or_insert_with(|| (header.clone(), Vec::new()))
+        .1
+        .push(inner);
+      if !group_order.contains(&key) {
+        group_order.push(key);
       }
-    } else {
-      non_at_indices.push((idx, s.clone()));
     }
   }
-  // Build final ordered sheets: interleave non-at and first occurrence of each at-rule group
-  let mut produced_at: HashSet<String> = HashSet::new();
-  let mut output: Vec<String> = Vec::new();
+  let mut produced: HashSet<String> = HashSet::new();
+  let mut sheets: Vec<String> = Vec::new();
   for (kind, info) in paired {
     match kind {
-      SheetKind::CatchAll { .. } => output.push(info.text),
+      SheetKind::CatchAll { .. } => sheets.push(info.text),
       SheetKind::AtRule { .. } => {
-        let brace_pos = info.text.find('{').unwrap_or(info.text.len());
-        let key = info.text[..brace_pos].to_string();
-        if produced_at.insert(key.clone()) {
-          if let Some(parts) = group_map.get(&key) {
+        let key = path_key(&info.path);
+        if produced.insert(key.clone()) {
+          if let Some((header, parts)) = group_map.get(&key) {
             let mut joined = String::new();
             for part in parts {
               joined.push_str(part);
             }
-            output.push(format!("{}{{{}}}", key, joined));
+            sheets.push(format!("{}{{{}}}", header, joined));
           } else {
-            output.push(info.text);
+            sheets.push(info.text);
           }
         }
       }
     }
   }
-  sheets = output;
 
   // eprintln!("[postcss-pipeline] final sheets={}", sheets.len());
   // Deduplicate classes preserving order.
@@ -2318,7 +2452,7 @@ pub fn transform_css_via_postcss(
     }
     None
   }
-  let mut order: HashMap<String, usize> = HashMap::new();
+  let mut order: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
   for (i, sheet) in sheets.iter().enumerate() {
     if let Some(class_name) = extract_first_class_from_sheet(sheet) {
       order.entry(class_name).or_insert(i);

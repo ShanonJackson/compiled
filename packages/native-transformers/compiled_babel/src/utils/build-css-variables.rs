@@ -1,7 +1,8 @@
 use indexmap::IndexSet;
 use swc_core::common::{SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
-  CallExpr, Callee, Expr, ExprOrSpread, Ident, KeyValueProp, Lit, Prop, PropName, PropOrSpread, Str,
+  CallExpr, Callee, Expr, ExprOrSpread, Ident, KeyValueProp, Lit, ParenExpr, Prop, PropName,
+  PropOrSpread, Str,
 };
 
 use crate::utils_types::Variable;
@@ -86,7 +87,10 @@ where
       continue;
     }
 
-    let args = build_arguments(variable, &transform);
+    // Apply the provided transform, then ensure callable expressions are wrapped
+    // so that any immediate invocation uses Babel's `(() => ...)()` shape.
+    let wrapped = |expr: &Expr| wrap_callable(&transform(expr));
+    let args = build_arguments(variable, &wrapped);
     let call = call_expression(args);
     properties.push(to_property(call, &variable.name));
   }
@@ -95,9 +99,37 @@ where
 }
 
 /// Convenience wrapper that mirrors the Babel helper's default transform by
-/// leaving expressions untouched.
+/// leaving expressions untouched other than wrapping callable callees to match
+/// Babel's IIFE formatting for inline variable evaluation.
 pub fn build_css_variables(variables: &[Variable]) -> Vec<PropOrSpread> {
-  build_css_variables_with_transform(variables, |expr| expr.clone())
+  build_css_variables_with_transform(variables, |expr| wrap_callable(expr))
+}
+
+fn wrap_callable(expr: &Expr) -> Expr {
+  match expr {
+    // Parenthesize function/arrow callees so IIFEs format like Babel's `(() => ...)()`.
+    Expr::Call(call) => {
+      if let Callee::Expr(callee_expr) = &call.callee {
+        match callee_expr.as_ref() {
+          Expr::Arrow(_) | Expr::Fn(_) => {
+            let mut new_call = call.clone();
+            new_call.callee = Callee::Expr(Box::new(Expr::Paren(ParenExpr {
+              span: DUMMY_SP,
+              expr: callee_expr.clone(),
+            })));
+            return Expr::Call(new_call);
+          }
+          _ => {}
+        }
+      }
+      expr.clone()
+    }
+    Expr::Arrow(_) | Expr::Fn(_) => Expr::Paren(ParenExpr {
+      span: DUMMY_SP,
+      expr: Box::new(expr.clone()),
+    }),
+    _ => expr.clone(),
+  }
 }
 
 #[cfg(test)]

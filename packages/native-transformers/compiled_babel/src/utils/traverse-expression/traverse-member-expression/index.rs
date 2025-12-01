@@ -112,6 +112,12 @@ pub(crate) fn traverse_member_expression_with_arguments(
   call_arguments: Option<&[ExprOrSpread]>,
   evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
+  if let MemberProp::Computed(comp) = &expression.prop {
+    if !matches!(&*comp.expr, Expr::Lit(_)) {
+      return create_result_pair(Expr::Member(expression.clone()), meta);
+    }
+  }
+
   let MemberExpressionMeta {
     access_path,
     binding_identifier,

@@ -612,6 +612,7 @@ mod tests {
     transform::{TransformContext, TransformCssOptions},
     utils::selector_stringifier,
   };
+  use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
   use swc_core::common::{input::StringInput, FileName, SourceMap};
   use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
@@ -741,6 +742,36 @@ mod tests {
       }
       other => panic!("unexpected child: {:?}", other),
     }
+  }
+
+  #[test]
+  fn preserves_an_plus_b_coefficients() {
+    let stylesheet = run_plugin_stylesheet("p:nth-of-type(n+2) { color: green; }");
+    let compound = first_compound_selector(first_selector_list(first_qualified_rule(&stylesheet)));
+    let pseudo = first_pseudo_class(compound);
+    let children = pseudo.children.as_ref().expect("expected children");
+    assert_eq!(children.len(), 1);
+    match &children[0] {
+      PseudoClassSelectorChildren::AnPlusB(AnPlusB::AnPlusBNotation(notation)) => {
+        assert_eq!(notation.a, Some(1));
+        assert_eq!(notation.b, Some(2));
+      }
+      other => panic!("unexpected child: {:?}", other),
+    }
+
+    let serialized_rule = {
+      let mut output = String::new();
+      let writer = BasicCssWriter::new(&mut output, None, Default::default());
+      let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
+      generator.emit(first_qualified_rule(&stylesheet)).unwrap();
+      output
+    };
+
+    assert!(
+      serialized_rule.contains("nth-of-type(n+2)"),
+      "serialized rule should preserve coefficient: {}",
+      serialized_rule
+    );
   }
 
   #[test]

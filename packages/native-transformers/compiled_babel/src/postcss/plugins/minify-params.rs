@@ -165,11 +165,7 @@ fn minify_params_string(input: &str, is_media: bool, has_all_bug: bool) -> Strin
   let mut segments = split_arguments(&normalized);
   segments.sort();
   segments.dedup();
-  let mut result = segments.join(",");
-  if result.starts_with('(') {
-    result.insert(0, ' ');
-  }
-  result
+  segments.join(",")
 }
 
 fn normalize_whitespace(input: &str) -> String {

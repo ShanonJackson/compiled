@@ -27,7 +27,7 @@ fn is_whitespace(ch: char) -> bool {
 /// - Collapse multiple spaces to a single descendant space
 /// - Preserve content inside quotes, attribute selectors, and parentheses
 #[cfg(feature = "postcss_engine")]
-fn minify_selector_whitespace(input: &str) -> String {
+pub fn minify_selector_whitespace(input: &str) -> String {
   let mut out = String::with_capacity(input.len());
   let mut in_single = false;
   let mut in_double = false;

@@ -33,6 +33,7 @@ pub fn plugin() -> pc::BuiltPlugin {
             if params_str.is_empty() { return Ok(()); }
             let tracing = std::env::var("COMPILED_CLI_TRACE").is_ok();
             if tracing {
+                eprintln!("[minify-params] params @{} {}", name, params_str);
                 eprintln!("[minify-params] enter @{} len={}", name, params_str.len());
             }
             // Cheap pre-scan: if no tokens that we care about exist, skip work
@@ -59,12 +60,33 @@ pub fn plugin() -> pc::BuiltPlugin {
             let mut parsed = vp::parse(&params_str);
             if tracing { eprintln!("[minify-params] parsed @{}", name); }
 
-            fn normalize_nodes(nodes: &mut [vp::Node]) {
-                for node in nodes.iter_mut() {
-                    match node {
-                        vp::Node::Div { before, after, .. } => { before.clear(); after.clear(); }
-                        vp::Node::Space { value } => { *value = " ".to_string(); }
-                        vp::Node::Function { nodes: inner, before, after, value: _, .. } => {
+            fn normalize_nodes(nodes: &mut Vec<vp::Node>) {
+                let mut i = 0usize;
+                while i < nodes.len() {
+                    match nodes.get_mut(i) {
+                        Some(vp::Node::Div { before, after, .. }) => {
+                            before.clear();
+                            after.clear();
+                            // Remove standalone whitespace nodes around punctuation to mirror
+                            // postcss-value-parser attaching spaces to `before`/`after`.
+                            while i > 0 {
+                                if matches!(nodes.get(i.saturating_sub(1)), Some(vp::Node::Space { .. })) {
+                                    nodes.remove(i - 1);
+                                    i -= 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            while i + 1 < nodes.len() {
+                                if matches!(nodes.get(i + 1), Some(vp::Node::Space { .. })) {
+                                    nodes.remove(i + 1);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        Some(vp::Node::Space { value }) => { *value = " ".to_string(); }
+                        Some(vp::Node::Function { nodes: inner, before, after, value: _, .. }) => {
                             before.clear();
                             // Custom properties spacing: keep a single trailing space for single-arg custom props
                             if let Some(first) = inner.get(0) {
@@ -94,11 +116,19 @@ pub fn plugin() -> pc::BuiltPlugin {
                         }
                         _ => {}
                     }
+                    i += 1;
                 }
             }
 
             normalize_nodes(&mut parsed.nodes);
             if tracing { eprintln!("[minify-params] normalized nodes @{}", name); }
+            if tracing && params_str.to_ascii_lowercase().contains("aspect-ratio") {
+                eprintln!(
+                    "[minify-params] normalized params {} -> {}",
+                    params_str,
+                    vp::stringify(&parsed.nodes)
+                );
+            }
 
             // Handle @media all removal at top-level exactly like JS plugin
             if name == "media" {
@@ -140,9 +170,15 @@ pub fn plugin() -> pc::BuiltPlugin {
                 let set: std::collections::BTreeSet<String> = splits.into_iter().collect();
                 set.into_iter().collect::<Vec<_>>().join(",")
             };
+            if tracing && params_str.to_ascii_lowercase().contains("aspect-ratio") {
+                eprintln!("[minify-params] joined raw {}", joined);
+            }
             // Ensure no spaces after ':' inside parameters to match cssnano
             if joined.contains(": ") {
                 joined = joined.replace(": ", ":");
+            }
+            if tracing && params_str.to_ascii_lowercase().contains("aspect-ratio") {
+                eprintln!("[minify-params] joined norm {}", joined);
             }
             if tracing { eprintln!("[minify-params] joined len={} @{}", joined.len(), name); }
 

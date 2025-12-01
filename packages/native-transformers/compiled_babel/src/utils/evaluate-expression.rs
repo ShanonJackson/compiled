@@ -318,9 +318,11 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
       }
     }
     Expr::Fn(fn_expr) => {
-      // Mirror Babel: do not execute functions that accept parameters; leave them dynamic.
-      let has_params = !fn_expr.function.params.is_empty();
-      if !has_params {
+      if fn_expr.function.params.is_empty() {
+        let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
+        evaluated_value = Some(pair.value);
+        updated_meta = pair.meta;
+      } else if fn_expr.function.body.is_some() {
         let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
         evaluated_value = Some(pair.value);
         updated_meta = pair.meta;
@@ -329,14 +331,24 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
       }
     }
     Expr::Arrow(arrow) => {
-      // Mirror Babel: only inline parameterless arrows; otherwise keep as-is for runtime.
-      let has_params = !arrow.params.is_empty();
-      if !has_params {
+      if arrow.params.is_empty() {
         let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
         evaluated_value = Some(pair.value);
         updated_meta = pair.meta;
       } else {
-        evaluated_value = Some(target_expression.clone());
+        let body_is_block = matches!(*arrow.body, swc_core::ecma::ast::BlockStmtOrExpr::BlockStmt(_));
+        let body_is_call = match arrow.body.as_ref() {
+          swc_core::ecma::ast::BlockStmtOrExpr::Expr(expr) => matches!(expr.as_ref(), swc_core::ecma::ast::Expr::Call(_)),
+          _ => false,
+        };
+
+        if body_is_block || body_is_call {
+          let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
+          evaluated_value = Some(pair.value);
+          updated_meta = pair.meta;
+        } else {
+          evaluated_value = Some(target_expression.clone());
+        }
       }
     }
     Expr::Call(call) => {

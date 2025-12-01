@@ -499,7 +499,9 @@ fn format_block_like_babel(block: &BlockStmt, meta: &Metadata) -> String {
   for (_, item) in entries {
     match item {
       BlockItem::Stmt(stmt) => {
-        let stmt_code = print_statement(stmt).trim().to_string();
+        let stmt_code = print_statement(stmt)
+          .trim()
+          .replace('\n', "\n  ");
         out.push_str("  ");
         out.push_str(&stmt_code);
         if !stmt_code.ends_with(';') && !stmt_code.ends_with('}') {
@@ -905,7 +907,42 @@ where
   }
 
   if fallback_to_evaluate {
+    if let Some(identifier) = find_binding_identifier(&Expr::Member(member.clone())) {
+      if let Some(binding) =
+        resolve_binding(identifier.sym.as_ref(), meta.clone(), evaluate_expression)
+      {
+        if let Some(mut node) = binding.node.clone() {
+          normalize_props_usage(&mut node);
+          let state = binding.meta.state();
+          let compiled = is_compiled_css_tagged_template_expression(&node, &state)
+            || is_compiled_css_call_expression(&node, &state);
+          drop(state);
+
+          if compiled {
+            let result = build_css(&node, &binding.meta);
+            assert_no_imported_css_variables(&Expr::Member(member.clone()), meta, &binding, &result);
+            return Some(result);
+          } else if let Expr::Object(obj) = &node {
+            let has_nested_object_values = obj.props.iter().any(|prop| {
+              matches!(prop, swc_core::ecma::ast::PropOrSpread::Prop(p) if matches!(p.as_ref(), swc_core::ecma::ast::Prop::KeyValue(kv) if matches!(kv.value.as_ref(), Expr::Object(_))))
+            });
+            if has_nested_object_values && matches!(member.prop, MemberProp::Computed(_)) {
+              return Some(build_css(&node, &binding.meta));
+            }
+          }
+        }
+      }
+    }
+
     let pair = evaluate_expression(&Expr::Member(member.clone()), meta.clone());
+    // Avoid infinite recursion when evaluation makes no progress (e.g., dynamic
+    // computed members that stay as Member expressions).
+    if let Expr::Member(evaluated) = &pair.value {
+      if evaluated.span == member.span {
+        return Some(CssOutput::new());
+      }
+    }
+
     return Some(build_css(&pair.value, &pair.meta));
   }
 
@@ -921,6 +958,10 @@ where
   F: FnMut(&Expr, &Metadata) -> CssOutput,
 {
   let mut template = node.clone();
+  let has_property_prefix = template
+    .quasis
+    .iter()
+    .any(|q| q.raw.as_ref().trim_end().ends_with(':'));
 
   if std::env::var("STACK_DEBUG").is_ok() {
     let raws: Vec<String> = template
@@ -1158,6 +1199,37 @@ where
       false
     };
 
+    let property_like_prefix = {
+      let mut key = raw.trim_end_matches(':').trim().to_string();
+      if key.is_empty() {
+        if has_property_prefix {
+          key = "prop".to_string();
+        } else if let Some(first) = template.quasis.first() {
+          key = first.raw.as_ref().trim_end_matches(':').trim().to_string();
+        }
+      }
+      if std::env::var("STACK_DEBUG").is_ok() {
+        eprintln!(
+          "[template-prop] raw=\"{}\" first=\"{}\" key=\"{}\"",
+          raw,
+          template
+            .quasis
+            .first()
+            .map(|q| q.raw.as_ref())
+            .unwrap_or_default(),
+          key
+        );
+      }
+      !key.is_empty()
+        && !key.chars().any(|ch| {
+          matches!(
+            ch,
+            '[' | ']' | '.' | '#' | '&' | '>' | '+' | '~' | ':' | ' ' | '\t' | '\n' | '\r'
+              | '{' | '}' | '(' | ')' | '@' | ','
+          )
+        })
+    };
+
     // COMPAT: Avoid treating computed member lookups (e.g. () => MAP[size]) that evaluate
     // to an object literal as CSS blocks. Babel keeps these as value interpolations so the
     // result flows through the variable path instead of being expanded into CSS text.
@@ -1175,18 +1247,6 @@ where
       )
     );
 
-    let property_like_prefix = {
-      let key = raw.trim_end_matches(':').trim();
-      !key.is_empty()
-        && !key.chars().any(|ch| {
-          matches!(
-            ch,
-            '[' | ']' | '.' | '#' | '&' | '>' | '+' | '~' | ':' | ' ' | '\t' | '\n' | '\r'
-              | '{' | '}' | '(' | ')' | '@' | ','
-          )
-        })
-    };
-
     let avoid_mid_statement_css_block = is_mid_statement
       && does_expression_contain_css_block
       && property_like_prefix
@@ -1194,12 +1254,29 @@ where
 
     let can_build_expression_as_css = (does_expression_contain_css_block
       && !is_computed_member_arrow_returning_object)
-      // COMPAT: Babel always attempts to build conditional expressions as CSS, even when the
-      // branches don't obviously look like CSS literals (e.g. css() calls). This mirrors the
-      // original behaviour so conditional css blocks aren't treated as value interpolations,
-      // but only when the branches actually resemble CSS structures.
-      || (does_expression_have_conditional_css && conditional_branches_look_like_css)
+      // COMPAT: Treat conditional expressions as CSS only when their branches look like CSS
+      // so value conditionals (e.g. padding ternaries) stay on the CSS variable path while
+      // selector-ish conditionals (like in the calendar header) expand to CSS.
+      || (does_expression_have_conditional_css
+        && !is_computed_member_arrow_returning_object
+        && (conditional_branches_look_like_css
+          || does_expression_contain_css_block
+          || property_like_prefix))
       || matches!(node_expression, Expr::Tpl(_));
+
+    if std::env::var("STACK_DEBUG").is_ok() {
+      eprintln!(
+        "[template-debug] raw=\"{}\" mid={} cond_css={} cond_branches={} prop_like={} css_block={} avoid_block={} can_build={}",
+        raw,
+        is_mid_statement,
+        does_expression_have_conditional_css,
+        conditional_branches_look_like_css,
+        property_like_prefix,
+        does_expression_contain_css_block,
+        avoid_mid_statement_css_block,
+        can_build_expression_as_css
+      );
+    }
 
     if !avoid_mid_statement_css_block && can_build_expression_as_css {
       if std::env::var("STACK_DEBUG").is_ok() {
@@ -1290,6 +1367,16 @@ where
     let mut name = format!("--_{}", hash(&variable_name));
     if before.variable_prefix == "-" {
       name.push('-');
+    }
+    if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+      if let Some(filename) = &meta.state().filename {
+        if filename.contains(&label) {
+          eprintln!(
+            "[css-debug] fixture={label} var_name={} hashed={}",
+            variable_name, name
+          );
+        }
+      }
     }
 
     // If the interpolation fully reduces to a static literal, inline it instead of creating
@@ -2191,6 +2278,18 @@ where
           get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
         normalize_props_usage(&mut variable_expression);
         let name = format!("--_{}", hash(&variable_name));
+        if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+          if let Some(filename) = &updated_meta.state().filename {
+            if filename.contains(&label) {
+              eprintln!(
+                "[css-debug] fixture={label} var_name={} hashed={} json={:?}",
+                variable_name,
+                name,
+                variable_name
+              );
+            }
+          }
+        }
 
         variables.push(Variable {
           name: name.clone(),

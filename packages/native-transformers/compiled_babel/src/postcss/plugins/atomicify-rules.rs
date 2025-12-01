@@ -341,23 +341,35 @@ fn collapse_adjacent_ampersands(selector: &str) -> String {
     if ch == '&' {
       out.push('&');
 
-      let mut saw_ws = false;
-      while let Some(&next) = chars.peek() {
-        if next.is_whitespace() {
-          saw_ws = true;
-          chars.next();
-        } else {
-          break;
+      loop {
+        let mut consumed_ws = false;
+        while let Some(&next) = chars.peek() {
+          if next.is_whitespace() {
+            consumed_ws = true;
+            chars.next();
+          } else {
+            break;
+          }
         }
-      }
 
-      if let Some('&') = chars.peek() {
-        // Collapse whitespace between adjacent nesting selectors.
-        chars.next();
-        out.push('&');
-      } else if saw_ws {
-        // Preserve a single space when whitespace wasn't between two ampersands.
-        out.push(' ');
+        match chars.peek() {
+          Some('&') => {
+            // Collapse any chain of ampersands separated by whitespace.
+            chars.next();
+            out.push('&');
+            continue;
+          }
+          Some(_) => {
+            if consumed_ws {
+              // Preserve a single space when whitespace wasn't between two ampersands.
+              out.push(' ');
+            }
+          }
+          None => {
+            // Do not emit trailing whitespace at end of selector.
+          }
+        }
+        break;
       }
 
       continue;

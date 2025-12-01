@@ -139,12 +139,27 @@ fn get_arguments(parsed: &vp::ParsedValue) -> Vec<Vec<vp::Node>> {
   for n in &parsed.nodes {
     if let vp::Node::Div { value, .. } = n {
       if value == "," {
+        if let Some(cur) = list.last_mut() {
+          while matches!(cur.last(), Some(vp::Node::Space { .. })) {
+            cur.pop();
+          }
+        }
         list.push(Vec::new());
         continue;
       }
     }
-    if let Some(cur) = list.last_mut() {
-      cur.push(n.clone());
+    let Some(cur) = list.last_mut() else {
+      continue;
+    };
+    if cur.is_empty() && matches!(n, vp::Node::Space { .. }) {
+      continue;
+    }
+    cur.push(n.clone());
+  }
+
+  if let Some(cur) = list.last_mut() {
+    while matches!(cur.last(), Some(vp::Node::Space { .. })) {
+      cur.pop();
     }
   }
   list

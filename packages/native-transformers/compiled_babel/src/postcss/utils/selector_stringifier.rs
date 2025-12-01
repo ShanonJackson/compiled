@@ -302,24 +302,55 @@ fn serialize_an_plus_b(value: &AnPlusB) -> String {
     AnPlusB::Ident(ident) => serialize_ident(ident),
     AnPlusB::AnPlusBNotation(notation) => {
       let mut out = String::new();
-      if let Some(a_raw) = notation.a_raw.as_ref() {
-        out.push_str(a_raw.as_ref());
-      } else if let Some(a) = notation.a {
-        out.push_str(&a.to_string());
-      }
-      if let Some(b_raw) = &notation.b_raw {
-        let raw = b_raw.as_ref();
-        if !raw.is_empty() {
-          if !out.is_empty() && !raw.starts_with(['+', '-']) {
-            out.push('+');
-          }
-          out.push_str(raw);
+      let sanitized_a_raw = notation.a_raw.as_ref().map(|raw| {
+        raw.as_ref()
+          .chars()
+          .filter(|c| !c.is_whitespace())
+          .collect::<String>()
+      });
+      if let Some(a_raw) = sanitized_a_raw.as_ref().filter(|raw| !raw.is_empty()) {
+        // SWC exposes the coefficient raw without the trailing `n` (e.g. "1"),
+        // while postcss-selector-parser retains the full "1n". Append `n` when
+        // the raw value does not already include it to mirror Babel output.
+        out.push_str(a_raw);
+        if !a_raw.to_ascii_lowercase().contains('n') {
+          out.push('n');
         }
-      } else if let Some(b) = notation.b {
-        if b >= 0 {
+      } else if let Some(a) = notation.a {
+        match a {
+          0 => {}
+          1 => out.push_str("n"),
+          -1 => out.push_str("-n"),
+          _ => {
+            out.push_str(&a.to_string());
+            out.push('n');
+          }
+        }
+      }
+      let sanitized_b_raw = notation.b_raw.as_ref().map(|raw| {
+        raw.as_ref()
+          .chars()
+          .filter(|c| !c.is_whitespace())
+          .collect::<String>()
+      });
+      if let Some(b_raw) = sanitized_b_raw.as_ref().filter(|raw| !raw.is_empty()) {
+        // SWC keeps whitespace in the raw `b` component; remove it to mirror
+        // postcss-selector-parser output and avoid emitting duplicate operators.
+        if !out.is_empty() && !b_raw.starts_with(['+', '-']) {
           out.push('+');
         }
-        out.push_str(&b.to_string());
+        out.push_str(b_raw);
+      } else if let Some(b) = notation.b {
+        if b != 0 {
+          if !out.is_empty() && b > 0 {
+            out.push('+');
+          }
+          out.push_str(&b.to_string());
+        } else if out.is_empty() {
+          out.push('0');
+        }
+      } else if out.is_empty() {
+        out.push('0');
       }
       out
     }
