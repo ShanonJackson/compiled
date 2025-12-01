@@ -258,18 +258,7 @@ impl StripRuntimeTransform {
 
   fn finalize_program(&mut self, program: &mut Program) {
     if self.style_rules.is_empty() {
-      // Fallback: if no identifiers were collected (e.g., wrapper forms
-      // differed), collect any hoisted style string bindings directly.
-      for binding in self.bindings.values() {
-        if let Some(value) = &binding.value {
-          if !value.is_empty() {
-            self.style_rules.push(value.clone());
-          }
-        }
-      }
-      if self.style_rules.is_empty() {
-        return;
-      }
+      return;
     }
 
     // COMPAT: Deduplicate redundant universal descendant selectors (e.g., " * *")
