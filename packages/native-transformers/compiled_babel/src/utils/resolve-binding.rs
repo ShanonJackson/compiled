@@ -1,10 +1,13 @@
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use indexmap::IndexSet;
+use once_cell::sync::Lazy;
 use oxc_resolver::{ResolveOptions, Resolver};
 use serde_json::Value;
 use swc_core::common::comments::{Comment, SingleThreadedComments};
@@ -31,6 +34,9 @@ use crate::utils_traversers_types::TraverserResult;
 use crate::utils_types::{
   BindingPathKind, EvaluateExpression, ImportBindingKind, PartialBindingWithMeta,
 };
+
+static WORKSPACE_PACKAGE_MAP: Lazy<Mutex<HashMap<PathBuf, HashMap<String, PathBuf>>>> =
+  Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn expression_references_import(
   expr: &Expr,
@@ -215,6 +221,11 @@ fn ensure_module_resolver(state: &mut TransformState) {
 }
 
 fn resolve_request(state: &mut TransformState, filename: &str, request: &str) -> Option<String> {
+  // COMPAT: Babel resolver option supports custom JS modules; emulate includeSources routing via config.
+  if let Some(resolved) = resolve_workspace_request(state, request) {
+    return Some(resolved);
+  }
+
   let resolver = state.module_resolver.as_ref()?;
   let base = Path::new(filename)
     .parent()
@@ -225,6 +236,146 @@ fn resolve_request(state: &mut TransformState, filename: &str, request: &str) ->
     .resolve(&base, request)
     .ok()
     .map(|resolution| resolution.into_path_buf().to_string_lossy().into_owned())
+}
+
+fn resolve_workspace_request(state: &TransformState, request: &str) -> Option<String> {
+  if state.include_source_prefixes.is_empty() || request.starts_with('.') || request.starts_with('/')
+  {
+    return None;
+  }
+
+  let (package, remainder) = split_package_request(request)?;
+  if !state
+    .include_source_prefixes
+    .iter()
+    .any(|prefix| package.starts_with(prefix))
+  {
+    return None;
+  }
+
+  let root = if state.root.as_os_str().is_empty() {
+    state.cwd.clone()
+  } else {
+    state.root.clone()
+  };
+  let map = workspace_package_map(&root);
+  let base = map.get(&package)?;
+  let mut path = base.clone();
+  if let Some(rest) = remainder {
+    path.push(rest);
+  }
+  Some(path.to_string_lossy().into_owned())
+}
+
+fn workspace_package_map(root: &Path) -> HashMap<String, PathBuf> {
+  let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+  let mut guard = WORKSPACE_PACKAGE_MAP
+    .lock()
+    .expect("workspace package map lock should not be poisoned");
+  if let Some(existing) = guard.get(&canonical_root) {
+    return existing.clone();
+  }
+  let map = build_workspace_package_map(&canonical_root);
+  guard.insert(canonical_root, map.clone());
+  map
+}
+
+fn build_workspace_package_map(root: &Path) -> HashMap<String, PathBuf> {
+  let mut map = HashMap::new();
+  let root_package = root.join("package.json");
+  let workspaces = fs::read_to_string(&root_package)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    .and_then(|pkg| pkg.get("workspaces").cloned())
+    .unwrap_or(Value::Null);
+
+  let workspace_patterns: Vec<String> = match workspaces {
+    Value::Array(items) => items
+      .into_iter()
+      .filter_map(|item| item.as_str().map(|s| s.to_string()))
+      .collect(),
+    Value::Object(obj) => obj
+      .get("packages")
+      .and_then(|val| val.as_array())
+      .map(|arr| {
+        arr.iter()
+          .filter_map(|item| item.as_str().map(|s| s.to_string()))
+          .collect()
+      })
+      .unwrap_or_default(),
+    _ => Vec::new(),
+  };
+
+  for pattern in workspace_patterns {
+    let trimmed = pattern.trim_end_matches("/**");
+    if trimmed.ends_with("/*") {
+      let prefix = trimmed.trim_end_matches("/*");
+      let base = root.join(prefix);
+      if let Ok(entries) = fs::read_dir(&base) {
+        for entry in entries.flatten() {
+          let candidate = entry.path().join("package.json");
+          if let Ok(raw) = fs::read_to_string(&candidate) {
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+              if let Some(name) = value.get("name").and_then(|name| name.as_str()) {
+                if let Some(parent) = candidate.parent() {
+                  map.entry(name.to_string())
+                    .or_insert_with(|| parent.to_path_buf());
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      let candidate = root.join(trimmed).join("package.json");
+      if let Ok(raw) = fs::read_to_string(&candidate) {
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+          if let Some(name) = value.get("name").and_then(|name| name.as_str()) {
+            if let Some(parent) = candidate.parent() {
+              map.entry(name.to_string())
+                .or_insert_with(|| parent.to_path_buf());
+            }
+          }
+        }
+      }
+    }
+  }
+
+  map
+}
+
+fn split_package_request(request: &str) -> Option<(String, Option<String>)> {
+  if request.is_empty() || request.starts_with('.') || request.starts_with('/') {
+    return None;
+  }
+
+  let mut parts = request.split('/').peekable();
+  let first = parts.next()?;
+  if first.is_empty() {
+    return None;
+  }
+
+  if first.starts_with('@') {
+    let second = parts.next()?;
+    if second.is_empty() {
+      return None;
+    }
+    let package = format!("{}/{}", first, second);
+    let remainder: Vec<&str> = parts.collect();
+    if remainder.is_empty() {
+      Some((package, None))
+    } else {
+      Some((package, Some(remainder.join("/"))))
+    }
+  } else {
+    let package = first.to_string();
+    let remainder: Vec<&str> = parts.collect();
+    if remainder.is_empty() {
+      Some((package, None))
+    } else {
+      Some((package, Some(remainder.join("/"))))
+    }
+  }
 }
 
 #[derive(Clone, Debug)]

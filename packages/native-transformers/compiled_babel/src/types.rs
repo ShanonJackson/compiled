@@ -156,6 +156,8 @@ pub struct PluginOptions {
   pub class_hash_prefix: Option<String>,
   pub flatten_multiple_selectors: Option<bool>,
   pub extract: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub resolver_compat: Option<ResolverCompatOptions>,
 }
 
 impl Default for PluginOptions {
@@ -179,6 +181,7 @@ impl Default for PluginOptions {
       class_hash_prefix: None,
       flatten_multiple_selectors: None,
       extract: None,
+      resolver_compat: None,
     }
   }
 }
@@ -189,6 +192,14 @@ impl Default for PluginOptions {
 pub struct TransformMetadata {
   pub included_files: Vec<String>,
   pub style_rules: Vec<String>,
+}
+
+/// Resolver compatibility shim to mirror the Babel resolver hook configuration.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolverCompatOptions {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub include_sources_for: Option<Vec<String>>,
 }
 
 /// Result of a transform run containing the mutated program and collected metadata.
@@ -383,6 +394,7 @@ pub struct TransformState {
   pub cwd: PathBuf,
   pub root: PathBuf,
   pub handler: Lrc<Handler>,
+  pub include_source_prefixes: Vec<String>,
 }
 
 impl fmt::Debug for TransformState {
@@ -444,6 +456,15 @@ impl TransformState {
       });
     }
 
+    let include_source_prefixes: Vec<String> = opts
+      .resolver_compat
+      .as_ref()
+      .and_then(|compat| compat.include_sources_for.clone())
+      .unwrap_or_default()
+      .into_iter()
+      .map(|prefix| prefix.trim_end_matches('*').to_string())
+      .collect();
+
     Self {
       compiled_imports: None,
       uses_xcss: false,
@@ -469,6 +490,7 @@ impl TransformState {
       cwd,
       root,
       handler,
+      include_source_prefixes,
     }
   }
 
