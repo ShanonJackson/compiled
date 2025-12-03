@@ -269,6 +269,13 @@ pub(crate) fn transform_css_via_swc_pipeline(
   // class name hashes match Babel (which normalizes colors pre-atomicify).
   pipeline.push(Box::new(super::plugins::colormin_lite::colormin_lite()));
   pipeline.push(Box::new(expand_shorthands()));
+  if options.optimize_css.unwrap_or(true) {
+    // COMPAT: Re-run reduce-initial after shorthands are expanded so properties
+    // like text-decoration-color are normalized with the final values.
+    pipeline.push(Box::new(
+      super::plugins::reduce_initial::reduce_initial(),
+    ));
+  }
   pipeline.push(Box::new(atomicify_rules()));
 
   if flatten_multiple_selectors_option {

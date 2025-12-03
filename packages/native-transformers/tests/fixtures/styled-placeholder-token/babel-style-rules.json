@@ -1,6 +1,4 @@
 [
-  "._ppeni7uo >input::-ms-input-placeholder{color:var(--ds-text,#292a2e)}",
   "._ppeni7uo >input::placeholder{color:var(--ds-text,#292a2e)}",
-  "._ajcj1wq8 >input::-ms-input-placeholder{font-weight:var(--ds-font-weight-medium,500)}",
   "._ajcj1wq8 >input::placeholder{font-weight:var(--ds-font-weight-medium,500)}"
 ]

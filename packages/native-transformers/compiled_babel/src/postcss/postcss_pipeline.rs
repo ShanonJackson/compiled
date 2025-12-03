@@ -293,10 +293,6 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
   }
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::reduce_initial::plugin());
-  }
-  {
-    use super::plugins::normalize_css_engine as nce;
     plugins.push(nce::convert_values::plugin());
   }
   {
@@ -326,6 +322,10 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     plugins.push(nce::calc::plugin());
   }
   plugins.push(super::plugins::expand_shorthands_engine::plugin());
+  {
+    use super::plugins::normalize_css_engine as nce;
+    plugins.push(nce::reduce_initial::plugin());
+  }
   // Start emitting atomic rules.
   plugins.push(atomicify_rules_plugin(
     options.clone(),

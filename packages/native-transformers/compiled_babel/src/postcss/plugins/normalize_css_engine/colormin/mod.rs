@@ -347,8 +347,8 @@ pub(crate) fn add_plugin_defaults() -> ColorminOptions {
   // - alphaHex: false (conservative without caniuse-api to avoid rrggbbaa)
   // - name: true
   ColorminOptions {
-    transparent: true,
-    alpha_hex: false,
+    transparent: false,
+    alpha_hex: true,
     name: true,
   }
 }
@@ -371,6 +371,9 @@ fn to_hex_rgba(r: u8, g: u8, b: u8, a: u8) -> String {
 fn short_hex_candidate(base_hex: &str, alpha: f32) -> Option<String> {
   // base_hex is #rrggbb or #rrggbbaa (lowercase)
   let chars: Vec<char> = base_hex.chars().collect();
+  if chars.len() < 7 {
+    return None;
+  }
   let (s, o, u, l, p, f, g, v) = (
     chars[1],
     chars[2],
@@ -535,6 +538,9 @@ fn minify_color(input: &str, options: &ColorminOptions) -> String {
   }
   // Fallback: handle named colors explicitly when parser didn't.
   let lower = input.trim().to_ascii_lowercase();
+  if lower == "transparent" {
+    return "#0000".to_string();
+  }
   if let Some(hex) = NAME_TO_HEX.get(lower.as_str()) {
     // Prefer shortened hex when possible.
     let short = short_hex_literal(hex);
@@ -586,6 +592,9 @@ fn walk(
 }
 
 pub(crate) fn transform_value(value: &str, options: &ColorminOptions) -> String {
+  if value.trim().eq_ignore_ascii_case("transparent") {
+    return "#0000".to_string();
+  }
   let mut parsed = vp::parse(value);
   walk(&mut parsed, &mut |node, _index| {
     match node {

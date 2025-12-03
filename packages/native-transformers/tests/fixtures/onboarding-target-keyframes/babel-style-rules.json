@@ -1,5 +1,5 @@
 [
-  "@keyframes kjdbdy5{0%{box-shadow:0 0 0 2px #6554c0,0 0 0 #6554c0}33%{box-shadow:0 0 0 2px #6554c0,0 0 0 #6554c0}66%{box-shadow:0 0 0 2px #6554c0,0 0 0 10px rgba(101,84,192,.01)}to{box-shadow:0 0 0 2px #6554c0,0 0 0 10px rgba(101,84,192,.01)}}",
+  "@keyframes kjdbdy5{0%{box-shadow:0 0 0 2px #6554c0,0 0 0 #6554c0}33%{box-shadow:0 0 0 2px #6554c0,0 0 0 #6554c0}66%{box-shadow:0 0 0 2px #6554c0,0 0 0 10px #6554c003}to{box-shadow:0 0 0 2px #6554c0,0 0 0 10px #6554c003}}",
   "._5sagi11n{animation-duration:3s}",
   "._tip812c5{animation-iteration-count:infinite}",
   "._j7hq1942{animation-name:kjdbdy5}",

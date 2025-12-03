@@ -6,13 +6,21 @@ const path = require('path');
 const os = require('os');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
+// monorepoRoot points at the workspace root (atlassian-frontend-monorepo).
 const monorepoRoot = path.resolve(repoRoot, '..', '..', '..');
 const monorepoNodeModules = path.join(monorepoRoot, 'node_modules');
-process.chdir(repoRoot);
+const ENABLE_RESOLVER = process.env.COMPILED_FIXTURES_ENABLE_RESOLVER === '1';
+// Align CWD with resolver expectations when enabled; otherwise stay at package root.
+process.chdir(ENABLE_RESOLVER ? monorepoRoot : repoRoot);
+
+const jiraRoot = path.resolve(monorepoRoot, 'jira');
+const jiraBrowserslistConfig = path.join(jiraRoot, '.browserslistrc');
+if (ENABLE_RESOLVER && fs.existsSync(jiraBrowserslistConfig)) {
+  process.env.BROWSERSLIST_CONFIG = jiraBrowserslistConfig;
+}
 
 // Toggle to resolve Babel/Compiled plugins from Jira workspace to mirror collector versions.
 const USE_JIRA_COMPILED = false;
-const jiraRoot = path.resolve(monorepoRoot, 'jira');
 const jiraNodeModules = path.join(jiraRoot, 'node_modules');
 const monorepoBabel = require('@babel/core');
 const jiraBabel = require(path.join(jiraNodeModules, '@babel/core'));
@@ -161,6 +169,29 @@ function loadCompiledConfig() {
   return cachedCompiledConfig;
 }
 
+function getResolverOptions() {
+  const cfg = loadCompiledConfig();
+  let resolver = cfg && typeof cfg === 'object' ? cfg.resolver : undefined;
+  if (resolver) {
+    try {
+      resolver = require.resolve(resolver, { paths: [jiraNodeModules, monorepoNodeModules] });
+    } catch (_e) {
+      const jiraResolver = path.join(
+        jiraRoot,
+        'dev-tooling',
+        'packages',
+        'compiled-resolver',
+        'index.js'
+      );
+      resolver = fs.existsSync(jiraResolver) ? jiraResolver : resolver;
+    }
+  }
+  const resolverCompat = {
+    includeSourcesFor: ['platform/*', 'post-office/*'],
+  };
+  return { resolver, resolverCompat };
+}
+
 function getTokensPrepassOptions() {
   if (cachedTokensOptions !== null) {
     return cachedTokensOptions;
@@ -251,6 +282,7 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   const t0 = Date.now();
   const cfg = await readFixtureConfig(fixtureDir);
   const tokenized = applyTokensPrepass(inputCode, inputPath);
+  const { resolver } = ENABLE_RESOLVER ? getResolverOptions() : {};
   const compiledOptions = {
     cache: false,
     optimizeCss: true,
@@ -259,6 +291,7 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
     ...(cfg.classNameCompressionMap
       ? { classNameCompressionMap: cfg.classNameCompressionMap }
       : {}),
+    ...(resolver ? { resolver } : {}),
   };
 
   const result = babel.transformSync(tokenized, {
@@ -320,6 +353,19 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   await fsp.writeFile(tmpFile, tokenized, 'utf8');
 
   const runEnv = { ...process.env };
+  if (ENABLE_RESOLVER && fs.existsSync(jiraBrowserslistConfig)) {
+    runEnv.BROWSERSLIST_CONFIG = jiraBrowserslistConfig;
+  }
+  if (ENABLE_RESOLVER) {
+    const { resolver, resolverCompat } = getResolverOptions();
+    if (resolver) {
+      runEnv.COMPILED_FIXTURES_RESOLVER =
+        typeof resolver === 'string' ? resolver : JSON.stringify(resolver);
+    }
+    if (resolverCompat) {
+      runEnv.COMPILED_FIXTURES_RESOLVER_COMPAT = JSON.stringify(resolverCompat);
+    }
+  }
   // Ensure native transformer headers report the same version as Babel.
   // The Rust transformers read TEST_PKG_VERSION to embed the plugin version.
   try {
@@ -331,8 +377,11 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   } catch (_e) {
     // ignore if package cannot be resolved; transformers will fall back
   }
+  const runCwd = ENABLE_RESOLVER
+    ? jiraRoot
+    : path.join(repoRoot, 'packages', 'native-transformers');
   const run = spawnSync(bin, [tmpFile], {
-    cwd: path.join(repoRoot, 'packages', 'native-transformers'),
+    cwd: runCwd,
     encoding: 'utf8',
     shell: process.platform === 'win32',
     env: runEnv,

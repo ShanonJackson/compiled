@@ -12,5 +12,5 @@ const legacyStyles = xcss({
 const refreshedStyles = null;
 export const Example = () => <>
     <div xcss={legacyStyles}>legacy</div>
-    <div className={ax(["_2rko12b0 _11c82smr _189ee4h9 _1dqonqa1 _1h6d1j28 _1rjc12x7 _18zrutpp _1bsb1wug _p12f1osq _4cvr1q9y _1bah1h6o _gy1p1b66 _c71lzwfg _k48p1wq8 _80omtlke _1jhm5e4z _y2mv5e4z _1ygb5e4z _13ro1i6y _1bg41i6y _1ah31i6y"])}>refresh</div>
+    <div className={ax(["_2rko12b0 _11c82smr _189ee4h9 _1dqonqa1 _1h6d3acm _1rjc12x7 _18zrutpp _1bsb1wug _p12f1osq _4cvr1q9y _1bah1h6o _gy1p1b66 _c71lzwfg _k48p1wq8 _80omtlke _1jhm5e4z _y2mv5e4z _1ygb5e4z _13ro1i6y _1bg41i6y _1ah31i6y"])}>refresh</div>
   </>;

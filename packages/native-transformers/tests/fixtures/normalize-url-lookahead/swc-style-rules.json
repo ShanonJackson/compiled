@@ -1,4 +1,4 @@
 [
   "._1itk1an2{background-image:url(//example.com/image.png)}",
-  "._1nwp1yp3{-webkit-mask-image:url(example.com/mask.svg);mask-image:url(example.com/mask.svg)}"
+  "._1nwp1yp3{mask-image:url(example.com/mask.svg)}"
 ]

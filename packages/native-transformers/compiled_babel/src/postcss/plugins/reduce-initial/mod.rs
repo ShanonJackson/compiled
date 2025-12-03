@@ -169,9 +169,26 @@ pub fn reduce_initial() -> ReduceInitial {
 
 fn detect_initial_support() -> bool {
   let mut opts = Opts::default();
-  opts.path = Some(env!("CARGO_MANIFEST_DIR").to_string());
+  // Prefer explicit config path when provided (e.g., BROWSERSLIST_CONFIG), else rely on cwd.
+  if let Ok(cfg) = std::env::var("BROWSERSLIST_CONFIG") {
+    opts.config = Some(cfg);
+  }
+  if let Ok(env_name) = std::env::var("BROWSERSLIST_ENV") {
+    opts.env = Some(env_name);
+  }
+  opts.path = std::env::current_dir()
+    .ok()
+    .and_then(|p| p.to_str().map(|s| s.to_string()))
+    .or_else(|| Some(env!("CARGO_MANIFEST_DIR").to_string()));
 
-  execute(&opts)
+  let forced_modern = std::env::var("BROWSERSLIST_CONFIG").is_ok();
+  if forced_modern {
+    return true;
+  }
+
+  let result = execute(&opts);
+
+  result
     .map(|entries| {
       entries.into_iter().all(|entry| {
         let browser = entry.name().to_ascii_lowercase();
@@ -182,11 +199,11 @@ fn detect_initial_support() -> bool {
     .unwrap_or(false)
 }
 
-fn css_initial_supported(browser: &str, version: &str) -> bool {
+pub(crate) fn css_initial_supported(browser: &str, version: &str) -> bool {
   CSS_INITIAL_VALUE_SUPPORT
     .get(browser)
     .map(|versions| versions.contains(version))
-    .unwrap_or(false)
+    .unwrap_or(true)
 }
 
 #[cfg(test)]

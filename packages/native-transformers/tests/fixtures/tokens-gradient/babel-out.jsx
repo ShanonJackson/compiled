@@ -10,7 +10,7 @@ const Box = forwardRef(({
   if (__cmplp.innerRef) {
     throw new Error("Please use 'ref' instead of 'innerRef'.");
   }
-  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_1itkh4uj", __cmplp.className])} />;
+  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_1itkp5cw", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   Box.displayName = 'Box';

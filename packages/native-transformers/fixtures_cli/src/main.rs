@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use serde_json;
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::Program;
@@ -10,8 +11,8 @@ use swc_core::ecma::codegen::{text_writer::JsWriter, Emitter};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsSyntax};
 
 use compiled_babel::{
-  transform_with_file as compiled_transform, PluginOptions as CompiledOptions, TransformFile,
-  TransformFileOptions,
+  transform_with_file as compiled_transform, PluginOptions as CompiledOptions, ResolverCompatOptions,
+  ResolverOption, TransformFile, TransformFileOptions,
 };
 use compiled_strip_runtime::{transform as strip_transform, TransformConfig as StripConfig};
 
@@ -83,6 +84,23 @@ fn header_comment_for(path: &str) -> String {
   )
 }
 
+fn resolver_from_env() -> Option<ResolverOption> {
+  env::var("COMPILED_FIXTURES_RESOLVER")
+    .ok()
+    .and_then(|raw| {
+      serde_json::from_str::<serde_json::Value>(&raw)
+        .map(ResolverOption::Inline)
+        .ok()
+        .or_else(|| Some(ResolverOption::Module(raw)))
+    })
+}
+
+fn resolver_compat_from_env() -> Option<ResolverCompatOptions> {
+  env::var("COMPILED_FIXTURES_RESOLVER_COMPAT")
+    .ok()
+    .and_then(|raw| serde_json::from_str::<ResolverCompatOptions>(&raw).ok())
+}
+
 fn main() {
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] entry");
@@ -115,12 +133,17 @@ fn main() {
     eprintln!("[cli] parse done");
   }
 
+  let resolver = resolver_from_env();
+  let resolver_compat = resolver_compat_from_env();
+
   let compiled_opts = CompiledOptions {
     cache: Some(compiled_babel::CacheBehavior::Enabled(false)),
     import_react: Some(true),
     optimize_css: Some(true),
     class_name_compression_map: cfg.class_name_compression_map,
     extract: Some(cfg.extract.unwrap_or(true)),
+    resolver,
+    resolver_compat,
     ..CompiledOptions::default()
   };
   let tf = TransformFile::with_options(

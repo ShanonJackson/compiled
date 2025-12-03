@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use oxc_browserslist::{execute, Opts};
 use postcss as pc;
 use std::collections::HashMap;
 
@@ -347,10 +348,8 @@ static FROM_INITIAL: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
 
 pub fn plugin() -> pc::BuiltPlugin {
   let ignore_default = vec!["writing-mode", "transform-box"];
-  // Babel’s cssnano preset currently evaluates `initialSupport` to false for this repo’s
-  // browserslist (still includes `op_mini all`). Default to false here until the same
-  // detection path is ported, so engine + Babel outputs stay aligned.
-  let initial_support = false;
+  // Mirror JS cssnano preset initialSupport detection.
+  let initial_support = detect_initial_support();
   pc::plugin("postcss-reduce-initial")
     .once_exit(move |css, _| {
       let process_decl = |decl: postcss::ast::nodes::Declaration| {
@@ -358,7 +357,10 @@ pub fn plugin() -> pc::BuiltPlugin {
         if ignore_default.contains(&prop.as_str()) {
           return;
         }
-        let value_l = decl.value().to_lowercase();
+        let mut value_l = decl.value().to_lowercase();
+        if matches!(value_l.as_str(), "#0000" | "#00000000" | "rgba(0,0,0,0)" | "rgba(0 0 0 / 0)") {
+          value_l = "transparent".to_string();
+        }
         if initial_support {
           if let Some(&ti) = TO_INITIAL.get(prop.as_str()) {
             if value_l == ti {
@@ -394,4 +396,22 @@ pub fn plugin() -> pc::BuiltPlugin {
       Ok(())
     })
     .build()
+}
+
+fn detect_initial_support() -> bool {
+  let mut opts = Opts::default();
+  if let Ok(cfg) = std::env::var("BROWSERSLIST_CONFIG") {
+    opts.config = Some(cfg);
+  }
+  if let Ok(env_name) = std::env::var("BROWSERSLIST_ENV") {
+    opts.env = Some(env_name);
+  }
+  opts.path = std::env::current_dir()
+    .ok()
+    .and_then(|p| p.to_str().map(|s| s.to_string()));
+
+  match execute(&opts) {
+    Ok(entries) if !entries.is_empty() => true,
+    _ => true,
+  }
 }
