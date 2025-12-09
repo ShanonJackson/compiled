@@ -1156,7 +1156,7 @@ fn extract_stylesheets_plugin(
     if trimmed.is_empty() {
       return value.to_string();
     }
-    let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+    let (opts, _) = super::plugins::normalize_css_engine::colormin::default_options_with_browsers();
     let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
     if min.len() < trimmed.len() {
       min
@@ -1769,7 +1769,8 @@ fn atomicify_rules_plugin(
           if trimmed.is_empty() {
             return value.to_string();
           }
-          let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+          let (opts, _) =
+            super::plugins::normalize_css_engine::colormin::default_options_with_browsers();
           let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
           if min.len() < trimmed.len() {
             min
@@ -1957,7 +1958,8 @@ fn atomicify_rules_plugin(
           }
           // Delegate to the same colormin transformer used by the plugin to ensure 1:1.
           // Use default options (modern defaults), consistent with our plugin defaults.
-          let opts = super::plugins::normalize_css_engine::colormin::add_plugin_defaults();
+          let (opts, _) =
+            super::plugins::normalize_css_engine::colormin::default_options_with_browsers();
           let min = super::plugins::normalize_css_engine::colormin::transform_value(trimmed, &opts);
           let out = if min.len() < trimmed.len() {
             min

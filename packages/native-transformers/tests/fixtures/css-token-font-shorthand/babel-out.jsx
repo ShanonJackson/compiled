@@ -2,4 +2,4 @@
 import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
 const styles = null;
-export const Component = () => <div className={ax(["_2rko1mok _11c8dcr7 _bfhk1xt1 _syazzjem"])} />;
+export const Component = () => <div className={ax(["_2rko1mok _11c8dcr7 _bfhk1xt1 _syazdv2p"])} />;

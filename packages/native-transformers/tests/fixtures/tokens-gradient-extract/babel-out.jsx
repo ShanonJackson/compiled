@@ -14,7 +14,7 @@ const SkeletonRow = forwardRef(({
     ...__cmpls,
     "--_1neqek2": ix(`${__cmplp.height}px`),
     "--_6f8077": ix(`${__cmplp.width}px`)
-  }} ref={__cmplr} className={ax(["_2rkofajl _1itkp5cw _12vemgnk _4t3i2nrh _1bsb1hdq", __cmplp.className])} />;
+  }} ref={__cmplr} className={ax(["_2rkofajl _1itkh4uj _12vemgnk _4t3i2nrh _1bsb1hdq", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   SkeletonRow.displayName = 'SkeletonRow';

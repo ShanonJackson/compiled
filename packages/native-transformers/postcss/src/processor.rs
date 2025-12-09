@@ -1383,7 +1383,10 @@ type FilteredNodeHook<T> =
 
 fn call_run_hook(hook: &Option<RunHook>, result: &mut PostcssResult) -> Result<(), ProcessorError> {
   if let Some(handler) = hook {
-    handler(result)
+    let start = std::time::Instant::now();
+    let res = handler(result);
+    crate::metrics::record_plugin_ns(start.elapsed().as_nanos() as u64);
+    res
   } else {
     Ok(())
   }
@@ -1395,7 +1398,10 @@ fn call_node_hook<T>(
   result: &mut PostcssResult,
 ) -> Result<(), ProcessorError> {
   if let Some(handler) = hook {
-    handler(node, result)
+    let start = std::time::Instant::now();
+    let res = handler(node, result);
+    crate::metrics::record_plugin_ns(start.elapsed().as_nanos() as u64);
+    res
   } else {
     Ok(())
   }
@@ -1409,10 +1415,14 @@ fn call_filtered_node_hooks<T>(
   result: &mut PostcssResult,
 ) -> Result<(), ProcessorError> {
   if let Some(handler) = hooks.get("*") {
+    let start = std::time::Instant::now();
     handler(original, normalized, node, result)?;
+    crate::metrics::record_plugin_ns(start.elapsed().as_nanos() as u64);
   }
   if let Some(handler) = hooks.get(normalized) {
+    let start = std::time::Instant::now();
     handler(original, normalized, node, result)?;
+    crate::metrics::record_plugin_ns(start.elapsed().as_nanos() as u64);
   }
   Ok(())
 }

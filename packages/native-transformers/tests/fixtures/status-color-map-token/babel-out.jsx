@@ -2,15 +2,15 @@
 import { forwardRef } from 'react';
 import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
-const STATUS = ({
+const STATUS = {
   TODO: 'TODO',
   IN_PROGRESS: 'IN_PROGRESS',
   DONE: 'DONE',
   UNKNOWN: 'UNKNOWN'
-} as const);
+} as const;
 const STATUS_COLOR_MAP = {
-  [STATUS.TODO]: "var(--ds-icon-accent-gray, #758195)",
-  [STATUS.IN_PROGRESS]: "var(--ds-icon-accent-blue, #1D7AFC)",
+  [STATUS.TODO]: "var(--ds-icon-accent-gray, #7D818A)",
+  [STATUS.IN_PROGRESS]: "var(--ds-icon-accent-blue, #357DE8)",
   [STATUS.DONE]: "var(--ds-icon-accent-green, #22A06B)",
   [STATUS.UNKNOWN]: 'unset'
 };

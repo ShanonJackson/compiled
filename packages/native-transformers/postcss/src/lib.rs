@@ -12,6 +12,7 @@ pub mod terminal_highlight;
 pub mod to_json;
 pub mod vendor;
 pub mod warn_once;
+pub mod metrics;
 
 pub use ast::nodes::*;
 pub use ast::{PositionByOptions, RangeByOptions};

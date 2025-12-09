@@ -18,7 +18,7 @@ mod css_map_process_selectors;
 #[path = "css-prop/index.rs"]
 mod css_prop;
 #[path = "postcss/mod.rs"]
-mod postcss;
+pub mod postcss;
 #[path = "styled/index.rs"]
 mod styled;
 #[path = "test-utils.rs"]

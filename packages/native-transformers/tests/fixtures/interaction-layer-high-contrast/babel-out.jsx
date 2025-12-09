@@ -12,7 +12,7 @@ const cardFocusStyles = {
   right: 0,
   top: 0,
   bottom: 0,
-  boxShadow: `0 0 0 2px ${"var(--ds-border-focused, #388BFF)"}`,
+  boxShadow: `0 0 0 2px ${"var(--ds-border-focused, #4688EC)"}`,
   pointerEvents: 'none'
 };
 const Container = forwardRef(({
@@ -23,7 +23,7 @@ const Container = forwardRef(({
   if (__cmplp.innerRef) {
     throw new Error("Please use 'ref' instead of 'innerRef'.");
   }
-  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_kqswstnw _154iidpf _94n5idpf _1ltvidpf _1xi2idpf _nt751r31 _49pcglyw _1hvw1o36 _q5c0kb7n _1lztewfl _h10pb3bt _j7gt1ule _1tfxstnw _1v98kb7n _1a07idpf _ti30idpf _44x7idpf _gabdidpf _1n511vm4 _6q10glyw _zjd3b3bt _1vfc1ule _hkspstnw _1hl4kb7n _ehfnidpf _1btaidpf _1vdbidpf _o6k0idpf _1m551vm4 _1191glyw _1m5564oc _bwdwb3bt _6ycq1ule _1h9dstnw _i6g0kb7n _9jtdidpf _1snmidpf _1jstidpf _pnw9idpf _xp6a1vm4 _15y0glyw _xp6a64oc", __cmplp.className])} />;
+  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_kqswstnw _154iidpf _94n5idpf _1ltvidpf _1xi2idpf _nt751r31 _49pcglyw _1hvw1o36 _q5c0kb7n _1lztewfl _h10pb3bt _j7gt1ule _1tfxstnw _1v98kb7n _1a07idpf _ti30idpf _44x7idpf _gabdidpf _1n511y54 _6q10glyw _zjd3b3bt _1vfc1ule _hkspstnw _1hl4kb7n _ehfnidpf _1btaidpf _1vdbidpf _o6k0idpf _1m551y54 _1191glyw _1m552ef9 _bwdwb3bt _6ycq1ule _1h9dstnw _i6g0kb7n _9jtdidpf _1snmidpf _1jstidpf _pnw9idpf _xp6a1y54 _15y0glyw _xp6a2ef9", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   Container.displayName = 'Container';

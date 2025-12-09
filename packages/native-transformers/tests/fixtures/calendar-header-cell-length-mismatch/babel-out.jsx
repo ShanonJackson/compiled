@@ -20,7 +20,7 @@ const CalendarHeader = forwardRef(({
   return <C {...__cmpldp} style={{
     ...__cmpls,
     "--_uapmxa": ix(__cmplp.weekViewEnabled && 'row')
-  }} ref={__cmplr} className={ax(["_c6pa1txw _1e2tvrvc _1tzj1h6o _1w351h6o _vrr81vhk _gqw31gjq _8wp8moej _ogrsidpf _lkmm1vhk _wwc41gjq _fuolmoej _62pcsbjq _1vsm1dk0 _l4b7sbjq _66cp1dk0", __cmplp.weekViewEnabled && "_1du31vhk _12vt1gjq _qcb21pd9 _1hox1wug _15oh1wug _162m1b66 _o0k41vhk _fl9r131l _1ogc1pd9 _7u3q1vhk _ltzu131l _1lx21pd9 _ahuqglyw _d9q91e6v _1va6glyw _1rng1e6v _1nl2glyw _zgyx1e6v", __cmplp.hasIssuesPages ? __cmplp.isVisualRefresh ? "_2rko1v12" : "_2rkome6u" : __cmplp.isVisualRefresh ? "_2rko12x7" : "_2rkolb4i", __cmplp.isVisualRefresh ? "_14b41ylp" : "_14b41tcg", __cmplp.weekViewEnabled ? "_19e21txw" : "_19e21ule", __cmplp.weekViewEnabled ? "_rmns1txw" : "_rmns1ule", __cmplp.className])} />;
+  }} ref={__cmplr} className={ax(["_c6pa1txw _1e2tvrvc _1tzj1h6o _1w351h6o _vrr81vhk _gqw3azsu _8wp8moej _ogrsidpf _lkmm1vhk _wwc4azsu _fuolmoej _62pcsbjq _1vsm1dk0 _l4b7sbjq _66cp1dk0", __cmplp.weekViewEnabled && "_1du31vhk _12vtazsu _qcb21pd9 _1hox1wug _15oh1wug _162m1b66 _o0k41vhk _fl9r1rpy _1ogc1pd9 _7u3q1vhk _ltzu1rpy _1lx21pd9 _ahuqglyw _d9q91oa5 _1va6glyw _1rng1oa5 _1nl2glyw _zgyx1oa5", __cmplp.hasIssuesPages ? __cmplp.isVisualRefresh ? "_2rko1v12" : "_2rkome6u" : __cmplp.isVisualRefresh ? "_2rko12x7" : "_2rkolb4i", __cmplp.isVisualRefresh ? "_14b41ylp" : "_14b41tcg", __cmplp.weekViewEnabled ? "_19e21txw" : "_19e21ule", __cmplp.weekViewEnabled ? "_rmns1txw" : "_rmns1ule", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   CalendarHeader.displayName = 'CalendarHeader';

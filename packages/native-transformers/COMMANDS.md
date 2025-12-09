@@ -13,6 +13,6 @@ cargo build --manifest-path packages/native-transformers/Cargo.toml -p fixtures_
 
 
 
-NODE_PATH=/home/ubuntu/atlassian-frontend-monorepo/node_modules node scripts/update-fixtures.js
+node scripts/update-fixtures.js
 node jira/collect-style-rules-swc.js
 cd /home/ubuntu/atlassian-frontend-monorepo && node platform/crates/compiled/crates/compiled_swc_plugin/jira/progress-report.js --root jira/tmp/style-rules

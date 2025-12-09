@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -29,6 +30,18 @@ struct CliOutput {
   code: String,
   #[serde(rename = "styleRules")]
   style_rules: Vec<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  timings: Option<Timings>,
+}
+
+#[derive(Debug, Serialize)]
+struct Timings {
+  #[serde(rename = "totalMs")]
+  total_ms: f64,
+  #[serde(rename = "postcssMs")]
+  postcss_ms: f64,
+  #[serde(rename = "postcssPluginMs")]
+  postcss_plugin_ms: f64,
 }
 
 fn parse_program(
@@ -102,6 +115,7 @@ fn resolver_compat_from_env() -> Option<ResolverCompatOptions> {
 }
 
 fn main() {
+  let start = Instant::now();
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] entry");
   }
@@ -211,7 +225,20 @@ fn main() {
     code = format!("{}{}", header, code);
   }
 
-  let result = CliOutput { code, style_rules };
+  let postcss_ns = compiled_babel::postcss::metrics::take_postcss_ns();
+  let postcss_plugin_ns = compiled_babel::postcss::metrics::take_postcss_plugin_ns();
+  let total_ms = start.elapsed().as_secs_f64() * 1000.0;
+  let timings = Some(Timings {
+    total_ms,
+    postcss_ms: postcss_ns as f64 / 1_000_000.0,
+    postcss_plugin_ms: postcss_plugin_ns as f64 / 1_000_000.0,
+  });
+
+  let result = CliOutput {
+    code,
+    style_rules,
+    timings,
+  };
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] output ready");
   }

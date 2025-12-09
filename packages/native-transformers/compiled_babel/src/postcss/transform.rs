@@ -370,6 +370,9 @@ pub fn transform_css(
   // Default to the PostCSS engine-backed pipeline when available.
   #[cfg(feature = "postcss_engine")]
   {
+    // Reset plugin timing before run so we get per-call numbers.
+    let _ = postcss::metrics::take_plugin_ns();
+    let t0 = std::time::Instant::now();
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
       eprintln!("[postcss] via-postcss begin");
     }
@@ -377,6 +380,9 @@ pub fn transform_css(
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
       eprintln!("[postcss] via-postcss end");
     }
+    super::metrics::record_postcss_ns(t0.elapsed().as_nanos() as u64);
+    let plugin_ns = postcss::metrics::take_plugin_ns();
+    super::metrics::record_postcss_plugin_ns(plugin_ns);
     return r;
   }
   #[cfg(not(feature = "postcss_engine"))]

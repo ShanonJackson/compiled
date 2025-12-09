@@ -2,6 +2,6 @@
 import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
 const styles = null;
-export const Component = () => <div className={ax(["_syaz143u _1h9x18uv _16fv8stv _hkegnqa1 _30l3u67f _r5zo1r31 _s3beglyw _10t01o36"])}>
+export const Component = () => <div className={ax(["_syaz143u _1h9x1r31 _16fv8stv _hkegnqa1 _30l3u67f _r5zo1r31 _s3beglyw _10t01o36"])}>
     <span>Nested</span>
   </div>;

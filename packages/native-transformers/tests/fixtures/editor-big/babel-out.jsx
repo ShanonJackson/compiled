@@ -36,7 +36,7 @@ const EditorShell = () => {
   }), [mode]);
   return <EditorThemeContext.Provider value={contextValue}>
       <section aria-label="Rich text editor" className={ax(["_zulp7vkz _ca0q1tcg _u5f31tcg _n3td1tcg _19bv1tcg _2rko7vkz _1e0c11p5 _bfhk1hxd"])}>
-        <header className={ax(["_zulpftgi _1e0c1txw _1n261g80 _stfgoyrj _zs121y44 _1gfl1y44 _yhjmftgi _1gqn1y44 _11lvftgi _m4w23739 _6pupu67f _19e7owjk _1uegowjk _1o7p1crf _1i49angw _7dir18uv _4rtxtlke"])}>
+        <header className={ax(["_zulpftgi _1e0c1txw _1n261g80 _stfgokh7 _zs121y44 _1gfl1y44 _yhjmftgi _1gqn1y44 _11lvftgi _m4w23739 _6pupu67f _19e7owjk _1uegowjk _1o7p1crf _1i49angw _7dir1j28 _4rtxtlke"])}>
           <ToolbarButton active={bold} label="Bold" onClick={handleToggle(setBold)} />
           <ToolbarButton active={italics} label="Italics" onClick={handleToggle(setItalics)} />
           <ToolbarButton active={mode === 'dark'} label="Toggle theme" onClick={() => contextValue.toggleMode()} />

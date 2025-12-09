@@ -341,16 +341,37 @@ pub(crate) struct ColorminOptions {
   name: bool,
 }
 
-pub(crate) fn add_plugin_defaults() -> ColorminOptions {
-  // Defaults per plugin when no caniuse data is provided via browserslist env:
-  // - transparent: true (unless IE 8/9 detected)
-  // - alphaHex: false (conservative without caniuse-api to avoid rrggbbaa)
-  // - name: true
+pub(crate) fn add_plugin_defaults(browsers: &[String]) -> ColorminOptions {
+  // Defaults per JS plugin:
+  // transparent: true unless IE 8/9 are in the target list
+  // alphaHex: true only when all targets support #rgba/rrggbbaa
+  // name: true
+  let transparent = !browsers.iter().any(|b| b == "ie 8" || b == "ie 9");
+
+  let opts = oxc_browserslist::Opts::default();
+  // Akin to caniuse-api isSupported('css-rrggbbaa', browsers)
+  let alpha_hex = if let Ok(supported) = oxc_browserslist::resolve(
+    &["supports css-rrggbbaa"],
+    &opts,
+  ) {
+    let supported: std::collections::HashSet<String> =
+      supported.into_iter().map(|d| d.to_string()).collect();
+    browsers.iter().all(|b| supported.contains(b))
+  } else {
+    false
+  };
+
   ColorminOptions {
-    transparent: false,
-    alpha_hex: true,
+    transparent,
+    alpha_hex,
     name: true,
   }
+}
+
+pub(crate) fn default_options_with_browsers() -> (ColorminOptions, Vec<String>) {
+  let browsers = resolve_browsers();
+  let options = add_plugin_defaults(&browsers);
+  (options, browsers)
 }
 
 fn number_short(n: f64) -> String {
@@ -539,7 +560,13 @@ fn minify_color(input: &str, options: &ColorminOptions) -> String {
   // Fallback: handle named colors explicitly when parser didn't.
   let lower = input.trim().to_ascii_lowercase();
   if lower == "transparent" {
-    return "#0000".to_string();
+    if options.alpha_hex {
+      return "#0000".to_string();
+    }
+    if options.transparent {
+      return "transparent".to_string();
+    }
+    return "rgba(0,0,0,0)".to_string();
   }
   if let Some(hex) = NAME_TO_HEX.get(lower.as_str()) {
     // Prefer shortened hex when possible.
@@ -592,9 +619,6 @@ fn walk(
 }
 
 pub(crate) fn transform_value(value: &str, options: &ColorminOptions) -> String {
-  if value.trim().eq_ignore_ascii_case("transparent") {
-    return "#0000".to_string();
-  }
   let mut parsed = vp::parse(value);
   walk(&mut parsed, &mut |node, _index| {
     match node {
@@ -629,14 +653,17 @@ pub(crate) fn transform_value(value: &str, options: &ColorminOptions) -> String 
 }
 
 fn resolve_browsers() -> Vec<String> {
-  Vec::new()
+  let opts = oxc_browserslist::Opts::default();
+  match oxc_browserslist::execute(&opts) {
+    Ok(list) => list.into_iter().map(|d| d.to_string()).collect(),
+    Err(_) => Vec::new(),
+  }
 }
 
 pub fn plugin() -> pc::BuiltPlugin {
   // browserslist resolution (used only for transparent bug). If unavailable, default modern.
-  let browsers: Vec<String> = resolve_browsers();
+  let (mut options, browsers) = default_options_with_browsers();
   let has_ie8_9 = browsers.iter().any(|b| b == "ie 8" || b == "ie 9");
-  let mut options = add_plugin_defaults();
   if has_ie8_9 {
     options.transparent = false;
   }

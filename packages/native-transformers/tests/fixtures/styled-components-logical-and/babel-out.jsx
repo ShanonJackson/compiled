@@ -12,6 +12,6 @@ const DropdownTitle = styled.p<{
   ${({
   numItems,
   enabled
-}) => !enabled && `color: ${numItems ? "var(--ds-text, #172B4D)" : "var(--ds-text-subtlest, #626F86)"};`}
+}) => !enabled && `color: ${numItems ? "var(--ds-text, #292A2E)" : "var(--ds-text-subtlest, #6B6E76)"};`}
 `;
 export const Component = () => <DropdownTitle numItems={1} />;

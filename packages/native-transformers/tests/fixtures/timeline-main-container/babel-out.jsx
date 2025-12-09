@@ -8,7 +8,7 @@ export const MainContainer: FC<Props> = ({
   children,
   ...props
 }) => {
-  return <div {...props} className={ax(["_2lx21bp4 _1n261q9c _2rko1mok _1reo15vq _18m915vq _1h6dmuej _1dqonqa1 _1e0c1txw _kqswh2mm"])}>
+  return <div {...props} className={ax(["_2lx21bp4 _1n261q9c _2rko1mok _1reo15vq _18m915vq _1h6d1l7x _1dqonqa1 _1e0c1txw _kqswh2mm"])}>
       {children}
     </div>;
 };

@@ -410,8 +410,22 @@ fn detect_initial_support() -> bool {
     .ok()
     .and_then(|p| p.to_str().map(|s| s.to_string()));
 
-  match execute(&opts) {
-    Ok(entries) if !entries.is_empty() => true,
-    _ => true,
+  let targets = execute(&opts).unwrap_or_default();
+  if targets.is_empty() {
+    return false;
   }
+
+  // JS plugin uses caniuse-api isSupported('css-initial-value', browsers)
+  let supported = match oxc_browserslist::resolve(&["supports css-initial-value"], &opts) {
+    Ok(list) => list,
+    Err(_) => Vec::new(),
+  };
+  if supported.is_empty() {
+    return false;
+  }
+  let supported_set: std::collections::HashSet<String> =
+    supported.into_iter().map(|d| d.to_string()).collect();
+  targets
+    .into_iter()
+    .all(|d| supported_set.contains(&d.to_string()))
 }

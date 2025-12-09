@@ -37,7 +37,7 @@ const StickyWrapper = forwardRef(({
     "--_1lxvhyt": ix(__cmplp.isWideLayout ? '1920px' : 'inherit'),
     "--_1j3ddle": ix(__cmplp.isWideLayout ? '100%' : 'inherit'),
     "--_pxmdp9": ix(__cmplp.isWideLayout ? 'center' : 'inherit')
-  }} ref={__cmplr} className={ax(["_1axi1if8 _1ae31fcb _nn8px0bf _uto9d5jx _vggs17df", __cmplp.isEmbedMode ? "_r3721bhr" : "_r372vuon", __cmplp.showKeyline ? "_igsx17gk" : undefined, __cmplp.showKeyline && __cmplp.applyVisualRefreshChanges ? "_1u8bu2gc" : undefined, __cmplp.isTabLayout ? "_4eq41ejb" : undefined, __cmplp.isSidebarPanelOpened ? "_s9qln7od" : __cmplp.isTabLayout ? "_s9ql1ejb" : "_s9qlu2gc", __cmplp.flexStyle && "_1e0c1txw _1bah1yb4 _p12f1d9w _1bsbcbx4 _10fpdmq1", __cmplp.className])} />;
+  }} ref={__cmplr} className={ax(["_1axi1if8 _1ae31fcb _nn8px0bf _uto9d5jx _vggs17df", __cmplp.isEmbedMode ? "_r3721bhr" : "_r372vuon", __cmplp.showKeyline ? "_igsxz4f7" : undefined, __cmplp.showKeyline && __cmplp.applyVisualRefreshChanges ? "_1u8bu2gc" : undefined, __cmplp.isTabLayout ? "_4eq41ejb" : undefined, __cmplp.isSidebarPanelOpened ? "_s9qln7od" : __cmplp.isTabLayout ? "_s9ql1ejb" : "_s9qlu2gc", __cmplp.flexStyle && "_1e0c1txw _1bah1yb4 _p12f1d9w _1bsbcbx4 _10fpdmq1", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   StickyWrapper.displayName = 'StickyWrapper';

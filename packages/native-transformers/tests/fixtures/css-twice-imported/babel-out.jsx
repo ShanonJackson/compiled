@@ -3,6 +3,6 @@ import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
 import { palette } from './palette';
 const styles = null;
-export const Component = () => <div className={ax(["_syaze71q _irr3u67f"])}>
+export const Component = () => <div className={ax(["_syaz1ejv _irr3u67f"])}>
     imported twice
   </div>;

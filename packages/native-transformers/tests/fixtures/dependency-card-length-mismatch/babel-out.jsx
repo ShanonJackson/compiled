@@ -7,7 +7,7 @@ const childContainerStyles = null;
 const DependencyCardFixture = ({
   withParent = true
 }) => {
-  const content = <div className={ax(["_1e0c1txw _2lx21bp4 _kqswh2mm _ca0qu2gc _u5f3pxbi _n3tdu2gc _19bvpxbi _bfhkhp5a _16qszucj"])}>content</div>;
+  const content = <div className={ax(["_1e0c1txw _2lx21bp4 _kqswh2mm _ca0qu2gc _u5f3pxbi _n3tdu2gc _19bvpxbi _bfhkhp5a _16qst7xp"])}>content</div>;
   return withParent ? <>
       <div className={ax(["_1reo15vq _18m915vq _1e0c1txw _kqswh2mm _2lx2vrvc _4cvr1h6o"])}>title</div>
       <div className={ax(["_kqswh2mm _19bv1ejb _19pk1b66"])}>{content}</div>

@@ -6,28 +6,24 @@ const path = require('path');
 const os = require('os');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-// monorepoRoot points at the workspace root (atlassian-frontend-monorepo).
-const monorepoRoot = path.resolve(repoRoot, '..', '..', '..');
-const monorepoNodeModules = path.join(monorepoRoot, 'node_modules');
-const ENABLE_RESOLVER = process.env.COMPILED_FIXTURES_ENABLE_RESOLVER === '1';
-// Align CWD with resolver expectations when enabled; otherwise stay at package root.
-process.chdir(ENABLE_RESOLVER ? monorepoRoot : repoRoot);
+const workspaceNodeModules = path.join(repoRoot, 'node_modules');
+// Resolver alignment is enabled by default to mirror the collectors; set
+// COMPILED_FIXTURES_ENABLE_RESOLVER=0 to disable.
+const ENABLE_RESOLVER = process.env.COMPILED_FIXTURES_ENABLE_RESOLVER !== '0';
+// Always align CWD with the standalone workspace.
+process.chdir(repoRoot);
 
-const jiraRoot = path.resolve(monorepoRoot, 'jira');
-const jiraBrowserslistConfig = path.join(jiraRoot, '.browserslistrc');
-if (ENABLE_RESOLVER && fs.existsSync(jiraBrowserslistConfig)) {
-  process.env.BROWSERSLIST_CONFIG = jiraBrowserslistConfig;
+const workspaceBrowserslistConfig = path.join(repoRoot, '.browserslistrc');
+if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
+  process.env.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
 }
 
-// Toggle to resolve Babel/Compiled plugins from Jira workspace to mirror collector versions.
-const USE_JIRA_COMPILED = false;
-const jiraNodeModules = path.join(jiraRoot, 'node_modules');
-const monorepoBabel = require('@babel/core');
-const jiraBabel = require(path.join(jiraNodeModules, '@babel/core'));
-const babel = USE_JIRA_COMPILED ? jiraBabel : monorepoBabel;
-const resolveFromJira = (id) =>
-  USE_JIRA_COMPILED ? require.resolve(id, { paths: [jiraNodeModules] }) : require.resolve(id);
-const jiraCompiledConfigPath = path.join(jiraRoot, '.compiledcssrc');
+const resolveFromRepo = (id) =>
+  require.resolve(id, { paths: [workspaceNodeModules, repoRoot] });
+const requireFromRepo = (id) => require(resolveFromRepo(id));
+const babel = requireFromRepo('@babel/core');
+const compiledConfigPath =
+  process.env.COMPILED_FIXTURES_CONFIG || path.join(repoRoot, '.compiledcssrc');
 let cachedCompiledConfig = null;
 let cachedTokensOptions = null;
 
@@ -40,6 +36,7 @@ const fixtureRoot = path.join(
 );
 
 const MAX_MISMATCH_PRINT = 3; // show at most this many missing/extra rules
+const timingTotals = { totalMs: 0, postcssMs: 0, postcssPluginMs: 0, samples: 0 };
 
 const BABEL_OPTIONS = {
   babelrc: false,
@@ -130,21 +127,7 @@ function formatWithPrettierOrReturn(code, parser = 'babel-ts') {
 
 function loadTokensPlugin() {
   const candidates = [
-    () => require(require.resolve('@atlaskit/tokens/babel-plugin', { paths: [monorepoRoot] })),
-    () => require('@atlaskit/tokens/babel-plugin'),
-    () =>
-      require(
-        path.join(
-          monorepoRoot,
-          'platform',
-          'packages',
-          'design-system',
-          'tokens',
-          'prebuilt',
-          'babel-plugin',
-          'plugin.js'
-        )
-      ),
+    () => requireFromRepo('@atlaskit/tokens/babel-plugin'),
   ];
   for (const load of candidates) {
     try {
@@ -161,7 +144,7 @@ function loadCompiledConfig() {
     return cachedCompiledConfig;
   }
   try {
-    const raw = fs.readFileSync(jiraCompiledConfigPath, 'utf8');
+    const raw = fs.readFileSync(compiledConfigPath, 'utf8');
     cachedCompiledConfig = JSON.parse(raw);
   } catch (_e) {
     cachedCompiledConfig = {};
@@ -171,24 +154,31 @@ function loadCompiledConfig() {
 
 function getResolverOptions() {
   const cfg = loadCompiledConfig();
-  let resolver = cfg && typeof cfg === 'object' ? cfg.resolver : undefined;
+  const envResolver = process.env.COMPILED_FIXTURES_RESOLVER;
+  const envResolverCompat = process.env.COMPILED_FIXTURES_RESOLVER_COMPAT;
+
+  const parseCompat = (value) => {
+    if (!value) return undefined;
+    try {
+      return JSON.parse(value);
+    } catch (_e) {
+      return undefined;
+    }
+  };
+
+  let resolver = envResolver || (cfg && typeof cfg === 'object' ? cfg.resolver : undefined);
   if (resolver) {
     try {
-      resolver = require.resolve(resolver, { paths: [jiraNodeModules, monorepoNodeModules] });
+      resolver = resolveFromRepo(resolver);
     } catch (_e) {
-      const jiraResolver = path.join(
-        jiraRoot,
-        'dev-tooling',
-        'packages',
-        'compiled-resolver',
-        'index.js'
-      );
-      resolver = fs.existsSync(jiraResolver) ? jiraResolver : resolver;
+      // leave resolver as-is when it cannot be resolved locally
     }
   }
-  const resolverCompat = {
-    includeSourcesFor: ['platform/*', 'post-office/*'],
-  };
+
+  const resolverCompat =
+    parseCompat(envResolverCompat) ||
+    (cfg && typeof cfg === 'object' ? cfg.resolverCompat : undefined);
+
   return { resolver, resolverCompat };
 }
 
@@ -298,8 +288,8 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
     ...BABEL_OPTIONS,
     filename: inputPath,
     plugins: [
-      [resolveFromJira('@compiled/babel-plugin'), compiledOptions],
-      [resolveFromJira('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
+      [resolveFromRepo('@compiled/babel-plugin'), compiledOptions],
+      [resolveFromRepo('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
     ],
   });
 
@@ -353,18 +343,16 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   await fsp.writeFile(tmpFile, tokenized, 'utf8');
 
   const runEnv = { ...process.env };
-  if (ENABLE_RESOLVER && fs.existsSync(jiraBrowserslistConfig)) {
-    runEnv.BROWSERSLIST_CONFIG = jiraBrowserslistConfig;
+  if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
+    runEnv.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
   }
-  if (ENABLE_RESOLVER) {
-    const { resolver, resolverCompat } = getResolverOptions();
-    if (resolver) {
-      runEnv.COMPILED_FIXTURES_RESOLVER =
-        typeof resolver === 'string' ? resolver : JSON.stringify(resolver);
-    }
-    if (resolverCompat) {
-      runEnv.COMPILED_FIXTURES_RESOLVER_COMPAT = JSON.stringify(resolverCompat);
-    }
+  const { resolver, resolverCompat } = ENABLE_RESOLVER ? getResolverOptions() : {};
+  if (resolver) {
+    runEnv.COMPILED_FIXTURES_RESOLVER =
+      typeof resolver === 'string' ? resolver : JSON.stringify(resolver);
+  }
+  if (resolverCompat) {
+    runEnv.COMPILED_FIXTURES_RESOLVER_COMPAT = JSON.stringify(resolverCompat);
   }
   // Ensure native transformer headers report the same version as Babel.
   // The Rust transformers read TEST_PKG_VERSION to embed the plugin version.
@@ -377,9 +365,7 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   } catch (_e) {
     // ignore if package cannot be resolved; transformers will fall back
   }
-  const runCwd = ENABLE_RESOLVER
-    ? jiraRoot
-    : path.join(repoRoot, 'packages', 'native-transformers');
+  const runCwd = path.join(repoRoot, 'packages', 'native-transformers');
   const run = spawnSync(bin, [tmpFile], {
     cwd: runCwd,
     encoding: 'utf8',
@@ -410,6 +396,12 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
 
   try {
     const parsed = JSON.parse(run.stdout || '{}');
+    if (parsed && parsed.timings) {
+      timingTotals.samples += 1;
+      timingTotals.totalMs += Number(parsed.timings.totalMs) || 0;
+      timingTotals.postcssMs += Number(parsed.timings.postcssMs) || 0;
+      timingTotals.postcssPluginMs += Number(parsed.timings.postcssPluginMs) || 0;
+    }
     return {
       code: parsed.code || inputCode,
       styleRules: Array.isArray(parsed.styleRules) ? parsed.styleRules : [],
@@ -540,6 +532,24 @@ async function main() {
   for (const fixtureName of fixtures) {
     const res = await processFixture(fixtureName);
     results.push(res);
+  }
+
+  if (timingTotals.samples > 0) {
+    const pct =
+      timingTotals.totalMs > 0 ? (timingTotals.postcssMs / timingTotals.totalMs) * 100 : 0;
+    const pluginPct =
+      timingTotals.postcssMs > 0
+        ? (timingTotals.postcssPluginMs / timingTotals.postcssMs) * 100
+        : 0;
+    console.log(
+      `Timing (SWC fixtures): total ${timingTotals.totalMs.toFixed(
+        1
+      )}ms, postcss ${timingTotals.postcssMs.toFixed(1)}ms (${pct.toFixed(
+        1
+      )}%) plugin ${timingTotals.postcssPluginMs.toFixed(1)}ms (${pluginPct.toFixed(
+        1
+      )}% of postcss) across ${timingTotals.samples} fixtures`
+    );
   }
 
   const ruleMismatches = results.filter(

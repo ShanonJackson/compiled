@@ -2,7 +2,7 @@
   "._18zru2gc{padding-inline:var(--ds-space-100,8px)}",
   "._1e0cglyw{display:none}",
   "._p12fnklw{max-width:20pc}",
-  "._vchh18uv{box-sizing:initial}",
+  "._vchh1ntv{box-sizing:content-box}",
   "@media (min-width:64rem){._10y41txw._10y41txw{display:flex}}",
   "._4cvr1h6o{align-items:center}",
   "._2rkofajl{border-radius:var(--ds-radius-small,3px)}",

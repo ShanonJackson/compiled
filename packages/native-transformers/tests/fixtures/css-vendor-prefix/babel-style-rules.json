@@ -2,5 +2,5 @@
   "._13di1kw7{-moz-appearance:inherit}",
   "._wstuglyw{-webkit-appearance:none}",
   "._1fpfglyw{ms-overflow-style:none}",
-  "._uiztglyw{-webkit-user-select:none;user-select:none}"
+  "._uiztglyw{-webkit-user-select:none;-moz-user-select:none;user-select:none}"
 ]

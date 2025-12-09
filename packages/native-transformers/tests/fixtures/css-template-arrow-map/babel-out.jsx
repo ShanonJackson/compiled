@@ -2,10 +2,10 @@
 import { forwardRef } from 'react';
 import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
-const MAP = ({
+const MAP = {
   small: 16,
   medium: 24
-} as const);
+} as const;
 const Avatar = forwardRef(({
   as: C = "div",
   style: __cmpls,
