@@ -169,7 +169,6 @@ fn process_pseudo_class_selector(selector: &mut PseudoClassSelector) {
               process_complex_selector(&mut rel.selector);
             }
           }
-          dedupe_forgiving_relative_selectors(&mut list.children);
         }
         _ => {}
       }
@@ -260,25 +259,11 @@ fn dedupe_complex_selectors(selectors: &mut Vec<ComplexSelector>) {
   let mut seen = std::collections::HashSet::new();
   selectors.retain(|s| seen.insert(format_complex(s)));
 }
-fn dedupe_relative_selectors(selectors: &mut Vec<RelativeSelector>) {
-  let mut seen = std::collections::HashSet::new();
-  selectors.retain(|s| seen.insert(format_relative(s)));
-}
 fn dedupe_forgiving_selectors(selectors: &mut Vec<ForgivingComplexSelector>) {
   let mut seen = std::collections::HashSet::new();
   selectors.retain(|s| {
     if let ForgivingComplexSelector::ComplexSelector(sel) = s {
       seen.insert(format_complex(sel))
-    } else {
-      true
-    }
-  });
-}
-fn dedupe_forgiving_relative_selectors(selectors: &mut Vec<ForgivingRelativeSelector>) {
-  let mut seen = std::collections::HashSet::new();
-  selectors.retain(|s| {
-    if let ForgivingRelativeSelector::RelativeSelector(sel) = s {
-      seen.insert(format_relative(sel))
     } else {
       true
     }
@@ -308,7 +293,6 @@ fn process_relative_selector_list(list: &mut RelativeSelectorList, allow_reorder
     }
     process_complex_selector(&mut rel.selector);
   }
-  dedupe_relative_selectors(&mut list.children);
   if allow_reorder {
     sort_relative_selectors(&mut list.children);
   }

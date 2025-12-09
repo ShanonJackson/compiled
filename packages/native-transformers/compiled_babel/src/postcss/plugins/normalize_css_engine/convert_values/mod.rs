@@ -325,11 +325,16 @@ pub fn plugin() -> pc::BuiltPlugin {
                 "calc" | "min" | "max" | "clamp" | "hsl" | "hsla"
               ) {
                 // Only transform unit-like words inside supported math/color functions.
-                for n in inner.iter_mut() {
-                  if let vp::Node::Word { .. } = n {
-                    parse_word(n, true, None);
-                  }
-                }
+                vp::walk(
+                  inner,
+                  &mut |n| {
+                    if let vp::Node::Word { .. } = n {
+                      parse_word(n, true, None);
+                    }
+                    true
+                  },
+                  false,
+                );
                 // Prevent walker from descending again into children we already handled.
                 return false;
               }
