@@ -1,5 +1,8 @@
+use crate::postcss::plugins::expand_shorthands::types::{
+  declaration_property_name, parse_value_to_components, serialize_component_values,
+};
 use crate::postcss::transform::{Plugin, TransformContext};
-use swc_core::css::ast::Stylesheet;
+use swc_core::css::ast::{AtRule, ComponentValue, Declaration, QualifiedRule, Rule, SimpleBlock, Stylesheet};
 
 /// Native translation of `postcss-discard-comments` that operates on the raw
 /// CSS source prior to parsing. The SWC parser drops comment nodes, so the
@@ -15,14 +18,157 @@ impl Plugin for DiscardComments {
     "postcss-discard-comments"
   }
 
-  fn run(&self, _stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
-    // No-op. Comment capture occurs before parsing; we simply mirror the
-    // plugin boundary to preserve the original pipeline structure.
+  fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
+    // The SWC parser drops comment nodes up front, so at runtime there are no
+    // comment AST nodes to discard. However, the JS plugin also normalizes the
+    // whitespace around comments via `list.space().join(' ')` which collapses
+    // newlines and tabs into single spaces for declaration values (even when no
+    // comments are present). We mirror that effect here so the value seeds used
+    // for hashing match Babel.
+    normalize_stylesheet(stylesheet);
   }
 }
 
 pub fn discard_comments() -> DiscardComments {
   DiscardComments
+}
+
+fn normalize_stylesheet(stylesheet: &mut Stylesheet) {
+  for rule in &mut stylesheet.rules {
+    normalize_rule(rule);
+  }
+}
+
+fn normalize_rule(rule: &mut Rule) {
+  match rule {
+    Rule::QualifiedRule(rule) => normalize_qualified_rule(rule),
+    Rule::AtRule(rule) => normalize_at_rule(rule),
+    Rule::ListOfComponentValues(list) => {
+      normalize_components(&mut list.children);
+    }
+  }
+}
+
+fn normalize_qualified_rule(rule: &mut Box<QualifiedRule>) {
+  normalize_block(&mut rule.block);
+}
+
+fn normalize_at_rule(rule: &mut Box<AtRule>) {
+  if let Some(block) = &mut rule.block {
+    normalize_block(block);
+  }
+}
+
+fn normalize_block(block: &mut SimpleBlock) {
+  for component in &mut block.value {
+    match component {
+      ComponentValue::Declaration(decl) => normalize_declaration(decl),
+      ComponentValue::QualifiedRule(rule) => normalize_qualified_rule(rule),
+      ComponentValue::AtRule(rule) => normalize_at_rule(rule),
+      ComponentValue::SimpleBlock(inner) => normalize_block(inner),
+      ComponentValue::ListOfComponentValues(list) => {
+        normalize_components(&mut list.children);
+      }
+      _ => {}
+    }
+  }
+}
+
+fn normalize_components(components: &mut Vec<ComponentValue>) {
+  for component in components {
+    match component {
+      ComponentValue::Declaration(decl) => normalize_declaration(decl),
+      ComponentValue::QualifiedRule(rule) => normalize_qualified_rule(rule),
+      ComponentValue::AtRule(rule) => normalize_at_rule(rule),
+      ComponentValue::SimpleBlock(block) => normalize_block(block),
+      ComponentValue::ListOfComponentValues(list) => {
+        normalize_components(&mut list.children);
+      }
+      _ => {}
+    }
+  }
+}
+
+fn normalize_declaration(declaration: &mut Declaration) {
+  let prop_name = declaration_property_name(&declaration.name);
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() && prop_name == "grid-template-areas" {
+    eprintln!("[discard-comments] visit prop=grid-template-areas");
+  }
+  let original_value = match serialize_component_values(&declaration.value) {
+    Some(value) => value,
+    None => return,
+  };
+
+  let normalized = collapse_whitespace(&original_value);
+
+  if std::env::var("COMPILED_CLI_TRACE").is_ok()
+    && prop_name == "grid-template-areas"
+  {
+    eprintln!(
+      "[discard-comments] prop=grid-template-areas before='{}' after='{}'",
+      original_value.replace('\n', "\\n"),
+      normalized
+    );
+  }
+
+  if normalized != original_value {
+    declaration.value = parse_value_to_components(&normalized);
+  }
+}
+
+/// Mirrors `postcss.list.space()` splitting with a join of `' '`, which trims
+/// the segments and collapses whitespace that isn't inside quotes or
+/// parentheses.
+fn collapse_whitespace(input: &str) -> String {
+  if input.is_empty() {
+    return String::new();
+  }
+
+  let separators = [' ', '\n', '\t'];
+  let mut parts: Vec<String> = Vec::new();
+  let mut current = String::new();
+  let mut split = false;
+  let mut func_depth = 0i32;
+  let mut in_quote: Option<char> = None;
+  let mut escape = false;
+
+  for ch in input.chars() {
+    if escape {
+      escape = false;
+    } else if ch == '\\' {
+      escape = true;
+    } else if let Some(q) = in_quote {
+      if ch == q {
+        in_quote = None;
+      }
+    } else if ch == '"' || ch == '\'' {
+      in_quote = Some(ch);
+    } else if ch == '(' {
+      func_depth += 1;
+    } else if ch == ')' {
+      if func_depth > 0 {
+        func_depth -= 1;
+      }
+    } else if func_depth == 0 && separators.contains(&ch) {
+      split = true;
+    }
+
+    if split {
+      if !current.is_empty() {
+        parts.push(current.trim().to_string());
+      }
+      current.clear();
+      split = false;
+    } else {
+      current.push(ch);
+    }
+  }
+
+  if !current.is_empty() {
+    parts.push(current.trim().to_string());
+  }
+
+  parts.join(" ")
 }
 
 /// Collect the comments that should be preserved according to

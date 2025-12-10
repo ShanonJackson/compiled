@@ -269,12 +269,10 @@ fn build_atomic_selector(
   }
 
   let mut built: Vec<String> = Vec::with_capacity(base_selectors.len());
-
   for selector in base_selectors {
     let normalized = normalize_selector(selector.as_ref());
     let class_name = atomic_class_name(declaration, options, &normalized, at_rule_label);
     ctx.push_class_name(class_name.clone());
-
     let replacement = options
       .class_name_compression_map
       .and_then(|map| map.get(&class_name[1..]))
@@ -314,6 +312,13 @@ fn atomic_class_name(
   value_seed = value_seed.replace("* ", "*");
   value_seed = value_seed.replace("*-", "* -");
   value_seed = value_seed.replace("*+", "* +");
+  let prop_name = declaration_name(&declaration.name);
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    eprintln!(
+      "[atomicify.hash] prop={} selector='{}' seed='{}'",
+      prop_name, normalized_selector, value_seed
+    );
+  }
   if declaration.important.is_some() {
     value_seed.push_str("true");
   }

@@ -684,6 +684,11 @@ fn fmt_number(n: f64, precision: usize) -> String {
   let mut s = ryu_js::Buffer::new().format_finite(rounded).to_string();
   if s == "-0" {
     s = "0".to_string();
+  } else if s.starts_with("0.") {
+    // cssnano drops the leading zero on fractional values.
+    s = s.trim_start_matches('0').to_string();
+  } else if s.starts_with("-0.") {
+    s = format!("-{}", &s[2..]);
   }
   s
 }
@@ -719,7 +724,16 @@ pub fn plugin() -> pc::BuiltPlugin {
         if debug && PRINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 20 {
           eprintln!("[calc.plugin] visit prop={} value='{}'", decl.prop(), value);
         }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() && decl.prop().starts_with("grid-") {
+          eprintln!("[calc.plugin] prop={} value='{}'", decl.prop(), value);
+        }
         if value.is_empty() {
+          return;
+        }
+        // Skip values without calc()/vendor calc; stringifying the parsed AST
+        // would normalize whitespace even when no reduction is needed.
+        let lower = value.to_ascii_lowercase();
+        if !lower.contains("calc(") && !lower.contains("-webkit-calc(") && !lower.contains("-moz-calc(") {
           return;
         }
 

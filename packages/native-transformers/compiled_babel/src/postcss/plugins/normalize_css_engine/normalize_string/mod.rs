@@ -206,6 +206,13 @@ pub fn plugin() -> pc::BuiltPlugin {
     })
     .decl(move |decl, _| {
       let v = decl.value();
+      if std::env::var("COMPILED_CLI_TRACE").is_ok() && decl.prop().starts_with("grid-") {
+        eprintln!(
+          "[normalize-string] prop={} value='{}'",
+          decl.prop(),
+          v
+        );
+      }
       if v.contains('\'') || v.contains('"') || v.contains('\\') || v.contains('\n') {
         let nv = normalize_value(&v, preferred_quote);
         if nv != v {

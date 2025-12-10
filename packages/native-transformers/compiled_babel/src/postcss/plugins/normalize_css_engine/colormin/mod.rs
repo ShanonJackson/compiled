@@ -671,6 +671,18 @@ pub fn plugin() -> pc::BuiltPlugin {
   let cache = std::sync::Mutex::new(HashMap::<String, String>::new());
   pc::plugin("postcss-colormin")
     .decl(move |decl, _| {
+      let prop_l = decl.prop().to_lowercase();
+      let is_grid_line = prop_l.starts_with("grid-row") || prop_l.starts_with("grid-column");
+      if is_grid_line {
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+          eprintln!(
+            "[colormin] skip prop={} value='{}'",
+            decl.prop(),
+            decl.value()
+          );
+        }
+        return Ok(());
+      }
       // Skip properties cssnano excludes
       if Regex::new(r"(?i)^(composes|font|src$|filter|-webkit-tap-highlight-color)")
         .unwrap()

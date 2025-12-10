@@ -100,3 +100,15 @@ pub fn normalize_line(parsed: &vp::ParsedValue) -> String {
   }
   out.join("")
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn preserve_spacing_like_js_port() {
+    let parsed = vp::parse("card-extra-fields / end");
+    let out = normalize_line(&parsed);
+    assert_eq!(out, "card-extra-fields /  end");
+  }
+}

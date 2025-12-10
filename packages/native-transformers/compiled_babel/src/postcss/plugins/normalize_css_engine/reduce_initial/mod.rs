@@ -142,6 +142,8 @@ static FROM_INITIAL: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
   m.insert("font-variant-position", "normal");
   m.insert("font-weight", "normal");
   m.insert("forced-color-adjust", "auto");
+  m.insert("flex-direction", "row");
+  m.insert("flex-wrap", "nowrap");
   m.insert("grid-auto-columns", "auto");
   m.insert("grid-auto-flow", "row");
   m.insert("grid-auto-rows", "auto");

@@ -492,6 +492,17 @@ pub fn plugin() -> pc::BuiltPlugin {
         pc::ast::nodes::RootLike::Root(root) => {
           root.walk_decls(|node, _| {
             if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+              if std::env::var("COMPILED_CLI_TRACE").is_ok() && decl.prop().starts_with("grid-") {
+                eprintln!(
+                  "[normalize-url] prop={} value='{}'",
+                  decl.prop(),
+                  decl.value()
+                );
+              }
+              let val = decl.value();
+              if !val.to_ascii_lowercase().contains("url(") {
+                return true;
+              }
               let mut parsed = vp::parse(&decl.value());
               let mut nodes = parsed.nodes.clone();
               vp::walk(

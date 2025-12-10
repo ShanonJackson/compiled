@@ -672,6 +672,15 @@ pub fn plugin() -> pc::BuiltPlugin {
             | "border-inline-end"
             | "columns"
             | "column-rule"
+            | "grid-auto-flow"
+            | "grid-column-gap"
+            | "grid-row-gap"
+            | "grid-column"
+            | "grid-row"
+            | "grid-row-start"
+            | "grid-row-end"
+            | "grid-column-start"
+            | "grid-column-end"
         );
         if !supported {
           return;
@@ -715,6 +724,14 @@ pub fn plugin() -> pc::BuiltPlugin {
           | "grid-column-end" => rules::grid::normalize_line(&parsed),
           _ => value.clone(),
         };
+        if std::env::var("COMPILED_CLI_TRACE").is_ok()
+          && normalized_prop.starts_with("grid-")
+        {
+          eprintln!(
+            "[ordered-values] prop={} value_in='{}' value_out='{}'",
+            normalized_prop, value, output
+          );
+        }
         cache.lock().unwrap().insert(value.clone(), output.clone());
         decl.set_value(output);
       };

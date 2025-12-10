@@ -1,267 +1,584 @@
-
-/** @jsx jsx */
-import React, { useCallback, type SyntheticEvent, type ComponentPropsWithoutRef } from 'react';
-import { styled, css, jsx } from '@compiled/react';
-import isNil from 'lodash/isNil';
+import type { ReactNode } from 'react';
+import { styled as styled2 } from '@compiled/react';
+import Button from '@atlaskit/button';
 import { token } from '@atlaskit/tokens';
+import { visuallyHiddenStyles } from '@atlassian/jira-accessibility/src/common/ui/screenreader-text/index.tsx';
 import { gridSize } from '@atlassian/jira-common-styles/src/main.tsx';
-import { fg } from '@atlassian/jira-feature-gating';
-import { useIntl } from '@atlassian/jira-intl';
-import { FIELD_TYPE_MAP } from '@atlassian/jira-issue-analytics/src/services/update-issue-field/constants.tsx';
-import { useFieldConfigWithoutRefetch } from '@atlassian/jira-issue-field-base/src/services/field-config-service/main.tsx';
-import { READ_VIEW_CONTAINER_SELECTOR } from '@atlassian/jira-issue-field-inline-edit/src/styled.tsx';
-import { AsyncLazyNumberFieldInlineEdit } from '@atlassian/jira-issue-field-number-inline-edit/src/ui/async.tsx';
-import { NumberInlineEditErrorBoundary } from '@atlassian/jira-issue-field-number-inline-edit/src/ui/error-boundary/index.tsx';
-import { READ_VIEW_CONTAINER_SELECTOR as originalReadViewContainer } from '@atlassian/jira-issue-field-original-estimate/src/common/constants.tsx';
-import { STORY_POINTS_TYPE } from '@atlassian/jira-platform-field-config/src/index.tsx';
+import { isVisualRefreshEnabled } from '@atlassian/jira-visual-refresh-rollout/src/feature-switch/index.tsx';
 import {
-IP_BOARD_HOURS_PLANNING_UNIT,
-IP_BOARD_DAYS_PLANNING_UNIT,
-} from '@atlassian/jira-portfolio-3-plan-increment-common/src/common/constants.tsx';
-import { ContextualAnalyticsData } from '@atlassian/jira-product-analytics-bridge';
-import { toIssueKey } from '@atlassian/jira-shared-types/src/general.tsx';
+CARD_ROW_HEIGHT,
+COMPACT_CARD_ROW_HEIGHT,
+EXTRA_CARD_ROW_HEIGHT,
+} from '../../../common/constants/index.tsx';
 import {
-defaultTimeTrackingOptions,
-SECONDS_PER_HOUR,
-} from '@atlassian/jira-time-tracking-formatter/src/constants.tsx';
-import type { TimeTrackingOptions } from '@atlassian/jira-time-tracking-formatter/src/types.tsx';
-import UFOSegment from '@atlassian/jira-ufo-segment/src/index.tsx';
-import { EstimateFieldStatic } from '../../../../../../common/fields/estimate-field/static/index.tsx';
-import { EstimateWrapper } from '../../../../../../common/fields/estimate-field/wrapper/index.tsx';
-import { useEditableField } from '../../../../../../common/fields/use-editable-field/index.tsx';
-import { useFireInvalidFieldConfigError } from '../../../../../../common/fields/use-fire-invalid-field-config-error/index.tsx';
-import { timeTrackingConfigTransformer } from '../../../../../../common/utils/time-tracking/index.tsx';
-import { PACKAGE_NAME } from '../../../../../../model/constants.tsx';
-import { issueIncrementPlanningUpdate } from '../../../../../../state/actions/issue/update/index.tsx';
-import { useBoardDispatch, useBoardSelector } from '../../../../../../state/index.tsx';
-import { getPreventInlineEditing } from '../../../../../../state/selectors/board/board-selectors.tsx';
-import { issueParentIdsSelector } from '../../../../../../state/selectors/issue-parent/index.tsx';
-import { getPlanningUnit } from '../../../../../../state/selectors/software/software-selectors.tsx';
-import { getTimeTrackingOptions } from '../../../../../../state/selectors/work/work-selectors.tsx';
-import { useIsIncrementPlanningBoard } from '../../../../../../state/state-hooks/capabilities/index.tsx';
-import { INLINE_EDITING_FIELD_ZINDEX } from '../constants.tsx';
-import { STORY_POINT_WRAPPER_TEST_ID } from './constants.tsx';
-import messages from './messages.tsx';
-import type {
-StoryPointFieldProps,
-StoryPointFieldInnerProps,
-StorypointsEstimateWrapperProps,
-} from './types.tsx';
+CHECKBOX_COMPONENT_SELECTOR,
+IMAGE_SIZE,
+KEY_COMPONENT_SELECTOR,
+} from './card-contents/constants.tsx';
+import { MENU_PLACEHOLDER_ID } from './constants.tsx';
 
-const stopPropagation = (e: SyntheticEvent<HTMLElement>) => e.stopPropagation();
+// If we didn't use an extra local variable, Compiled would auto-assign the value to the first return value
+export const getBgColor = (
+isSelected: boolean,
+isFlagged: boolean,
+isVisualRefreshBeta?: boolean,
+) => {
+let bgColor: string = token('elevation.surface.raised');
 
-const fieldKey = 'storyPoints';
-
-const StoryPointFieldInner = ({
-issueId,
-issueKey,
-storyPointFieldId,
-estimate,
-onFailure,
-dialogPlacement,
-showTooltip,
-tooltipMessage,
-editInputLabel,
-...props
-}: StoryPointFieldInnerProps) => {
-const isIncrementPlanningBoard = useIsIncrementPlanningBoard();
-
-	const { formatMessage } = useIntl();
-	const dispatch = useBoardDispatch();
-
-	const timeTrackingOptions: TimeTrackingOptions = useBoardSelector((state) =>
-		getTimeTrackingOptions(state),
-	);
-
-	const planningUnit = useBoardSelector((state) => getPlanningUnit(state));
-
-	const preventInlineEditing = useBoardSelector((state) => getPreventInlineEditing(state));
-
-	const storyPointKey = storyPointFieldId || '';
-
-	const { fireInvalidFieldConfigError } = useFireInvalidFieldConfigError();
-	const onFailureFireError = useCallback(
-		(error: Error) => {
-			onFailure?.();
-			fireInvalidFieldConfigError(error);
-		},
-		[fireInvalidFieldConfigError, onFailure],
-	);
-
-	return (
-		<ContextualAnalyticsData
-			attributes={{
-				isInlineEditing: true,
-				fieldKey,
-				fieldType: 'number',
-				origin: 'issueCard',
-			}}
-		>
-			<StorypointsEstimateWrapper
-				data-testid={STORY_POINT_WRAPPER_TEST_ID}
-				onClick={stopPropagation}
-				onKeyDown={stopPropagation} // Prevent Enter from opening issue when cross or tick is focused
-				hasValue={!isNil(estimate)}
-				disableClick={preventInlineEditing}
-				isIncrementPlanningBoard={isIncrementPlanningBoard}
-			>
-				<AsyncLazyNumberFieldInlineEdit
-					editButtonLabel={formatMessage(messages.editButtonLabel, {
-						storyPoints: estimate,
-					})}
-					componentAnalyticsData={{
-						fieldType: FIELD_TYPE_MAP[STORY_POINTS_TYPE],
-						isInlineEditing: true,
-					}}
-					{...props}
-					actionSubject="inlineEdit"
-					issueKey={toIssueKey(issueKey)}
-					fieldKey={storyPointKey}
-					analyticsFieldKeyAlias="storyPoints"
-					onFailure={onFailureFireError}
-					dialogPlacement={dialogPlacement}
-					showTooltip={showTooltip}
-					tooltipMessage={tooltipMessage}
-					label={editInputLabel}
-					{...(isIncrementPlanningBoard && {
-						min: 0,
-						saveField: async (_: string, fieldId: string, fieldValue: number | string | null) => {
-							const getFieldValue = () => {
-								if (isNil(fieldValue) || fieldValue === '') {
-									return fieldValue;
-								}
-								if (planningUnit === IP_BOARD_HOURS_PLANNING_UNIT) {
-									return Number(fieldValue) * SECONDS_PER_HOUR;
-								}
-								if (planningUnit === IP_BOARD_DAYS_PLANNING_UNIT) {
-									const workingHoursPerDay =
-										timeTrackingConfigTransformer(timeTrackingOptions).hoursPerDay ||
-										defaultTimeTrackingOptions.workingHoursPerDay;
-									return Number(fieldValue) * workingHoursPerDay * SECONDS_PER_HOUR;
-								}
-								return fieldValue;
-							};
-							dispatch(
-								issueIncrementPlanningUpdate({
-									issueId,
-									fieldId,
-									fieldValue: getFieldValue(),
-								}),
-							);
-							// to make ts happy
-							return undefined;
-						},
-					})}
-				/>
-			</StorypointsEstimateWrapper>
-		</ContextualAnalyticsData>
-	);
-};
-
-export const StoryPointField = ({ shouldRenderRichField, ...props }: StoryPointFieldProps) => {
-const { formatMessage } = useIntl();
-const storyPointKey = props.storyPointFieldId || '';
-const [{ value: storyPointFieldConfig }] = useFieldConfigWithoutRefetch(
-props.issueKey,
-storyPointKey,
-);
-const shouldRenderRich = Boolean(shouldRenderRichField && storyPointFieldConfig);
-
-	const editableField = useEditableField({
-		isExperienceAvailable: shouldRenderRich,
-	});
-
-	const isIncrementPlanningBoard = useIsIncrementPlanningBoard();
-	const issueParents = useBoardSelector((state) => issueParentIdsSelector(state));
-	const isIssueParent = !!issueParents && issueParents.includes(`${props.issueId}`);
-
-	const fallback = props.estimate ? <EstimateFieldStatic value={props.estimate} /> : null;
-
-	if (shouldRenderRich) {
-		return (
-			<NumberInlineEditErrorBoundary
-				packageName={PACKAGE_NAME}
-				fallback={fallback}
-				onError={editableField.onError}
-			>
-				<UFOSegment name="ng-board.inline-edit.story-point-field">
-					<StoryPointFieldInner
-						{...props}
-						{...editableField}
-						showTooltip={isIncrementPlanningBoard && isIssueParent}
-						tooltipMessage={formatMessage(
-							fg('jira-issue-terminology-refresh-m3')
-								? messages.tooltipForEpicEstimateIssueTermRefresh
-								: messages.tooltipForEpicEstimate,
-						)}
-						editInputLabel={formatMessage(messages.ariaLabel)}
-					/>
-				</UFOSegment>
-			</NumberInlineEditErrorBoundary>
-		);
+	if (isFlagged && isSelected) {
+		bgColor = isVisualRefreshBeta
+			? token('color.background.accent.red.subtlest.pressed')
+			: token('color.background.warning.pressed');
+	} else if (isFlagged) {
+		bgColor = isVisualRefreshBeta
+			? token('color.background.accent.red.subtlest')
+			: token('color.background.warning');
+	} else if (isSelected) {
+		bgColor = token('color.background.selected');
 	}
-	return fallback;
+
+	return bgColor;
 };
 
-// prevents warning for usage of style composition - can be removed when https://product-fabric.atlassian.net/browse/APP-728 is done.
+const getHoverBgColor = (
+isSelected: boolean,
+isFlagged: boolean,
+isVisualRefreshBeta?: boolean,
+) => {
+let hoverBgColor: string = token('color.background.neutral.subtle.hovered');
 
-const CompiledPropsForwarder = ({
-disableClick,
-isIncrementPlanningBoard,
-...rest
-}: StorypointsEstimateWrapperProps & ComponentPropsWithoutRef<typeof EstimateWrapper>) => (
-<EstimateWrapper {...rest} />
-);
+	if (isFlagged) {
+		hoverBgColor = isVisualRefreshBeta
+			? token('color.background.accent.red.subtlest.hovered')
+			: token('color.background.warning.hovered');
+	} else if (isSelected) {
+		hoverBgColor = token('color.background.selected.hovered');
+	}
 
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled -- To migrate as part of go/ui-styling-standard
-const StorypointsEstimateWrapper = styled(CompiledPropsForwarder)<StorypointsEstimateWrapperProps>(
-{
-/* stylelint-disable-next-line selector-type-case, selector-type-no-unknown */
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values, @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-nested-selectors -- Ignored via go/DSP-18766
-[READ_VIEW_CONTAINER_SELECTOR]: {
-whiteSpace: 'nowrap',
-marginLeft: token('space.negative.025'),
+	return hoverBgColor;
+};
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const Key = styled2.a<{ isDone?: boolean }>({
+font: token('font.body.UNSAFE_small'),
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles
+fontWeight: () =>
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values
+isVisualRefreshEnabled() ? token('font.weight.regular') : token('font.weight.semibold'),
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles
+fontVariantNumeric: () =>
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values
+isVisualRefreshEnabled() ? 'tabular-nums' : undefined,
+color: token('color.text.subtle'),
+
+	outline: 'none',
+	marginTop: 0,
+	// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+	textDecoration: ({ isDone = false }) => `${isDone ? 'line-through' : 'none'} !important`,
+	whiteSpace: 'nowrap',
+});
+
+// TODO remove when cleaning up backlog-type-icon-component feature gate
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const Img = styled2.img({
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values, @atlaskit/ui-styling-standard/no-unsafe-values -- Ignored via go/DSP-18766
+width: `${IMAGE_SIZE}px`,
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values, @atlaskit/ui-styling-standard/no-unsafe-values -- Ignored via go/DSP-18766
+height: `${IMAGE_SIZE}px`,
+verticalAlign: 'text-bottom',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const CheckboxContainer = styled2.div<{
+shouldShowCheckbox: boolean;
+}>({
+width: '16px',
+zIndex: 1 /* surface the element above the interaction layer so can be triggered */,
+display: 'flex',
+justifyContent: 'center',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+visibility: ({ shouldShowCheckbox }) => (shouldShowCheckbox ? 'visible' : 'hidden'),
+gridColumn: 'checkbox / span 1',
+gridRow: 'card-detail / span 1',
+});
+
+// TODO remove when cleaning up backlog-type-icon-component feature gate
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const ImageContainer = styled2.div({
+gridColumn: 'issue-type / span 1',
+gridRow: 'card-detail / span 1',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const KeyContainer = styled2.div({
+position: 'relative',
+zIndex: 1 /* surface the element above the interaction layer so tooltips can be triggered */,
+gridColumn: 'issue-key / span 1',
+gridRow: 'card-detail / span 1',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-exported-styles, @atlaskit/ui-styling-standard/no-styled
+export const ScreenReaderKey = styled2(Key)({
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-selectors
+'&:not(:focus)': {
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-imported-style-values
+...visuallyHiddenStyles,
+},
+'&:focus': {
+outline: 'none',
+boxShadow: `0 0 0 2px ${token('color.border.focused')}`,
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-imported-style-values
+[`+ [data-component-selector="${KEY_COMPONENT_SELECTOR}"]`]: {
+display: 'none',
+},
+},
+'&:active': {
+outline: 'none',
+},
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const SummaryAndParentContainer = styled2.div<{ isSummaryFieldEditing?: boolean }>({
+display: 'flex',
+flex: 1,
+boxSizing: 'border-box',
+userSelect: 'none',
+gridColumn: 'summary / span 1',
+gridRow: 'card-detail / span 1',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+position: ({ isSummaryFieldEditing }) => (isSummaryFieldEditing ? 'relative' : 'unset'),
+alignItems: 'center',
+minWidth: 0,
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-nested-selectors -- Ignored via go/DSP-18766
+'& > *': {
+minWidth: 0,
+},
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const SummaryWrapper = styled2.div<{ isSummaryFieldEditing: boolean }>({
+outline: 'none',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+zIndex: ({ isSummaryFieldEditing }) =>
+isSummaryFieldEditing
+? 2
+: 1 /* surface the element above the interaction layer so tooltips can be triggered */,
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+width: ({ isSummaryFieldEditing }) => isSummaryFieldEditing && '100%',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const Summary = styled2.div({
+'&::before': {
+/* to avoid safari native tooltip */
+content: "''",
+display: 'block',
+},
+
+	color: token('color.text'),
+	whiteSpace: 'nowrap',
+	overflow: 'hidden',
+	textOverflow: 'ellipsis',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const EpicWrapper = styled2.div<{
+widthMultiplier: number;
+}>({
+display: 'grid',
+justifyItems: 'start',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+gridTemplateColumns: ({ widthMultiplier }) =>
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+`repeat(auto-fit,${gridSize * widthMultiplier}px)`,
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+minWidth: ({ widthMultiplier }) => `${gridSize * widthMultiplier}px`,
+padding: '0px',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const VersionsContainer = styled2.div<{ widthMultiplier: number }>({
+display: 'grid',
+zIndex: '1',
+overflow: 'hidden',
+textOverflow: 'ellipsis',
+alignItems: 'center',
+justifyItems: 'start',
+pointerEvents: 'none',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+gridTemplateColumns: ({ widthMultiplier }) =>
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+`repeat(auto-fit,${gridSize * widthMultiplier}px)`,
+});
+
+// TODO remove on clean up TNK-570 - moved to card-contents/flag
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const FlagContainer = styled2.div({
+position: 'relative',
+zIndex: 1 /* surface the element above the interaction layer so tooltips can be triggered */,
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const StatusContainer = styled2.div<{ widthMultiplier: number }>({
+display: 'grid',
+height: '24px',
+pointerEvents: 'none',
+overflow: 'inherit',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+gridTemplateColumns: ({ widthMultiplier }) =>
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+`repeat(auto-fit,${gridSize * widthMultiplier}px)`,
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const ExtraFieldsContainer = styled2.div<{
+hideTypeIcon?: boolean;
+isSmartCardEnabled: boolean;
+}>({
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+gridColumn: ({ hideTypeIcon }) => (hideTypeIcon ? 'issue-key / end' : 'issue-type / end'),
+gridRow: 'card-extra-fields / end',
+display: 'grid',
+boxSizing: 'border-box',
+gridTemplateColumns: `minmax(auto, max-content) ${token('space.100')} minmax(auto, max-content) ${token('space.100')} minmax(
+        auto,
+        max-content
+    )`,
+alignItems: 'start',
+color: token('color.text.subtlest'),
+columnGap: token('space.050'),
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+height: (props) =>
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values
+props.isSmartCardEnabled ? token('space.300') : `${EXTRA_CARD_ROW_HEIGHT}px`,
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles
+paddingTop: (props) => (props.isSmartCardEnabled ? token('space.025') : token('space.0')),
+overflow: 'hidden',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-nested-selectors -- Ignored via go/DSP-18766
+'& > *': {
+minWidth: 0 /* required to allow field content truncation within the tooltip wrapper */,
+zIndex: 1 /* surface the element above the interaction layer so tooltips can be triggered */,
+},
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const AssigneeContainer = styled2.div({
+gridColumn: 'assignee / span 1',
+gridRow: 'card-detail / span 1',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const CardsAmount = styled2.div({
+position: 'absolute',
+zIndex: 5,
+top: 0,
+right: 0,
+transform: 'translate(50%, -50%)',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const DragHandleCardsAmount = styled2.div({
+position: 'absolute',
+zIndex: 5,
+top: token('space.negative.050'),
+left: token('space.negative.050'),
+transform: 'translate(50%, -50%)',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const StyledSpinner = styled2.div({
+gridColumn: 'menu / span 1',
+gridRow: 'card-detail / span 1',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const OptionalFieldsContainer = styled2.div({
+gridTemplateColumns: 'repeat(auto-fill, min-content)',
+gridColumn: 'optional-fields / span 1',
+gridRow: 'card-detail / span 1',
+display: 'flex',
+boxSizing: 'border-box',
+alignItems: 'center',
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-nested-selectors -- Ignored via go/DSP-18766
+'& > *': {
+marginTop: 0,
+marginRight: token('space.050'),
 marginBottom: 0,
-marginTop: `calc(${token('space.negative.100')} * 0.125)`, // reverse the margin-top added from BacklogWrapper
+marginLeft: token('space.050'),
+},
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-unsafe-selectors -- Ignored via go/DSP-18766
+'& > :first-of-type': {
+marginLeft: 0,
+},
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-unsafe-selectors -- Ignored via go/DSP-18766
+'& > :last-of-type': {
 marginRight: 0,
 },
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values, @atlaskit/ui-styling-standard/no-unsafe-values -- Ignored via go/DSP-18766
-height: gridSize * 3.5,
-},
+});
+
+export const getCardContainerCheckboxGridColumnValue = () => '[start checkbox] min-content ';
+
+export const getCardContainerChevronGridColumnValue = (
+gridTemplateColumnsValue: string,
+shouldShowChevron: boolean | undefined,
+) => {
+if (shouldShowChevron) {
+if (gridTemplateColumnsValue) {
+return '[chevron] 20px';
+}
+return '[start chevron] 12px ';
+}
+return '';
+};
+
+export const getCardContainerIssueTypeGridColumnValue = (gridTemplateColumnsValue: string) => {
+if (gridTemplateColumnsValue) {
+return '[issue-type] 16px ';
+}
+return '[start issue-type] 16px ';
+};
+
+export const getCardContainerPadding = ({ isOptimistic }: { isOptimistic?: boolean }) => {
+if (isOptimistic) {
+return `0 ${gridSize / 2}px 0 ${gridSize * 3.5}px`;
+}
+
+	return `0 ${gridSize / 2}px 0 ${gridSize * 1.5}px`;
+};
+
+type CardContainerProps = {
+shouldShowChevron?: boolean;
+isCompact?: boolean;
+isSelected: boolean;
+isFlagged: boolean;
+lowerOpacity: boolean;
+isDraggable: boolean;
+isDragHandle: boolean;
+children: ReactNode;
+hasExtraFields: boolean;
+isOptimistic?: boolean;
+hideTypeIcon?: boolean;
+isAssigneeShown?: boolean;
+isVisualRefreshBeta?: boolean;
+};
+
+const calculateGridTemplateValues = ({
+hasExtraFields,
+shouldShowChevron,
+isDragHandle,
+isCompact = false,
+hideTypeIcon = false,
+isAssigneeShown = true,
+}: Partial<CardContainerProps>): {
+gridTemplateColumnsValue: string;
+gridTemplateRowsValue: string;
+} => {
+let gridTemplateColumnsValue = '';
+let gridTemplateRowsValue = '';
+
+	gridTemplateColumnsValue += getCardContainerCheckboxGridColumnValue();
+	gridTemplateColumnsValue += getCardContainerChevronGridColumnValue(
+		gridTemplateColumnsValue,
+		shouldShowChevron,
+	);
+	if (!hideTypeIcon)
+		gridTemplateColumnsValue += getCardContainerIssueTypeGridColumnValue(gridTemplateColumnsValue);
+
+	gridTemplateColumnsValue += '[issue-key] min-content [summary] 1fr';
+	if (!isDragHandle) {
+		gridTemplateColumnsValue += ' ';
+		gridTemplateColumnsValue += '[card-group-key] max-content ';
+		gridTemplateColumnsValue += [
+			'[optional-fields] max-content',
+			/* These values have to be in PX to ensure the elements take exactly the amount of space they need. Using a token/REM causes issues if browser's font size settings are set to smaller or larger */
+			`[assignee] ${isAssigneeShown ? 'calc(8px * 3.5)' : token('space.0')}`,
+			'[menu] 32px',
+			'[end]',
+		].join(' ');
+	}
+
+	// Minus 1 to fix layout issues
+	// We need to totally rework the layout to do this properly
+	gridTemplateRowsValue += `[start card-detail] ${
+		(isCompact ? COMPACT_CARD_ROW_HEIGHT : CARD_ROW_HEIGHT) - 1
+	}px `;
+	if (!isDragHandle && hasExtraFields) {
+		gridTemplateRowsValue += `[card-extra-fields] ${EXTRA_CARD_ROW_HEIGHT}px [end]`;
+	} else {
+		gridTemplateRowsValue += '[end]';
+	}
+
+	return {
+		gridTemplateColumnsValue,
+		gridTemplateRowsValue,
+	};
+};
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const CardContainer = styled2.div<CardContainerProps>({
 // eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
-({ disableClick }) =>
-disableClick &&
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
-css({
-pointerEvents: 'none',
-}),
+backgroundColor: ({ isSelected = false, isFlagged = false, isVisualRefreshBeta }) =>
+getBgColor(isSelected, isFlagged, isVisualRefreshBeta),
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+cursor: ({ isDraggable }) => (isDraggable === true ? 'pointer' : 'default'),
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+opacity: ({ lowerOpacity }) => (lowerOpacity ? 0.4 : 'inherit'),
+
+	display: 'grid',
+	// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+	gridTemplateColumns: ({
+		hasExtraFields,
+		shouldShowChevron,
+		isDragHandle,
+		isCompact = false,
+		hideTypeIcon = false,
+		isAssigneeShown = true,
+	}: CardContainerProps) =>
+		calculateGridTemplateValues({
+			hasExtraFields,
+			shouldShowChevron,
+			isDragHandle,
+			isCompact,
+			hideTypeIcon,
+			isAssigneeShown,
+		}).gridTemplateColumnsValue,
+	// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+	gridTemplateRows: ({
+		hasExtraFields,
+		shouldShowChevron,
+		isDragHandle,
+		isCompact = false,
+		hideTypeIcon = false,
+		isAssigneeShown = true,
+	}: CardContainerProps) =>
+		calculateGridTemplateValues({
+			hasExtraFields,
+			shouldShowChevron,
+			isDragHandle,
+			isCompact,
+			hideTypeIcon,
+			isAssigneeShown,
+		}).gridTemplateRowsValue,
+	columnGap: token('space.050'),
+	rowGap: 0,
+
+	alignItems: 'center',
+	position: 'relative',
+	// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+	height: ({ hasExtraFields, isCompact = false }) => {
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+		const cardRowHeight = isCompact ? COMPACT_CARD_ROW_HEIGHT : CARD_ROW_HEIGHT;
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+		return hasExtraFields ? `${cardRowHeight + EXTRA_CARD_ROW_HEIGHT}px` : `${cardRowHeight}px`;
+	},
+	// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+	padding: ({ isOptimistic }) =>
+		getCardContainerPadding({
+			isOptimistic,
+		}),
+	borderWidth: token('border.width'),
+	borderStyle: 'solid',
+	borderColor: token('color.border'),
+	textDecoration: 'none',
+	marginTop: token('space.negative.025'),
+
+	'&:hover': {
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+		backgroundColor: ({ isSelected = false, isFlagged = false, isVisualRefreshBeta }) =>
+			getHoverBgColor(isSelected, isFlagged, isVisualRefreshBeta),
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+		'--jsw-card-background-color': ({ isSelected = false, isFlagged = false }) =>
+			getHoverBgColor(isSelected, isFlagged),
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+		[`[data-component-selector="${MENU_PLACEHOLDER_ID}"]`]: {
+			opacity: 1,
+			visibility: 'visible',
+		},
+
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+		[`[data-component-selector="${CHECKBOX_COMPONENT_SELECTOR}"]`]: {
+			visibility: 'visible',
+		},
+	},
+
+	'&:focus, &:focus-within': {
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+		[`[data-component-selector="${MENU_PLACEHOLDER_ID}"]`]: {
+			opacity: 1,
+			visibility: 'visible',
+		},
+		// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-nested-selectors, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
+		[`[data-component-selector="${CHECKBOX_COMPONENT_SELECTOR}"]`]: {
+			visibility: 'visible',
+		},
+	},
+
+	// eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
+	'--jsw-card-background-color': ({ isSelected = false, isFlagged = false }) =>
+		getBgColor(isSelected, isFlagged),
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const ContentContainer = styled2.div({
+outline:
+'none' /* NOTE: This is needed so we won't have the browser bulit-in focus ring when inline editor in cards lost focus in FireFox or Safari */,
+backgroundColor: token('elevation.surface.raised'),
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const CardGroupKey = styled2(Key)({
+position: 'inherit',
+display: 'contents',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const VersionIconWrapper = styled2.span({
+display: 'flex',
+flexDirection: 'initial',
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const VersionIconNumber = styled2.span({
+position: 'relative',
+color: token('color.text.subtlest'),
+font: token('font.body.small'),
+fontWeight: token('font.weight.bold'),
+paddingLeft: token('space.025'),
+});
+
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const AddFlagButton = styled2(Button)({
+opacity: '0',
+transition: 'opacity .35s ease',
+'&:hover': {
+opacity: '1',
+background: 'none',
+},
+
+	marginTop: token('space.negative.050'),
+	marginRight: token('space.negative.050'),
+	marginBottom: token('space.negative.050'),
+	marginLeft: token('space.negative.050'),
+});
+
+// Remove as part of backlog_tooltip_content_not_accessible FG cleanup
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const SubtaskIconWrapper = styled2.div({
+zIndex: 1 /* surface the element above the interaction layer so tooltips can be triggered */,
+});
+
+// empty column for the cards without due date
+// eslint-disable-next-line @atlaskit/ui-styling-standard/no-styled, @atlaskit/ui-styling-standard/no-exported-styles -- Ignored via go/DSP-18766
+export const CardDueDateWrapper = styled2.div<{ shouldRenderColumn: boolean; hasDueDate: boolean }>(
 {
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
-[`&:not(:has(${originalReadViewContainer}, ${READ_VIEW_CONTAINER_SELECTOR}))`]: {
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values, @atlaskit/ui-styling-standard/no-unsafe-values -- Ignored via go/DSP-18766
-zIndex: INLINE_EDITING_FIELD_ZINDEX,
+display: 'flex',
 },
-},
-/**
-* In Increment planning boards, the estimate field is displayed closer to the right edge of a card
-* than in other boards, therefore when editing the estimate, the text field is inelegantly rendered
-* overflowing the right edge of the card:
-*               |
-*           ____|___
-*           |  13 ⇳|  <--
-*           ￣￣|￣￣
-* ______________|
-*
-* Therefore we increase the right margin to visually render the text field within the card edges.
-*/
 // eslint-disable-next-line @atlaskit/ui-styling-standard/no-dynamic-styles -- Ignored via go/DSP-18766
-({ isIncrementPlanningBoard }) =>
-isIncrementPlanningBoard &&
+(props) =>
+props.shouldRenderColumn
+? {
 // eslint-disable-next-line @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
-css({
-// eslint-disable-next-line @atlaskit/ui-styling-standard/no-unsafe-values, @atlaskit/ui-styling-standard/no-imported-style-values -- Ignored via go/DSP-18766
-[`&:not(:has(${originalReadViewContainer}, ${READ_VIEW_CONTAINER_SELECTOR}))`]: {
-marginRight: `calc(${token('space.600')} + ${token('space.100')})`,
-},
-}),
+minWidth: `${props.hasDueDate ? `${gridSize * 7.5}px` : `${gridSize * 8}px`}`,
+}
+: {},
 );

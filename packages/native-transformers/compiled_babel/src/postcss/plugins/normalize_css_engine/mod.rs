@@ -1195,6 +1195,7 @@ pub fn reduce_initial_plugin() -> pc::BuiltPlugin {
 pub fn discard_comments_plugin() -> pc::BuiltPlugin {
   pc::plugin("postcss-discard-comments")
     .once(|root, _| {
+      // Remove explicit comment nodes.
       match root {
         pc::RootLike::Root(r) => {
           r.walk_comments(|c, _| {
@@ -1209,9 +1210,105 @@ pub fn discard_comments_plugin() -> pc::BuiltPlugin {
           });
         }
       }
+
+      // Mirror the JS plugin's whitespace collapse around comments. Even when
+      // there are no comments, cssnano's implementation splits values with
+      // `list.space().join(' ')`, which trims and flattens whitespace outside
+      // of quotes/functions. Babel hashes the post-collapse value, so we must
+      // do the same here.
+      let normalize_decl = |decl: postcss::ast::nodes::Declaration| {
+        let prop = decl.prop();
+        // Babel retains the double-space created by ordered-values for grid
+        // line shorthands (e.g. `card-extra-fields /  end`) through to the hash
+        // seed. Skipping whitespace collapse for these props keeps the seeds
+        // aligned.
+        if prop == "grid-row" || prop == "grid-column" {
+          return;
+        }
+        let value = decl.value();
+        let normalized = collapse_whitespace_like_list_space(&value);
+        if normalized != value {
+          decl.set_value(normalized);
+        }
+      };
+
+      match root {
+        pc::RootLike::Root(r) => {
+          r.walk_decls(|node, _| {
+            if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+              normalize_decl(decl);
+            }
+            true
+          });
+        }
+        pc::RootLike::Document(d) => {
+          d.walk_decls(|node, _| {
+            if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+              normalize_decl(decl);
+            }
+            true
+          });
+        }
+      }
+
       Ok(())
     })
     .build()
+}
+
+/// Port of `postcss.list.space(value).join(' ')`: splits on spaces/newlines/tabs
+/// when not inside quotes or functions, trims the segments, and rejoins with a
+/// single space.
+fn collapse_whitespace_like_list_space(input: &str) -> String {
+  if input.is_empty() {
+    return String::new();
+  }
+
+  let separators = [' ', '\n', '\t'];
+  let mut parts: Vec<String> = Vec::new();
+  let mut current = String::new();
+  let mut split = false;
+  let mut func_depth = 0i32;
+  let mut in_quote: Option<char> = None;
+  let mut escape = false;
+
+  for ch in input.chars() {
+    if escape {
+      escape = false;
+    } else if ch == '\\' {
+      escape = true;
+    } else if let Some(q) = in_quote {
+      if ch == q {
+        in_quote = None;
+      }
+    } else if ch == '"' || ch == '\'' {
+      in_quote = Some(ch);
+    } else if ch == '(' {
+      func_depth += 1;
+    } else if ch == ')' {
+      if func_depth > 0 {
+        func_depth -= 1;
+      }
+    } else if func_depth == 0 && separators.contains(&ch) {
+      split = true;
+    }
+
+    if split {
+      if !current.is_empty() {
+        parts.push(current.trim().to_string());
+      }
+      current.clear();
+      split = false;
+    } else {
+      current.push(ch);
+    }
+  }
+
+  if !current.is_empty() {
+    parts.push(current.trim().to_string());
+  }
+
+  parts.join(" ")
 }
 
 #[cfg(feature = "postcss_engine")]
@@ -1362,6 +1459,9 @@ pub fn normalize_current_color_plugin() -> pc::BuiltPlugin {
   pc::plugin("normalize-current-color")
     .decl(|decl, _| {
       let current = decl.value();
+      if !current.to_ascii_lowercase().contains("currentcolor") {
+        return Ok(());
+      }
       let mut out = String::new();
       for token in postcss::list::space(&current) {
         if token.eq_ignore_ascii_case("currentcolor") {

@@ -218,18 +218,25 @@ fn parse_word(node: &mut vp::Node, keep_zero_unit: bool, precision_px: Option<us
   if let vp::Node::Word { value } = node {
     if let Some(pair) = vp::unit::unit(value) {
       let num: f64 = pair.number.parse().unwrap_or(0.0);
-      let u = strip_leading_dot(&pair.unit);
-      if num == 0.0 {
-        let keep = keep_zero_unit || (!is_length_unit(&u.to_lowercase()) && u != "%");
-        *value = format!("{}{}", 0, if keep { u } else { String::new() });
-      } else {
-        let ul = u.to_lowercase();
-        let mut out = convert_value(num, &u, ConvertValueOptions::default());
-        if let Some(p) = precision_px {
-          if ul == "px" && pair.number.contains('.') {
-            let prec = 10f64.powi(p as i32);
-            let rounded =
-              (out.trim_end_matches("px").parse::<f64>().unwrap_or(num) * prec).round() / prec;
+        let u = strip_leading_dot(&pair.unit);
+        if num == 0.0 {
+          let keep = keep_zero_unit || (!is_length_unit(&u.to_lowercase()) && u != "%");
+          *value = format!("{}{}", 0, if keep { u } else { String::new() });
+        } else {
+          let ul = u.to_lowercase();
+          let mut out = convert_value(num, &u, ConvertValueOptions::default());
+          // Match postcss-value-parser behavior that drops leading zeroes on
+          // unitless decimals (e.g. 0.125 -> .125, -0.5 -> -.5).
+          if u.is_empty() && out.starts_with("0.") {
+            out = out.trim_start_matches('0').to_string();
+          } else if u.is_empty() && out.starts_with("-0.") {
+            out = format!("-{}", &out[2..]);
+          }
+          if let Some(p) = precision_px {
+            if ul == "px" && pair.number.contains('.') {
+              let prec = 10f64.powi(p as i32);
+              let rounded =
+                (out.trim_end_matches("px").parse::<f64>().unwrap_or(num) * prec).round() / prec;
             out = format!("{}px", rounded);
           }
         }
@@ -280,8 +287,13 @@ pub fn plugin() -> pc::BuiltPlugin {
   pc::plugin("postcss-convert-values")
     .decl(|decl, _| {
       let prop = decl.prop().to_lowercase();
+      let is_grid_line = prop.starts_with("grid-row") || prop.starts_with("grid-column");
+      if is_grid_line && std::env::var("COMPILED_CLI_TRACE").is_ok() {
+        eprintln!("[convert-values] skip prop={} value='{}'", prop, decl.value());
+      }
       if prop.contains("flex")
         || prop.starts_with("--")
+        || is_grid_line
         || matches!(
           prop.as_str(),
           "descent-override"

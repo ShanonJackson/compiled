@@ -295,9 +295,83 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     use super::plugins::normalize_css_engine as nce;
     plugins.push(nce::convert_values::plugin());
   }
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    plugins.push(
+      postcss::plugin("debug-grid-after-convert")
+        .once_exit(|css, _| {
+          let log_decl = |decl: postcss::ast::nodes::Declaration| {
+            let prop = decl.prop();
+            if prop.starts_with("grid-") {
+              eprintln!(
+                "[grid-debug.after-convert] prop={} value='{}'",
+                prop,
+                decl.value()
+              );
+            }
+          };
+          match css {
+            postcss::ast::nodes::RootLike::Root(r) => {
+              r.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+            postcss::ast::nodes::RootLike::Document(d) => {
+              d.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+          }
+          Ok(())
+        })
+        .build(),
+    );
+  }
   {
     use super::plugins::normalize_css_engine as nce;
     plugins.push(nce::colormin::plugin());
+  }
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    plugins.push(
+      postcss::plugin("debug-grid-after-colormin")
+        .once_exit(|css, _| {
+          let log_decl = |decl: postcss::ast::nodes::Declaration| {
+            let prop = decl.prop();
+            if prop.starts_with("grid-") {
+              eprintln!(
+                "[grid-debug.after-colormin] prop={} value='{}'",
+                prop,
+                decl.value()
+              );
+            }
+          };
+          match css {
+            postcss::ast::nodes::RootLike::Root(r) => {
+              r.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+            postcss::ast::nodes::RootLike::Document(d) => {
+              d.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+          }
+          Ok(())
+        })
+        .build(),
+    );
   }
   {
     use super::plugins::normalize_css_engine as nce;
@@ -321,10 +395,80 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
     use super::plugins::normalize_css_engine as nce;
     plugins.push(nce::calc::plugin());
   }
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    plugins.push(
+      postcss::plugin("debug-grid-values")
+        .once_exit(|css, _| {
+          let log_decl = |decl: postcss::ast::nodes::Declaration| {
+            let prop = decl.prop();
+            if prop.starts_with("grid-") {
+              eprintln!("[grid-debug.before-expand] prop={} value='{}'", prop, decl.value());
+            }
+          };
+          match css {
+            postcss::ast::nodes::RootLike::Root(r) => {
+              r.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+            postcss::ast::nodes::RootLike::Document(d) => {
+              d.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+          }
+          Ok(())
+        })
+        .build(),
+    );
+  }
   plugins.push(super::plugins::expand_shorthands_engine::plugin());
   {
     use super::plugins::normalize_css_engine as nce;
     plugins.push(nce::reduce_initial::plugin());
+  }
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    plugins.push(
+      postcss::plugin("debug-grid-before-atomicify")
+        .once_exit(|css, _| {
+          let log_decl = |decl: postcss::ast::nodes::Declaration| {
+            let prop = decl.prop();
+            if prop.starts_with("grid-") {
+              eprintln!(
+                "[grid-debug.before-atomicify] prop={} value='{}'",
+                prop,
+                decl.value()
+              );
+            }
+          };
+          match css {
+            postcss::ast::nodes::RootLike::Root(r) => {
+              r.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+            postcss::ast::nodes::RootLike::Document(d) => {
+              d.walk_decls(|node, _| {
+                if let Some(decl) = postcss::ast::nodes::as_declaration(&node) {
+                  log_decl(decl);
+                }
+                true
+              });
+            }
+          }
+          Ok(())
+        })
+        .build(),
+    );
   }
   // Start emitting atomic rules.
   plugins.push(atomicify_rules_plugin(
@@ -1621,9 +1765,15 @@ fn atomicify_rules_plugin(
         let orig_value = decl.value();
         let has_important = decl.important();
         let mut value_full = orig_value.clone();
-        let mut hash_seed = value_full.clone();
+        let mut hash_seed = orig_value.clone();
         if has_important {
           hash_seed.push_str("true");
+        }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() && prop.contains("grid") {
+          eprintln!(
+            "[atomicify.hash.postcss] prop={} value_raw='{}' hash_seed='{}'",
+            prop, orig_value, hash_seed
+          );
         }
         if has_important {
           value_full.push_str("!important");
@@ -1675,7 +1825,7 @@ fn atomicify_rules_plugin(
           let group = hash(&group_seed).chars().take(4).collect::<String>();
           if std::env::var("COMPILED_CLI_TRACE").is_ok() {
             eprintln!(
-              "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+              "[atomicify.group.rule] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
               at_label, norm, prop, group_seed, group
             );
           }
@@ -1763,6 +1913,12 @@ fn atomicify_rules_plugin(
         if has_important {
           hash_seed.push_str("true");
         }
+        if std::env::var("COMPILED_CLI_TRACE").is_ok() && prop.contains("grid") {
+          eprintln!(
+            "[atomicify.hash.postcss] (decl) prop={} value_raw='{}' hash_seed='{}'",
+            prop, raw_value, hash_seed
+          );
+        }
         // Normalize color values before serialization, but keep hash_seed untouched.
         fn minify_color_value(value: &str) -> String {
           let trimmed = value.trim();
@@ -1805,7 +1961,7 @@ fn atomicify_rules_plugin(
           let group = hash(&group_seed).chars().take(4).collect::<String>();
           if std::env::var("COMPILED_CLI_TRACE").is_ok() {
             eprintln!(
-              "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+              "[atomicify.group.decl] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
               at_label, norm, prop, group_seed, group
             );
             if prop == "margin-left" {
@@ -1981,6 +2137,12 @@ fn atomicify_rules_plugin(
             if has_important {
               hash_seed.push_str("true");
             }
+            if std::env::var("COMPILED_CLI_TRACE").is_ok() && prop.contains("grid") {
+              eprintln!(
+                "[atomicify.hash.postcss] (rule-exit) prop={} value_raw='{}' hash_seed='{}'",
+                prop, raw_value, hash_seed
+              );
+            }
             let mut value_full = minify_color_value(&raw_value);
             value_full = minify_value_whitespace(&value_full);
             let prefixed_entries =
@@ -2005,7 +2167,7 @@ fn atomicify_rules_plugin(
               let group = hash(&group_seed).chars().take(4).collect::<String>();
               if std::env::var("COMPILED_CLI_TRACE").is_ok() {
                 eprintln!(
-                  "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+                  "[atomicify.group.rule-exit] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
                   at_label, norm, prop, group_seed, group
                 );
               }
@@ -2052,6 +2214,12 @@ fn atomicify_rules_plugin(
                 if has_important {
                   hash_seed.push_str("true");
                 }
+                if std::env::var("COMPILED_CLI_TRACE").is_ok() && prop.contains("grid") {
+                  eprintln!(
+                    "[atomicify.hash.postcss] (nested) prop={} value_raw='{}' hash_seed='{}'",
+                    prop, raw_value, hash_seed
+                  );
+                }
                 let mut normalized_value = minify_color_value(&raw_value);
                 normalized_value = minify_value_whitespace(&normalized_value);
                 let prefixed_entries =
@@ -2074,7 +2242,7 @@ fn atomicify_rules_plugin(
                   let group = hash(&group_seed).chars().take(4).collect::<String>();
                   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
                     eprintln!(
-                      "[atomicify.group] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
+                      "[atomicify.group.nested] at='{}' sel='{}' prop='{}' seed='{}' -> {}",
                       at_label, norm, prop, group_seed, group
                     );
                   }
