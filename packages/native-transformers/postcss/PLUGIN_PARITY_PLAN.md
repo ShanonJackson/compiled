@@ -24,23 +24,23 @@ This plan defines how we will validate every PostCSS plugin in the Rust pipeline
 3. Once the plugin is clean across fixtures, clear the flag (returning to full pipeline) and move to the next plugin.
 
 ## Plugin inventory and source mapping (pipeline order)
-| Order | Plugin | Rust location | JS source reference | Status |
-| --- | --- | --- | --- | --- |
-| 1 | `discard-duplicates` | `compiled_babel/src/postcss/plugins/discard-duplicates.rs` | `packages/postcss-plugin-sources/postcss-discard-duplicates/src/index.js` | ✅ Parity verified |
-| 2 | `discard-empty-rules` | `compiled_babel/src/postcss/plugins/discard-empty-rules.rs` | `packages/postcss-plugin-sources/postcss-discard-empty/src/index.js` | ✅ Parity verified |
-| 3 | `parent-orphaned-pseudos` | `compiled_babel/src/postcss/plugins/parent-orphaned-pseudos.rs` | `packages/css/src/plugins/parent-orphaned-pseudos.ts` | ✅ Parity verified |
-| 4 | `postcss-nested` (bubble/unwrap config) | `compiled_babel/src/postcss/plugins/nested.rs` | `packages/postcss-plugin-sources/postcss-nested/src/index.js` | ✅ Parity verified |
-| 5 | `normalize-css` (cssnano preset slice) | `compiled_babel/src/postcss/plugins/normalize_css/mod.rs` + submodules (`normalize_css_engine`, `colormin.rs`, `convert-values.rs`, `minify-params.rs`, `minify-selectors.rs`, `normalize-whitespace.rs`, `ordered-values.rs`, `reduce-initial/mod.rs`, etc.) | `packages/postcss-plugin-sources/cssnano-preset-default/src/index.js` plus specific plugins (e.g. `postcss-ordered-values/src/index.js`, `postcss-reduce-initial/src/index.js`, `postcss-convert-values/src/index.js`, `postcss-colormin/src/index.js`, `postcss-minify-params/src/index.js`, `postcss-minify-selectors/src/index.js`, `postcss-normalize-whitespace/src/index.js`) | ✅ Parity verified |
-| 6 | `normalize-current-color` (custom addition) | `compiled_babel/src/postcss/plugins/normalize-current-color.rs` | `packages/css/src/plugins/normalize-current-color.ts` (JS reference stored in repo) | ✅ Parity verified |
-| 7 | `expand-shorthands` | `compiled_babel/src/postcss/plugins/expand-shorthands/mod.rs` | `packages/css/src/plugins/expand-shorthands` | ✅ Parity verified |
-| 8 | `atomicify-rules` | `compiled_babel/src/postcss/plugins/atomicify-rules.rs` | `packages/css/src/plugins/atomicify-rules.ts` | ✅ Parity verified |
-| 9 | `flatten-multiple-selectors` (optional) | `compiled_babel/src/postcss/plugins/flatten-multiple-selectors.rs` | `packages/css/src/plugins/flatten-multiple-selectors.ts` | ✅ Parity verified |
-| 10 | `discard-duplicates` (second run when flattening is enabled) | Same as #1 | Same as #1 | ✅ Parity verified |
-| 11 | `increase-specificity` (optional) | `compiled_babel/src/postcss/plugins/increase-specificity.rs` | `packages/css/src/plugins/increase-specificity.ts` | ✅ Parity verified |
-| 12 | `sort-atomic-style-sheet` | `compiled_babel/src/postcss/plugins/sort-atomic-style-sheet.rs` | `packages/css/src/plugins/sort-atomic-style-sheet.ts` | ✅ Parity verified |
-| 13 | `autoprefixer` | `compiled_babel/src/postcss/plugins/vendor_autoprefixer` | `packages/postcss-plugin-sources/autoprefixer/lib/autoprefixer.js` | ✅ Parity verified |
-| 14 | `normalize-whitespace` | `compiled_babel/src/postcss/plugins/normalize-whitespace.rs` | `packages/postcss-plugin-sources/postcss-normalize-whitespace/src/index.js` | ✅ Parity verified |
-| 15 | `extract-stylesheets` | `compiled_babel/src/postcss/plugins/extract-stylesheets.rs` | `packages/css/src/plugins/extract-stylesheets.ts` | ✅ Parity verified |
+| Order | Plugin | Rust location | JS source reference | Status | Fixture parity |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `discard-duplicates` | `compiled_babel/src/postcss/plugins/discard-duplicates.rs` | `packages/postcss-plugin-sources/postcss-discard-duplicates/src/index.js` | ✅ Parity verified | ✅ Fixtures match |
+| 2 | `discard-empty-rules` | `compiled_babel/src/postcss/plugins/discard-empty-rules.rs` | `packages/postcss-plugin-sources/postcss-discard-empty/src/index.js` | ✅ Parity verified | ⬜ Pending |
+| 3 | `parent-orphaned-pseudos` | `compiled_babel/src/postcss/plugins/parent-orphaned-pseudos.rs` | `packages/css/src/plugins/parent-orphaned-pseudos.ts` | ✅ Parity verified | ⬜ Pending |
+| 4 | `postcss-nested` (bubble/unwrap config) | `compiled_babel/src/postcss/plugins/nested.rs` | `packages/postcss-plugin-sources/postcss-nested/src/index.js` | ✅ Parity verified | ⬜ Pending |
+| 5 | `normalize-css` (cssnano preset slice) | `compiled_babel/src/postcss/plugins/normalize_css/mod.rs` + submodules (`normalize_css_engine`, `colormin.rs`, `convert-values.rs`, `minify-params.rs`, `minify-selectors.rs`, `normalize-whitespace.rs`, `ordered-values.rs`, `reduce-initial/mod.rs`, etc.) | `packages/postcss-plugin-sources/cssnano-preset-default/src/index.js` plus specific plugins (e.g. `postcss-ordered-values/src/index.js`, `postcss-reduce-initial/src/index.js`, `postcss-convert-values/src/index.js`, `postcss-colormin/src/index.js`, `postcss-minify-params/src/index.js`, `postcss-minify-selectors/src/index.js`, `postcss-normalize-whitespace/src/index.js`) | ✅ Parity verified | ⬜ Pending |
+| 6 | `normalize-current-color` (custom addition) | `compiled_babel/src/postcss/plugins/normalize-current-color.rs` | `packages/css/src/plugins/normalize-current-color.ts` (JS reference stored in repo) | ✅ Parity verified | ⬜ Pending |
+| 7 | `expand-shorthands` | `compiled_babel/src/postcss/plugins/expand-shorthands/mod.rs` | `packages/css/src/plugins/expand-shorthands` | ✅ Parity verified | ⬜ Pending |
+| 8 | `atomicify-rules` | `compiled_babel/src/postcss/plugins/atomicify-rules.rs` | `packages/css/src/plugins/atomicify-rules.ts` | ✅ Parity verified | ⬜ Pending |
+| 9 | `flatten-multiple-selectors` (optional) | `compiled_babel/src/postcss/plugins/flatten-multiple-selectors.rs` | `packages/css/src/plugins/flatten-multiple-selectors.ts` | ✅ Parity verified | ⬜ Pending |
+| 10 | `discard-duplicates` (second run when flattening is enabled) | Same as #1 | Same as #1 | ✅ Parity verified | ⬜ Pending |
+| 11 | `increase-specificity` (optional) | `compiled_babel/src/postcss/plugins/increase-specificity.rs` | `packages/css/src/plugins/increase-specificity.ts` | ✅ Parity verified | ⬜ Pending |
+| 12 | `sort-atomic-style-sheet` | `compiled_babel/src/postcss/plugins/sort-atomic-style-sheet.rs` | `packages/css/src/plugins/sort-atomic-style-sheet.ts` | ✅ Parity verified | ⬜ Pending |
+| 13 | `autoprefixer` | `compiled_babel/src/postcss/plugins/vendor_autoprefixer` | `packages/postcss-plugin-sources/autoprefixer/lib/autoprefixer.js` | ✅ Parity verified | ⬜ Pending |
+| 14 | `normalize-whitespace` | `compiled_babel/src/postcss/plugins/normalize-whitespace.rs` | `packages/postcss-plugin-sources/postcss-normalize-whitespace/src/index.js` | ✅ Parity verified | ⬜ Pending |
+| 15 | `extract-stylesheets` | `compiled_babel/src/postcss/plugins/extract-stylesheets.rs` | `packages/css/src/plugins/extract-stylesheets.ts` | ✅ Parity verified | ⬜ Pending |
 
 Notes:
 - `normalize-css` expands to the exact cssnano preset plugins filtered by `optimizeCss`; the harness flag must pass through the same `optimizeCss`/`AUTOPREFIXER` options that the fixtures use today.
