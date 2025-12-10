@@ -100,24 +100,19 @@ fn normalize_simple_block(block: &mut SimpleBlock, cache: &mut ValueCache) {
 }
 
 fn normalize_declaration(declaration: &mut Declaration, cache: &mut ValueCache) {
-  if declaration.value.is_empty() {
-    return;
-  }
-
   let Some(original_value) = serialize_component_values(&declaration.value) else {
     return;
   };
 
-  if original_value.trim().is_empty() {
-    declaration.value.clear();
-    return;
-  }
+  let cache_key = IE_HACK_WHITESPACE
+    .replace_all(&original_value, "$1")
+    .into_owned();
 
-  let normalized_value = if let Some(cached) = cache.get(&original_value) {
+  let normalized_value = if let Some(cached) = cache.get(&cache_key) {
     cached.clone()
   } else {
-    let normalized = normalize_value(&original_value);
-    cache.insert(original_value.clone(), normalized.clone());
+    let normalized = normalize_value(&cache_key);
+    cache.insert(cache_key.clone(), normalized.clone());
     normalized
   };
 
@@ -178,13 +173,13 @@ fn normalize_function(function: &mut Function, parent_inside_calc: bool) {
   let is_variable = matches!(lower.as_str(), "var" | "env" | "constant");
   let is_calc = lower == "calc";
 
-  let should_trim = !(is_variable && parent_inside_calc);
-  if should_trim {
+  if !is_variable {
     trim_leading_whitespace(&mut function.value);
     trim_trailing_whitespace(&mut function.value);
   }
 
-  normalize_component_values(&mut function.value, parent_inside_calc || is_calc);
+  let inside_calc = parent_inside_calc || is_calc;
+  normalize_component_values(&mut function.value, inside_calc);
 }
 
 fn remove_previous_whitespace(values: &mut Vec<ComponentValue>, index: &mut usize) {

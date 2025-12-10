@@ -334,7 +334,9 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
   ));
   if flatten_enabled {
     plugins.push(flatten_multiple_selectors_plugin());
-    plugins.push(pc::plugin("discard-duplicates-2").build());
+    // Run the same duplicate-declaration sweep after flattening, matching the
+    // second `discardDuplicates()` invocation in the Babel pipeline.
+    plugins.push(discard_duplicates_plugin());
   }
   plugins.push(pc::plugin("increase-specificity").build());
   plugins.push(sort_atomic_style_sheet_plugin());

@@ -189,7 +189,7 @@ fn at_rule_params(at_rule: &AtRule) -> String {
   at_rule
     .prelude
     .as_ref()
-    .map(|prelude| serialize_at_rule_prelude(prelude).trim().to_string())
+    .map(|prelude| serialize_at_rule_prelude(prelude))
     .unwrap_or_default()
 }
 
@@ -197,7 +197,7 @@ fn serialize_at_rule_prelude(prelude: &AtRulePrelude) -> String {
   let mut output = String::new();
   {
     let writer = BasicCssWriter::new(&mut output, None, Default::default());
-    let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: true });
+    let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
     generator
       .emit(prelude)
       .expect("failed to serialize at-rule prelude");

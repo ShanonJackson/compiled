@@ -1,12 +1,34 @@
-use csscolorparser::Color;
-use swc_core::atoms::Atom;
-use swc_core::css::ast::{ComponentValue, Declaration, Ident, QualifiedRule, Rule, Stylesheet, Token};
-use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
+use std::collections::HashMap;
+
+use once_cell::sync::Lazy;
+use regex::Regex;
+use swc_core::css::ast::{ComponentValue, Declaration, Rule, Stylesheet};
 
 use super::super::transform::{Plugin, TransformContext};
+use super::normalize_css_engine::colormin::{
+    default_options_with_browsers, transform_value, ColorminOptions,
+};
+use crate::postcss::plugins::expand_shorthands::types::{
+    declaration_property_name, parse_value_to_components, serialize_component_values,
+};
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ColorMin;
+#[derive(Debug)]
+pub struct ColorMin {
+    options: ColorminOptions,
+    browsers: Vec<String>,
+    cache: HashMap<String, String>,
+}
+
+impl Default for ColorMin {
+    fn default() -> Self {
+        let (options, browsers) = default_options_with_browsers();
+        Self {
+            options,
+            browsers,
+            cache: HashMap::new(),
+        }
+    }
+}
 
 impl Plugin for ColorMin {
     fn name(&self) -> &'static str {
@@ -14,79 +36,160 @@ impl Plugin for ColorMin {
     }
 
     fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
-        for rule in &mut stylesheet.rules {
-            minimize_rule(rule);
-        }
+        // Mutable cache but immutable plugin instance: rebuild a small cache map to mirror JS behaviour.
+        let mut cache = self.cache.clone();
+        normalize_stylesheet(stylesheet, &self.options, &self.browsers, &mut cache);
     }
 }
 
 pub fn colormin() -> ColorMin {
-    ColorMin
+    ColorMin::default()
 }
 
-fn minimize_rule(rule: &mut Rule) {
-    match rule {
-        Rule::QualifiedRule(rule) => minimize_declarations(&mut rule.block.value),
-        Rule::AtRule(at) => {
-            if let Some(block) = &mut at.block {
-                minimize_declarations(&mut block.value);
+static SKIP_PROP: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^(composes|font|src$|filter|-webkit-tap-highlight-color)").unwrap()
+});
+
+fn normalize_stylesheet(
+    stylesheet: &mut Stylesheet,
+    options: &ColorminOptions,
+    browsers: &[String],
+    cache: &mut HashMap<String, String>,
+) {
+    normalize_rules(&mut stylesheet.rules, options, browsers, cache);
+}
+
+fn normalize_rules(
+    rules: &mut Vec<Rule>,
+    options: &ColorminOptions,
+    browsers: &[String],
+    cache: &mut HashMap<String, String>,
+) {
+    for rule in rules.iter_mut() {
+        match rule {
+            Rule::QualifiedRule(rule) => {
+                normalize_values(&mut rule.block.value, options, browsers, cache)
+            }
+            Rule::AtRule(at_rule) => {
+                if let Some(block) = &mut at_rule.block {
+                    normalize_values(&mut block.value, options, browsers, cache);
+                }
+            }
+            Rule::ListOfComponentValues(list) => {
+                normalize_components(&mut list.children, options, browsers, cache);
             }
         }
-        Rule::ListOfComponentValues(list) => minimize_components(&mut list.children),
     }
 }
 
-fn minimize_components(values: &mut [ComponentValue]) {
+fn normalize_components(
+    values: &mut [ComponentValue],
+    options: &ColorminOptions,
+    browsers: &[String],
+    cache: &mut HashMap<String, String>,
+) {
     for v in values {
         match v {
-            ComponentValue::Declaration(decl) => minimize_declaration(decl),
-            ComponentValue::QualifiedRule(rule) => minimize_declarations(&mut rule.block.value),
-            ComponentValue::AtRule(at) => {
-                if let Some(block) = &mut at.block {
-                    minimize_declarations(&mut block.value);
+            ComponentValue::Declaration(decl) => {
+                normalize_declaration(decl, options, browsers, cache)
+            }
+            ComponentValue::QualifiedRule(rule) => {
+                normalize_values(&mut rule.block.value, options, browsers, cache);
+            }
+            ComponentValue::AtRule(at_rule) => {
+                if let Some(block) = &mut at_rule.block {
+                    normalize_values(&mut block.value, options, browsers, cache);
                 }
             }
-            ComponentValue::SimpleBlock(block) => minimize_declarations(&mut block.value),
-            ComponentValue::ListOfComponentValues(list) => minimize_components(&mut list.children),
-            ComponentValue::Function(fun) => minimize_components(&mut fun.value),
+            ComponentValue::SimpleBlock(block) => {
+                normalize_values(&mut block.value, options, browsers, cache);
+            }
+            ComponentValue::ListOfComponentValues(list) => {
+                normalize_components(&mut list.children, options, browsers, cache);
+            }
+            ComponentValue::Function(fun) => {
+                normalize_components(&mut fun.value, options, browsers, cache)
+            }
+            ComponentValue::KeyframeBlock(block) => {
+                normalize_values(&mut block.block.value, options, browsers, cache);
+            }
             _ => {}
         }
     }
 }
 
-fn minimize_declarations(values: &mut Vec<ComponentValue>) {
+fn normalize_values(
+    values: &mut Vec<ComponentValue>,
+    options: &ColorminOptions,
+    browsers: &[String],
+    cache: &mut HashMap<String, String>,
+) {
     for v in values.iter_mut() {
-        if let ComponentValue::Declaration(decl) = v {
-            minimize_declaration(decl);
-        }
-    }
-}
-
-fn minimize_declaration(decl: &mut Declaration) {
-    if decl.value.is_empty() { return; }
-    // Walk tokens and replace color idents with shorter hex where beneficial
-    for comp in decl.value.iter_mut() {
-        if let ComponentValue::PreservedToken(tok) = comp {
-            if let Token::Ident { value, .. } = &tok.token {
-                let name = value.to_string();
-                if let Ok(color) = Color::parse(&name) {
-                    let hex = color_to_short_hex(&color);
-                    if hex.len() < name.len() {
-                        // Replace token with Ident node to ensure proper serialization
-                        *comp = ComponentValue::Ident(Ident { span: decl.span, value: Atom::from(hex.as_str()), raw: None });
-                    }
+        match v {
+            ComponentValue::Declaration(decl) => {
+                normalize_declaration(decl, options, browsers, cache)
+            }
+            ComponentValue::QualifiedRule(rule) => {
+                normalize_values(&mut rule.block.value, options, browsers, cache);
+            }
+            ComponentValue::AtRule(at_rule) => {
+                if let Some(block) = &mut at_rule.block {
+                    normalize_values(&mut block.value, options, browsers, cache);
                 }
             }
+            ComponentValue::SimpleBlock(block) => {
+                normalize_values(&mut block.value, options, browsers, cache);
+            }
+            ComponentValue::ListOfComponentValues(list) => {
+                normalize_components(&mut list.children, options, browsers, cache);
+            }
+            ComponentValue::Function(fun) => {
+                normalize_components(&mut fun.value, options, browsers, cache)
+            }
+            ComponentValue::KeyframeBlock(block) => {
+                normalize_values(&mut block.block.value, options, browsers, cache);
+            }
+            _ => {}
         }
     }
 }
 
-fn color_to_short_hex(color: &Color) -> String {
-    let (r, g, b, _a) = color.to_rgba8();
-    // Hex with lowercase
-    if r % 17 == 0 && g % 17 == 0 && b % 17 == 0 {
-        // #rgb shorthand
-        return format!("#{:x}{:x}{:x}", r / 17, g / 17, b / 17);
+fn normalize_declaration(
+    declaration: &mut Declaration,
+    options: &ColorminOptions,
+    browsers: &[String],
+    cache: &mut HashMap<String, String>,
+) {
+    let prop_name = declaration_property_name(&declaration.name);
+    if SKIP_PROP.is_match(&prop_name) {
+        return;
     }
-    format!("#{:02x}{:02x}{:02x}", r, g, b)
+
+    let Some(original_value) = serialize_component_values(&declaration.value) else {
+        return;
+    };
+
+    if original_value.is_empty() {
+        return;
+    }
+
+    let cache_key = format!(
+        "{:?}",
+        (
+            &original_value,
+            options.transparent,
+            options.alpha_hex,
+            options.name,
+            browsers
+        )
+    );
+
+    if let Some(cached) = cache.get(&cache_key) {
+        declaration.value = parse_value_to_components(cached);
+        return;
+    }
+
+    let new_value = transform_value(&original_value, options);
+    declaration.value = parse_value_to_components(&new_value);
+    cache.insert(cache_key, new_value);
 }

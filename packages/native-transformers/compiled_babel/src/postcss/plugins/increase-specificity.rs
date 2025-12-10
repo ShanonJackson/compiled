@@ -8,6 +8,7 @@ use swc_core::css::ast::{
 };
 
 use super::super::transform::{Plugin, TransformContext};
+use crate::postcss::utils::selector_stringifier;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct IncreaseSpecificity;
@@ -97,81 +98,7 @@ fn increase_qualified_rule_specificity(rule: &mut QualifiedRule) {
 }
 
 fn complex_selector_contains_compiled_class(selector: &ComplexSelector) -> bool {
-  selector.children.iter().any(|child| match child {
-    ComplexSelectorChildren::CompoundSelector(compound) => {
-      compound_contains_compiled_class(compound)
-    }
-    ComplexSelectorChildren::Combinator(_) => false,
-  })
-}
-
-fn compound_contains_compiled_class(compound: &CompoundSelector) -> bool {
-  compound
-    .subclass_selectors
-    .iter()
-    .any(|selector| match selector {
-      SubclassSelector::Class(class_selector) => class_selector.text.value.starts_with('_'),
-      SubclassSelector::PseudoClass(pseudo) => pseudo_class_contains_compiled_class(pseudo),
-      SubclassSelector::PseudoElement(pseudo) => pseudo_element_contains_compiled_class(pseudo),
-      _ => false,
-    })
-}
-
-fn pseudo_class_contains_compiled_class(pseudo: &PseudoClassSelector) -> bool {
-  pseudo
-    .children
-    .as_ref()
-    .map(|children| {
-      children.iter().any(|child| match child {
-        PseudoClassSelectorChildren::ComplexSelector(selector) => {
-          complex_selector_contains_compiled_class(selector)
-        }
-        PseudoClassSelectorChildren::SelectorList(list) => list
-          .children
-          .iter()
-          .any(complex_selector_contains_compiled_class),
-        PseudoClassSelectorChildren::RelativeSelectorList(list) => list
-          .children
-          .iter()
-          .any(|relative| complex_selector_contains_compiled_class(&relative.selector)),
-        PseudoClassSelectorChildren::CompoundSelectorList(list) => {
-          list.children.iter().any(compound_contains_compiled_class)
-        }
-        PseudoClassSelectorChildren::ForgivingSelectorList(list) => {
-          list.children.iter().any(|item| match item {
-            swc_core::css::ast::ForgivingComplexSelector::ComplexSelector(selector) => {
-              complex_selector_contains_compiled_class(selector)
-            }
-            swc_core::css::ast::ForgivingComplexSelector::ListOfComponentValues(_) => false,
-          })
-        }
-        PseudoClassSelectorChildren::ForgivingRelativeSelectorList(list) => {
-          list.children.iter().any(|item| match item {
-            swc_core::css::ast::ForgivingRelativeSelector::RelativeSelector(relative) => {
-              complex_selector_contains_compiled_class(&relative.selector)
-            }
-            swc_core::css::ast::ForgivingRelativeSelector::ListOfComponentValues(_) => false,
-          })
-        }
-        _ => false,
-      })
-    })
-    .unwrap_or(false)
-}
-
-fn pseudo_element_contains_compiled_class(pseudo: &PseudoElementSelector) -> bool {
-  pseudo
-    .children
-    .as_ref()
-    .map(|children| {
-      children.iter().any(|child| match child {
-        PseudoElementSelectorChildren::CompoundSelector(compound) => {
-          compound_contains_compiled_class(compound)
-        }
-        _ => false,
-      })
-    })
-    .unwrap_or(false)
+  selector_stringifier::serialize_complex_selector(selector).contains("._")
 }
 
 fn increase_complex_selector_specificity(selector: &mut ComplexSelector) {
