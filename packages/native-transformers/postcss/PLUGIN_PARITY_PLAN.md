@@ -48,5 +48,6 @@ Notes:
 
 ## Immediate next steps
 - Use the wired `POSTCSS_PLUGIN_UNDER_TEST` flag to isolate plugins; the runner now emits suffixed artifacts (`babel-out.<plugin>.jsx`, `out.<plugin>.jsx`, `babel-style-rules.<plugin>.json`, `swc-style-rules.<plugin>.json`).
+- Drive the whole pipeline in order with `node packages/native-transformers/scripts/update-fixtures.js --each-plugin`, which replays every gated plugin (plus an autoprefixer alias routed through `atomicify-rules`) and reports any mismatches per stage.
 - Drive each plugin through the full fixture suite with the flag set and note any mismatches here with links to their fixes.
 - Keep the checklist aligned with fixture results, not just code inspection, now that single-plugin snapshots are available.

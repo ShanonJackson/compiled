@@ -33,6 +33,11 @@ matches it **1:1** (structure, behaviour, and outputs).
      in a no-op while leaving the named plugin active. Optional stages
      (autoprefixer, increase-specificity, flatten-multiple-selectors) are
      automatically forced on when they are the plugin under test.
+   - To exercise the entire pipeline in order, run
+     `node packages/native-transformers/scripts/update-fixtures.js --each-plugin`.
+     This re-invokes the runner once per gated plugin (plus an autoprefixer
+     alias routed through `atomicify-rules`) and exits non-zero if any stage
+     reports a mismatch.
    - The fixture runner writes plugin-scoped artifacts alongside the defaults:
      `babel-out.<plugin>.jsx`, `out.<plugin>.jsx`,
      `babel-style-rules.<plugin>.json`, and `swc-style-rules.<plugin>.json`.

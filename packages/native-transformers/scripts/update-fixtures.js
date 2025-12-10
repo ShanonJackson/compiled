@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const workspaceNodeModules = path.join(repoRoot, 'node_modules');
@@ -54,6 +55,37 @@ const pluginUnderTest = (process.env.POSTCSS_PLUGIN_UNDER_TEST || '').trim();
 const safePluginSuffix = pluginUnderTest
   ? `.${pluginUnderTest.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   : '';
+
+const PLUGIN_SEQUENCE = [
+  'discard-duplicates',
+  'wrap-bare-decls',
+  'discard-empty-rules',
+  'parent-orphaned-pseudos',
+  'postcss-nested',
+  'postcss-minify-selectors',
+  'postcss-minify-params',
+  'postcss-ordered-values',
+  'postcss-convert-values',
+  'postcss-colormin',
+  'normalize-current-color',
+  'postcss-discard-comments',
+  'postcss-normalize-url',
+  'postcss-normalize-string',
+  'postcss-calc',
+  'expand-shorthands',
+  'postcss-reduce-initial',
+  'atomicify-rules',
+  'flatten-multiple-selectors',
+  'discard-duplicates',
+  'increase-specificity',
+  'sort-atomic-style-sheet',
+  'postcss-normalize-whitespace',
+  'extract-stylesheets',
+];
+
+const ALIASED_PLUGINS = [
+  { label: 'autoprefixer', target: 'atomicify-rules', env: { AUTOPREFIXER: 'on' } },
+];
 
 if (pluginUnderTest) {
   process.env.POSTCSS_PLUGIN_UNDER_TEST = pluginUnderTest;
@@ -528,6 +560,52 @@ async function processFixture(name) {
 }
 
 async function main() {
+  const args = process.argv.slice(2).filter(Boolean);
+  const wantSequence = args.includes('--each-plugin');
+
+  if (wantSequence && !pluginUnderTest) {
+    const forwardedArgs = args.filter((a) => a !== '--each-plugin');
+    const failures = [];
+
+    const runEntry = (entry) =>
+      new Promise((resolve) => {
+        const env = {
+          ...process.env,
+          ...entry.env,
+          POSTCSS_PLUGIN_UNDER_TEST: entry.target,
+        };
+        const child = spawn(
+          process.execPath,
+          [__filename, ...forwardedArgs],
+          {
+            env,
+            stdio: 'inherit',
+          }
+        );
+        child.on('exit', (code) => {
+          if (code !== 0) {
+            failures.push(entry.label || entry.target);
+          }
+          resolve();
+        });
+      });
+
+    const sequence = [
+      ...PLUGIN_SEQUENCE.map((name) => ({ label: name, target: name })),
+      ...ALIASED_PLUGINS,
+    ];
+
+    for (const entry of sequence) {
+      await runEntry(entry);
+    }
+
+    if (failures.length > 0) {
+      console.error(`Plugin sequence failed for: ${failures.join(', ')}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const entries = await fsp.readdir(fixtureRoot, { withFileTypes: true });
   const allFixtures = entries
     .filter(
@@ -539,7 +617,6 @@ async function main() {
     )
     .map((e) => e.name);
 
-  const args = process.argv.slice(2).filter(Boolean);
   let fixtures = allFixtures;
   if (args.length > 0) {
     const requested = args
