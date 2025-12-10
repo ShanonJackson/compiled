@@ -308,6 +308,12 @@ pub(crate) fn transform_css_via_swc_pipeline(
   ctx.set_preserved_comments(preserved_comments);
 
   let gate = PluginGate::new();
+  if env::var("COMPILED_CLI_TRACE").is_ok() {
+    match env::var("POSTCSS_PLUGIN_UNDER_TEST") {
+      Ok(val) => eprintln!("[postcss] plugin_under_test={val}"),
+      Err(err) => eprintln!("[postcss] plugin_under_test=<missing: {err}>"),
+    }
+  }
   let flatten_multiple_selectors_option = gate.force_enable(
     "flatten-multiple-selectors",
     options.flatten_multiple_selectors.unwrap_or(true),

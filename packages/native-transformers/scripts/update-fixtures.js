@@ -55,6 +55,10 @@ const safePluginSuffix = pluginUnderTest
   ? `.${pluginUnderTest.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   : '';
 
+if (pluginUnderTest) {
+  process.env.POSTCSS_PLUGIN_UNDER_TEST = pluginUnderTest;
+}
+
 function splitTopLevelSegments(body) {
   const segments = [];
   let depth = 0;
@@ -348,6 +352,11 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   await fsp.writeFile(tmpFile, tokenized, 'utf8');
 
   const runEnv = { ...process.env };
+  if (pluginUnderTest) {
+    runEnv.POSTCSS_PLUGIN_UNDER_TEST = pluginUnderTest;
+    // Surface the exact value passed to the Rust CLI for debugging plugin isolation.
+    console.log('[fixtures] POSTCSS_PLUGIN_UNDER_TEST for swc:', runEnv.POSTCSS_PLUGIN_UNDER_TEST);
+  }
   if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
     runEnv.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
   }

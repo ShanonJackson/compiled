@@ -43,7 +43,7 @@ export const transformCss = (
   const flattenMultipleSelectorsOption =
     (opts.flattenMultipleSelectors ?? true) || isPluginUnderTest('flatten-multiple-selectors');
 
-  const noopPlugin = postcss.plugin('compiled-noop', () => () => undefined);
+  const noopPlugin = { postcssPlugin: 'compiled-noop', Once() {} } satisfies AcceptedPlugin;
   const gatePlugins = (plugins: AcceptedPlugin[]): AcceptedPlugin[] => {
     if (!pluginUnderTest) {
       return plugins;
@@ -53,7 +53,7 @@ export const transformCss = (
       if (typeof name === 'string' && name === pluginUnderTest) {
         return plugin;
       }
-      return noopPlugin();
+      return noopPlugin;
     });
   };
 
