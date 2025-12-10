@@ -50,6 +50,11 @@ const BABEL_OPTIONS = {
   caller: { name: 'compiled-native-transformers-fixtures' },
 };
 
+const pluginUnderTest = (process.env.POSTCSS_PLUGIN_UNDER_TEST || '').trim();
+const safePluginSuffix = pluginUnderTest
+  ? `.${pluginUnderTest.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  : '';
+
 function splitTopLevelSegments(body) {
   const segments = [];
   let depth = 0;
@@ -425,18 +430,24 @@ async function processFixture(name) {
 
   const startedAt = Date.now();
 
-  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath, cfg);
-  await writeFileIfChanged(path.join(fixtureDir, 'babel-out.jsx'), babelOutputs.code);
+  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath);
   await writeFileIfChanged(
-    path.join(fixtureDir, 'babel-style-rules.json'),
+    path.join(fixtureDir, `babel-out${safePluginSuffix}.jsx`),
+    babelOutputs.code
+  );
+  await writeFileIfChanged(
+    path.join(fixtureDir, `babel-style-rules${safePluginSuffix}.json`),
     JSON.stringify(babelOutputs.styleRules, null, 2)
   );
 
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath, cfg);
   if (swcOutputs.success) {
-    await writeFileIfChanged(path.join(fixtureDir, 'out.jsx'), swcOutputs.code);
     await writeFileIfChanged(
-      path.join(fixtureDir, 'swc-style-rules.json'),
+      path.join(fixtureDir, `out${safePluginSuffix}.jsx`),
+      swcOutputs.code
+    );
+    await writeFileIfChanged(
+      path.join(fixtureDir, `swc-style-rules${safePluginSuffix}.json`),
       JSON.stringify(
         Array.isArray(swcOutputs.styleRules) ? swcOutputs.styleRules : [],
         null,
@@ -448,8 +459,8 @@ async function processFixture(name) {
   }
 
   const [babelCode, swcCode] = await Promise.all([
-    fsp.readFile(path.join(fixtureDir, 'babel-out.jsx'), 'utf8'),
-    fsp.readFile(path.join(fixtureDir, 'out.jsx'), 'utf8'),
+    fsp.readFile(path.join(fixtureDir, `babel-out${safePluginSuffix}.jsx`), 'utf8'),
+    fsp.readFile(path.join(fixtureDir, `out${safePluginSuffix}.jsx`), 'utf8'),
   ]);
   // We don't gate on code equality; style-rules are the primary parity target.
   const codeEqual = true;
@@ -459,8 +470,11 @@ async function processFixture(name) {
   let ruleReport = null;
   try {
     const [babelRulesText, swcRulesText] = await Promise.all([
-      fsp.readFile(path.join(fixtureDir, 'babel-style-rules.json'), 'utf8'),
-      fsp.readFile(path.join(fixtureDir, 'swc-style-rules.json'), 'utf8'),
+      fsp.readFile(
+        path.join(fixtureDir, `babel-style-rules${safePluginSuffix}.json`),
+        'utf8'
+      ),
+      fsp.readFile(path.join(fixtureDir, `swc-style-rules${safePluginSuffix}.json`), 'utf8'),
     ]);
     const babelRules = JSON.parse(babelRulesText || '[]');
     const swcRules = JSON.parse(swcRulesText || '[]');
@@ -581,13 +595,15 @@ async function main() {
   if (codeOnlyMismatches.length > 0) {
     console.warn('Code-only differences:');
     for (const r of codeOnlyMismatches) {
-      console.warn(` - ${r.name}: babel-out.jsx vs out.jsx`);
+      console.warn(` - ${r.name}: babel-out${safePluginSuffix}.jsx vs out${safePluginSuffix}.jsx`);
     }
     process.exitCode = 0;
     return;
   }
 
-  console.log('All fixtures match.');
+  console.log(
+    pluginUnderTest ? `All fixtures match for plugin ${pluginUnderTest}.` : 'All fixtures match.'
+  );
 }
 
 main().catch((error) => {

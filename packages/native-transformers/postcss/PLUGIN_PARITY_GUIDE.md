@@ -27,14 +27,15 @@ matches it **1:1** (structure, behaviour, and outputs).
    - Execute `node packages/native-transformers/scripts/update-fixtures.js` to
      generate Babel vs. Rust outputs for all fixtures. This reports any diffs in
      generated JS and style-rules JSON.
-4. **Isolate the plugin**
-   - When the single-plugin test switch described in
-     `PLUGIN_PARITY_PLAN.md` is available, set
-     `POSTCSS_PLUGIN_UNDER_TEST=<plugin>` before running the fixtures to limit
-     the pipeline to the plugin under inspection.
-   - Until that switch lands, keep the pipeline intact but focus on diffs that
-     originate from the plugin's responsibilities (compare the JS source to the
-     Rust implementation and add targeted logging if needed).
+4. **Isolate the plugin (now available)**
+   - Set `POSTCSS_PLUGIN_UNDER_TEST=<plugin>` before running the fixtures to
+     force both the Babel and Rust pipelines to wrap every non-matching plugin
+     in a no-op while leaving the named plugin active. Optional stages
+     (autoprefixer, increase-specificity, flatten-multiple-selectors) are
+     automatically forced on when they are the plugin under test.
+   - The fixture runner writes plugin-scoped artifacts alongside the defaults:
+     `babel-out.<plugin>.jsx`, `out.<plugin>.jsx`,
+     `babel-style-rules.<plugin>.json`, and `swc-style-rules.<plugin>.json`.
 5. **Debug mismatches**
    - Add temporary `eprintln!` calls in the Rust plugin (mirroring console logs
      you might add in JS) to trace traversal order and captured values.

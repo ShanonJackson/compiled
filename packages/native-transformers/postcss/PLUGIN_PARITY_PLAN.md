@@ -47,6 +47,6 @@ Notes:
 - When a plugin is optional in JS (e.g. `flatten-multiple-selectors`, `increase-specificity`, `autoprefixer`), the single-plugin mode should force-enable only that plugin and stub the rest to no-ops so the comparison is meaningful.
 
 ## Immediate next steps
-- Implement the `POSTCSS_PLUGIN_UNDER_TEST` plumbing across `fixtures_cli` and `update-fixtures.js`, including pass-through scaffolding for non-selected plugins.
-- Teach `update-fixtures.js` to snapshot per-plugin outputs (JS + Rust) without disturbing the existing baseline fixture layout.
-- Create a progress tracker (checklist) in this file that records the latest plugin verified clean across **all** fixtures once the harness is in place.
+- Use the wired `POSTCSS_PLUGIN_UNDER_TEST` flag to isolate plugins; the runner now emits suffixed artifacts (`babel-out.<plugin>.jsx`, `out.<plugin>.jsx`, `babel-style-rules.<plugin>.json`, `swc-style-rules.<plugin>.json`).
+- Drive each plugin through the full fixture suite with the flag set and note any mismatches here with links to their fixes.
+- Keep the checklist aligned with fixture results, not just code inspection, now that single-plugin snapshots are available.
