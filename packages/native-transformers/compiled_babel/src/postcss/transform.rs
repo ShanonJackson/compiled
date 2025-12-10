@@ -19,6 +19,7 @@ use super::plugins::{
   normalize_whitespace::normalize_whitespace, parent_orphaned_pseudos::parent_orphaned_pseudos,
   sort_atomic_style_sheet::sort_atomic_style_sheet,
 };
+use std::env;
 
 /// Options equivalent to `packages/css/src/transform.ts`.
 #[derive(Debug, Clone, Default)]
@@ -195,6 +196,58 @@ pub trait Plugin {
   fn run(&self, stylesheet: &mut Stylesheet, ctx: &mut TransformContext<'_>);
 }
 
+#[derive(Debug, Clone, Copy)]
+struct NoopPlugin {
+  name: &'static str,
+}
+
+impl Plugin for NoopPlugin {
+  fn name(&self) -> &'static str {
+    self.name
+  }
+
+  fn run(&self, _stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {}
+}
+
+#[derive(Debug, Clone, Default)]
+struct PluginGate {
+  target: Option<String>,
+}
+
+impl PluginGate {
+  fn new() -> Self {
+    let target = env::var("POSTCSS_PLUGIN_UNDER_TEST")
+      .ok()
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty());
+    Self { target }
+  }
+
+  fn is_active(&self) -> bool {
+    self.target.is_some()
+  }
+
+  fn matches(&self, name: &str) -> bool {
+    self
+      .target
+      .as_ref()
+      .map(|target| target == name)
+      .unwrap_or(false)
+  }
+
+  fn force_enable(&self, name: &str, fallback: bool) -> bool {
+    self.matches(name) || fallback
+  }
+
+  fn gate(&self, name: &'static str, plugin: Box<dyn Plugin>) -> Box<dyn Plugin> {
+    if !self.is_active() || self.matches(name) {
+      plugin
+    } else {
+      Box::new(NoopPlugin { name })
+    }
+  }
+}
+
 /// Parse CSS source into an AST using swc's CSS parser.
 fn parse_stylesheet(css: &str) -> Result<Stylesheet, CssTransformError> {
   let cm: Arc<SourceMap> = Default::default();
@@ -254,59 +307,122 @@ pub(crate) fn transform_css_via_swc_pipeline(
   let mut ctx = TransformContext::new(&options);
   ctx.set_preserved_comments(preserved_comments);
 
-  let flatten_multiple_selectors_option = options.flatten_multiple_selectors.unwrap_or(true);
+  let gate = PluginGate::new();
+  if env::var("COMPILED_CLI_TRACE").is_ok() {
+    match env::var("POSTCSS_PLUGIN_UNDER_TEST") {
+      Ok(val) => eprintln!("[postcss] plugin_under_test={val}"),
+      Err(err) => eprintln!("[postcss] plugin_under_test=<missing: {err}>"),
+    }
+  }
+  let flatten_multiple_selectors_option = gate.force_enable(
+    "flatten-multiple-selectors",
+    options.flatten_multiple_selectors.unwrap_or(true),
+  );
 
   let mut pipeline: Vec<Box<dyn Plugin>> = Vec::new();
-  pipeline.push(Box::new(discard_duplicates()));
-  pipeline.push(Box::new(discard_empty_rules()));
-  pipeline.push(Box::new(parent_orphaned_pseudos()));
-  pipeline.push(Box::new(nested()));
+  {
+    let plugin = Box::new(discard_duplicates());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
+  {
+    let plugin = Box::new(discard_empty_rules());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
+  {
+    let plugin = Box::new(parent_orphaned_pseudos());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
+  {
+    let plugin = Box::new(nested());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
 
   for plugin in normalize_css(&options) {
-    pipeline.push(plugin);
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
   }
   // COMPAT: Run minimal color minification before hashing so value-based
   // class name hashes match Babel (which normalizes colors pre-atomicify).
-  pipeline.push(Box::new(super::plugins::colormin_lite::colormin_lite()));
-  pipeline.push(Box::new(expand_shorthands()));
+  {
+    let plugin = Box::new(super::plugins::colormin_lite::colormin_lite());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
+  {
+    let plugin = Box::new(expand_shorthands());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
   if options.optimize_css.unwrap_or(true) {
     // COMPAT: Re-run reduce-initial after shorthands are expanded so properties
     // like text-decoration-color are normalized with the final values.
-    pipeline.push(Box::new(
-      super::plugins::reduce_initial::reduce_initial(),
-    ));
+    let plugin = Box::new(super::plugins::reduce_initial::reduce_initial());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
   }
-  pipeline.push(Box::new(atomicify_rules()));
+  {
+    let plugin = Box::new(atomicify_rules());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
 
   if flatten_multiple_selectors_option {
-    pipeline.push(Box::new(flatten_multiple_selectors()));
-    pipeline.push(Box::new(discard_duplicates()));
+    {
+      let plugin = Box::new(flatten_multiple_selectors());
+      let name = plugin.name();
+      pipeline.push(gate.gate(name, plugin));
+    }
+    {
+      let plugin = Box::new(discard_duplicates());
+      let name = plugin.name();
+      pipeline.push(gate.gate(name, plugin));
+    }
   }
 
-  if options.increase_specificity.unwrap_or(false) {
-    pipeline.push(Box::new(increase_specificity()));
+  if gate.force_enable("increase-specificity", options.increase_specificity.unwrap_or(false)) {
+    let plugin = Box::new(increase_specificity());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
   }
 
   let sort_at_rules_option = options.sort_at_rules;
   let sort_shorthand_option = options.sort_shorthand;
-  pipeline.push(Box::new(sort_atomic_style_sheet(
-    sort_at_rules_option,
-    sort_shorthand_option,
-  )));
+  {
+    let plugin = Box::new(sort_atomic_style_sheet(
+      sort_at_rules_option,
+      sort_shorthand_option,
+    ));
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
 
   // Autoprefixer-equivalent vendor prefixing must run after
   // sort-atomic-style-sheet and before whitespace/extract to match Babel.
   // Full Autoprefixer port (wired to browserslist and caniuse data)
-  if std::env::var("AUTOPREFIXER")
-    .map(|v| v != "off")
-    .unwrap_or(true)
-  {
-    pipeline.push(Box::new(
-      super::plugins::vendor_autoprefixer::vendor_autoprefixer(),
-    ));
+  if gate.force_enable(
+    "autoprefixer",
+    env::var("AUTOPREFIXER")
+      .map(|v| v != "off")
+      .unwrap_or(true),
+  ) {
+    let plugin = Box::new(super::plugins::vendor_autoprefixer::vendor_autoprefixer());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
   }
-  pipeline.push(Box::new(normalize_whitespace()));
-  pipeline.push(Box::new(extract_stylesheets()));
+  {
+    let plugin = Box::new(normalize_whitespace());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
+  {
+    let plugin = Box::new(extract_stylesheets());
+    let name = plugin.name();
+    pipeline.push(gate.gate(name, plugin));
+  }
 
   for plugin in pipeline {
     plugin.run(&mut stylesheet, &mut ctx);

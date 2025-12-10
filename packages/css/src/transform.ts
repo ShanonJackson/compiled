@@ -1,6 +1,6 @@
 import { createError, unique } from '@compiled/utils';
 import autoprefixer from 'autoprefixer';
-import postcss from 'postcss';
+import postcss, { type AcceptedPlugin } from 'postcss';
 import nested from 'postcss-nested';
 import whitespace from 'postcss-normalize-whitespace';
 
@@ -38,15 +38,33 @@ export const transformCss = (
   const classNames: string[] = [];
 
   // This is defaulted to `true` unless set
-  const flattenMultipleSelectorsOption = opts.flattenMultipleSelectors ?? true;
+  const pluginUnderTest = process.env.POSTCSS_PLUGIN_UNDER_TEST?.trim();
+  const isPluginUnderTest = (name: string) => pluginUnderTest === name;
+  const flattenMultipleSelectorsOption =
+    (opts.flattenMultipleSelectors ?? true) || isPluginUnderTest('flatten-multiple-selectors');
+
+  const noopPlugin = { postcssPlugin: 'compiled-noop', Once() {} } satisfies AcceptedPlugin;
+  const gatePlugins = (plugins: AcceptedPlugin[]): AcceptedPlugin[] => {
+    if (!pluginUnderTest) {
+      return plugins;
+    }
+    return plugins.map((plugin) => {
+      const name = (plugin as any)?.postcssPlugin;
+      if (typeof name === 'string' && name === pluginUnderTest) {
+        return plugin;
+      }
+      return noopPlugin;
+    });
+  };
 
   try {
-    const result = postcss([
-      discardDuplicates(),
-      discardEmptyRules(),
-      parentOrphanedPseudos(),
-      nested({
-        bubble: [
+    const result = postcss(
+      gatePlugins([
+        discardDuplicates(),
+        discardEmptyRules(),
+        parentOrphanedPseudos(),
+        nested({
+          bubble: [
           'container',
           '-moz-document',
           'layer',
@@ -59,25 +77,32 @@ export const transformCss = (
         ],
         unwrap: ['color-profile', 'counter-style', 'font-palette-values', 'page', 'property'],
       }),
-      ...normalizeCSS(opts),
-      expandShorthands(),
-      atomicifyRules({
-        classNameCompressionMap: opts.classNameCompressionMap,
-        callback: (className: string) => {
-          classNames.push(className);
-        },
-        classHashPrefix: opts.classHashPrefix,
-      }),
-      ...(flattenMultipleSelectorsOption ? [flattenMultipleSelectors(), discardDuplicates()] : []),
-      ...(opts.increaseSpecificity ? [increaseSpecificity()] : []),
-      sortAtomicStyleSheet({
-        sortAtRulesEnabled: opts.sortAtRules,
-        sortShorthandEnabled: opts.sortShorthand,
-      }),
-      ...(process.env.AUTOPREFIXER === 'off' ? [] : [autoprefixer()]),
-      whitespace(),
-      extractStyleSheets({ callback: (sheet: string) => sheets.push(sheet) }),
-    ]).process(css, {
+        ...normalizeCSS(opts),
+        expandShorthands(),
+        atomicifyRules({
+          classNameCompressionMap: opts.classNameCompressionMap,
+          callback: (className: string) => {
+            classNames.push(className);
+          },
+          classHashPrefix: opts.classHashPrefix,
+        }),
+        ...(flattenMultipleSelectorsOption ? [flattenMultipleSelectors(), discardDuplicates()] : []),
+        ...(opts.increaseSpecificity || isPluginUnderTest('increase-specificity')
+          ? [increaseSpecificity()]
+          : []),
+        sortAtomicStyleSheet({
+          sortAtRulesEnabled: opts.sortAtRules,
+          sortShorthandEnabled: opts.sortShorthand,
+        }),
+        ...(
+          process.env.AUTOPREFIXER === 'off' && !isPluginUnderTest('autoprefixer')
+            ? []
+            : [autoprefixer()]
+        ),
+        whitespace(),
+        extractStyleSheets({ callback: (sheet: string) => sheets.push(sheet) }),
+      ])
+    ).process(css, {
       from: undefined,
     });
 

@@ -265,13 +265,57 @@ fn discard_empty_rules_plugin() -> pc::BuiltPlugin {
 
 #[cfg(feature = "postcss_engine")]
 fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -> pc::Processor {
+  let plugin_under_test = std::env::var("POSTCSS_PLUGIN_UNDER_TEST")
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
+  let normalize_targets: &[&str] = &[
+    "postcss-minify-selectors",
+    "postcss-minify-params",
+    "postcss-ordered-values",
+    "postcss-convert-values",
+    "postcss-colormin",
+    "normalize-current-color",
+    "postcss-discard-comments",
+    "postcss-normalize-url",
+    "postcss-normalize-string",
+    "postcss-calc",
+    "postcss-reduce-initial",
+  ];
+
+  let is_under_test = |name: &str| {
+    if let Some(target) = plugin_under_test.as_deref() {
+      target == name || (target == "normalize-css" && normalize_targets.contains(&name))
+    } else {
+      false
+    }
+  };
+
+  let gate = |name: &'static str, plugin: pc::BuiltPlugin| -> pc::BuiltPlugin {
+    if plugin_under_test.is_none() || is_under_test(name) {
+      plugin
+    } else {
+      pc::plugin("compiled-noop").build()
+    }
+  };
+
+  if std::env::var("COMPILED_CLI_TRACE").is_ok() {
+    eprintln!(
+      "[postcss] plugin_under_test={}",
+      plugin_under_test
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("<none>")
+    );
+  }
+
   // Step 2 of bisect: add a small batch of light plugins
   // Keep known-problematic normalizers (minify-params, normalize-string, normalize-url) disabled for now.
-  let flatten_enabled = options.flatten_multiple_selectors.unwrap_or(true);
+  let flatten_enabled =
+    options.flatten_multiple_selectors.unwrap_or(true) || is_under_test("flatten-multiple-selectors");
   let mut plugins: Vec<pc::BuiltPlugin> = Vec::new();
-  let autoprefixer_enabled = std::env::var("AUTOPREFIXER")
-    .map(|v| v != "off")
-    .unwrap_or(true);
+  let autoprefixer_enabled = is_under_test("autoprefixer")
+    || std::env::var("AUTOPREFIXER").map(|v| v != "off").unwrap_or(true);
   let autoprefixer_data = if autoprefixer_enabled {
     crate::postcss::plugins::vendor_autoprefixer::AutoprefixerData::load().map(Arc::new)
   } else {
@@ -280,70 +324,101 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
 
   // Match Babel ordering: run duplicate-declaration removal before wrapping
   // bare declarations into a rule. This ensures last-wins semantics align.
-  plugins.push(discard_duplicates_plugin());
-  plugins.push(wrap_bare_declarations_plugin(options.clone()));
-  plugins.push(discard_empty_rules_plugin());
-  plugins.push(parent_orphaned_pseudos_plugin());
-  plugins.push(pc::plugin("postcss-nested").build());
-  plugins.push(super::plugins::normalize_css_engine::minify_selectors::plugin());
-  plugins.push(super::plugins::normalize_css_engine::minify_params::plugin());
+  plugins.push(gate("discard-duplicates", discard_duplicates_plugin()));
+  plugins.push(gate(
+    "wrap-bare-decls",
+    wrap_bare_declarations_plugin(options.clone()),
+  ));
+  plugins.push(gate("discard-empty-rules", discard_empty_rules_plugin()));
+  plugins.push(gate("parent-orphaned-pseudos", parent_orphaned_pseudos_plugin()));
+  plugins.push(gate("postcss-nested", pc::plugin("postcss-nested").build()));
+  plugins.push(gate(
+    "postcss-minify-selectors",
+    super::plugins::normalize_css_engine::minify_selectors::plugin(),
+  ));
+  plugins.push(gate(
+    "postcss-minify-params",
+    super::plugins::normalize_css_engine::minify_params::plugin(),
+  ));
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::ordered_values::plugin());
+    plugins.push(gate("postcss-ordered-values", nce::ordered_values::plugin()));
   }
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::convert_values::plugin());
+    plugins.push(gate("postcss-convert-values", nce::convert_values::plugin()));
   }
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::colormin::plugin());
+    plugins.push(gate("postcss-colormin", nce::colormin::plugin()));
   }
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::normalize_current_color_plugin());
+    plugins.push(gate("normalize-current-color", nce::normalize_current_color_plugin()));
   }
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::discard_comments_plugin());
+    plugins.push(gate("postcss-discard-comments", nce::discard_comments_plugin()));
   }
   // Add normalize-url next in the bisect sequence
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::normalize_url::plugin());
+    plugins.push(gate("postcss-normalize-url", nce::normalize_url::plugin()));
   }
   // Add normalize-string after normalize-url
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::normalize_string::plugin());
+    plugins.push(gate("postcss-normalize-string", nce::normalize_string::plugin()));
   }
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::calc::plugin());
+    plugins.push(gate("postcss-calc", nce::calc::plugin()));
   }
-  plugins.push(super::plugins::expand_shorthands_engine::plugin());
+  plugins.push(gate(
+    "expand-shorthands",
+    super::plugins::expand_shorthands_engine::plugin(),
+  ));
   {
     use super::plugins::normalize_css_engine as nce;
-    plugins.push(nce::reduce_initial::plugin());
+    plugins.push(gate("postcss-reduce-initial", nce::reduce_initial::plugin()));
   }
   // Start emitting atomic rules.
-  plugins.push(atomicify_rules_plugin(
-    options.clone(),
-    collector.clone(),
-    autoprefixer_data.clone(),
+  plugins.push(gate(
+    "atomicify-rules",
+    atomicify_rules_plugin(
+      options.clone(),
+      collector.clone(),
+      autoprefixer_data.clone(),
+    ),
   ));
   if flatten_enabled {
-    plugins.push(flatten_multiple_selectors_plugin());
-    plugins.push(pc::plugin("discard-duplicates-2").build());
+    plugins.push(gate(
+      "flatten-multiple-selectors",
+      flatten_multiple_selectors_plugin(),
+    ));
+    // Run the same duplicate-declaration sweep after flattening, matching the
+    // second `discardDuplicates()` invocation in the Babel pipeline.
+    plugins.push(gate("discard-duplicates", discard_duplicates_plugin()));
   }
-  plugins.push(pc::plugin("increase-specificity").build());
-  plugins.push(sort_atomic_style_sheet_plugin());
-  plugins.push(normalize_whitespace_plugin());
+  if options.increase_specificity.unwrap_or(false) || is_under_test("increase-specificity") {
+    plugins.push(gate("increase-specificity", pc::plugin("increase-specificity").build()));
+  }
+  plugins.push(gate(
+    "sort-atomic-style-sheet",
+    sort_atomic_style_sheet_plugin(),
+  ));
+  plugins.push(gate(
+    "postcss-normalize-whitespace",
+    normalize_whitespace_plugin(),
+  ));
   // Collect keyframes as sheets to match Babel output
-  plugins.push(extract_stylesheets_plugin(
-    collector.clone(),
-    options.clone(),
-    autoprefixer_data.clone(),
+  plugins.push(gate(
+    "extract-stylesheets",
+    extract_stylesheets_plugin(
+      collector.clone(),
+      options.clone(),
+      autoprefixer_data.clone(),
+    ),
   ));
   pc::postcss_with_plugins(plugins)
 }
@@ -2208,7 +2283,17 @@ pub fn transform_css_via_postcss(
   // the pipeline will emit no sheets. Instead of wrapping in a placeholder
   // rule, fall back to the SWC pipeline to mirror Babel output without
   // introducing placeholder selectors.
+  let plugin_under_test = std::env::var("POSTCSS_PLUGIN_UNDER_TEST")
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
   if collected_sheets.is_empty() && options.declaration_placeholder.is_none() {
+    if plugin_under_test.is_some() {
+      return Ok(TransformCssResult {
+        sheets: Vec::new(),
+        class_names: Vec::new(),
+      });
+    }
     if std::env::var("COMPILED_CLI_TRACE").is_ok() {
       eprintln!("[postcss] empty sheets; falling back to swc pipeline");
     }

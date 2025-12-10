@@ -2,10 +2,13 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use swc_core::css::ast::{
-  AtRuleName, ComponentValue, Declaration, DeclarationName, QualifiedRule, Rule, Stylesheet,
+  AtRuleName, ComponentValue, Declaration, DeclarationName, FunctionName, QualifiedRule, Rule, Stylesheet,
 };
 
 use super::super::transform::{Plugin, TransformContext};
+use crate::postcss::plugins::expand_shorthands::types::{
+  parse_value_to_components, serialize_component_values,
+};
 use crate::postcss::plugins::vendor_prefixing_lite::make_ident;
 
 pub(crate) static PREFIXES_JSON: Lazy<Option<&'static str>> = Lazy::new(|| {
@@ -56,7 +59,7 @@ pub struct PrefixDB {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ValueRule {
+pub struct ValueRule {
   pub(crate) keyword: String,
   pub(crate) prefixes: Vec<String>,
   kind: ValueKind,
@@ -67,6 +70,7 @@ pub(crate) enum ValueKind {
   Plain,
   FitContent,
   Stretch,
+  Generic,
 }
 
 impl PrefixDB {
@@ -351,15 +355,37 @@ impl AutoprefixerData {
     let mut out: Vec<PrefixedDecl> = Vec::new();
     let trimmed = value.trim();
     let lower = trimmed.to_ascii_lowercase();
+    let parsed_components = parse_value_to_components(value);
     if let Some(rules) = self.prefixed_value_rules(prop) {
       for rule in rules {
-        if rule.matches_keyword(&lower) {
-          for prefix in &rule.prefixes {
-            if let Some(pref_value) = rule.prefixed_value(prefix) {
-              out.push(PrefixedDecl {
-                property: prop.to_string(),
-                value: pref_value,
-              });
+        match rule.kind {
+          ValueKind::Plain | ValueKind::FitContent | ValueKind::Stretch => {
+            if rule.matches_keyword(&lower) {
+              for prefix in &rule.prefixes {
+                if let Some(pref_value) = rule.prefixed_value(prefix) {
+                  out.push(PrefixedDecl {
+                    property: prop.to_string(),
+                    value: pref_value,
+                  });
+                }
+              }
+            }
+          }
+          ValueKind::Generic => {
+            for prefix in &rule.prefixes {
+              let base = strip_note_prefix(prefix);
+              if let Some(prefixed_components) =
+                prefix_value_components(&parsed_components, &rule.keyword, base)
+              {
+                if let Some(serialized) = serialize_component_values(&prefixed_components) {
+                  if serialized != value {
+                    out.push(PrefixedDecl {
+                      property: prop.to_string(),
+                      value: serialized,
+                    });
+                  }
+                }
+              }
             }
           }
         }
@@ -588,23 +614,52 @@ fn maybe_prefix_value(
 ) -> Vec<Declaration> {
   let mut out: Vec<Declaration> = Vec::new();
   if let Some(rules) = config.prefixed_value_rules(prop) {
-    if value.len() == 1 {
-      if let ComponentValue::Ident(ident) = &value[0] {
-        let lower = ident.value.to_ascii_lowercase();
-        for rule in rules {
-          if rule.matches_keyword(&lower) {
-            for prefix in &rule.prefixes {
-              if let Some(pref_value) = rule.prefixed_value(prefix) {
-                out.push(Declaration {
+    for rule in rules {
+      match rule.kind {
+        ValueKind::Plain | ValueKind::FitContent | ValueKind::Stretch => {
+          if value.len() == 1 {
+            if let ComponentValue::Ident(ident) = &value[0] {
+              let lower = ident.value.to_ascii_lowercase();
+              if rule.matches_keyword(&lower) {
+                for prefix in &rule.prefixes {
+                  if let Some(pref_value) = rule.prefixed_value(prefix) {
+                    let decl = Declaration {
+                      name: DeclarationName::Ident(swc_core::css::ast::Ident {
+                        value: prop.into(),
+                        raw: None,
+                        span: Default::default(),
+                      }),
+                      value: vec![make_ident(&pref_value)],
+                      important: None,
+                      span: Default::default(),
+                    };
+                    if !out.iter().any(|d| d.value == decl.value && d.name == decl.name) {
+                      out.push(decl);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        ValueKind::Generic => {
+          for prefix in &rule.prefixes {
+            let base = strip_note_prefix(prefix);
+            if let Some(pref_value) = prefix_value_components(value, &rule.keyword, base) {
+              if pref_value != *value {
+                let decl = Declaration {
                   name: DeclarationName::Ident(swc_core::css::ast::Ident {
                     value: prop.into(),
                     raw: None,
                     span: Default::default(),
                   }),
-                  value: vec![make_ident(&pref_value)],
+                  value: pref_value,
                   important: None,
                   span: Default::default(),
-                });
+                };
+                if !out.iter().any(|d| d.value == decl.value && d.name == decl.name) {
+                  out.push(decl);
+                }
               }
             }
           }
@@ -696,8 +751,8 @@ fn maybe_prefix_value(
     }
   }
 
-  // TODO: Full value-level prefixing (gradients, grid, imageset, cross-fade, etc.)
-  let _ = config; // silence unused parameter until full port lands
+  // TODO: Legacy syntax rewrites (old gradient direction formats, grid fallbacks, imageset variants)
+  // may still be required for full autoprefixer fidelity.
   out
 }
 
@@ -710,9 +765,7 @@ pub(crate) fn build_value_prefix_map(
     let Some(props) = &entry.props else {
       continue;
     };
-    let Some(kind) = classify_value_kind(name) else {
-      continue;
-    };
+    let kind = classify_value_kind(name);
     let Some(prefixes) = add.get(name) else {
       continue;
     };
@@ -728,12 +781,12 @@ pub(crate) fn build_value_prefix_map(
   map
 }
 
-fn classify_value_kind(name: &str) -> Option<ValueKind> {
+fn classify_value_kind(name: &str) -> ValueKind {
   match name {
-    "min-content" | "max-content" => Some(ValueKind::Plain),
-    "fit-content" => Some(ValueKind::FitContent),
-    "fill" | "fill-available" | "stretch" => Some(ValueKind::Stretch),
-    _ => None,
+    "min-content" | "max-content" => ValueKind::Plain,
+    "fit-content" => ValueKind::FitContent,
+    "fill" | "fill-available" | "stretch" => ValueKind::Stretch,
+    _ => ValueKind::Generic,
   }
 }
 
@@ -765,6 +818,109 @@ impl ValueRule {
         } else {
           None
         }
+      }
+      ValueKind::Generic => Some(format!("{}{}", base, self.keyword)),
+    }
+  }
+}
+
+fn prefix_value_components(
+  value: &[ComponentValue],
+  keyword: &str,
+  prefix: &str,
+) -> Option<Vec<ComponentValue>> {
+  let mut changed = false;
+  let mut out: Vec<ComponentValue> = Vec::with_capacity(value.len());
+  for item in value {
+    let (prefixed, did_change) = prefix_component_value(item, keyword, prefix);
+    if did_change {
+      changed = true;
+    }
+    out.push(prefixed);
+  }
+  if changed {
+    Some(out)
+  } else {
+    None
+  }
+}
+
+fn prefix_component_value(
+  item: &ComponentValue,
+  keyword: &str,
+  prefix: &str,
+) -> (ComponentValue, bool) {
+  match item {
+    ComponentValue::Ident(ident) => {
+      if ident.value.eq_ignore_ascii_case(keyword) {
+        let mut cloned = (*ident.clone()).clone();
+        cloned.value = format!("{}{}", prefix, keyword).into();
+        cloned.raw = None;
+        (ComponentValue::Ident(Box::new(cloned)), true)
+      } else {
+        (item.clone(), false)
+      }
+    }
+    ComponentValue::DashedIdent(ident) => {
+      if ident.value.eq_ignore_ascii_case(keyword) {
+        let mut cloned = (*ident.clone()).clone();
+        cloned.value = format!("{}{}", prefix, keyword).into();
+        cloned.raw = None;
+        (ComponentValue::DashedIdent(Box::new(cloned)), true)
+      } else {
+        (item.clone(), false)
+      }
+    }
+    ComponentValue::Function(func) => {
+      let mut cloned = (*func.clone()).clone();
+      let mut changed = prefix_function_name(&mut cloned.name, keyword, prefix);
+      let mut new_args: Vec<ComponentValue> = Vec::with_capacity(cloned.value.len());
+      for child in &cloned.value {
+        let (pref_child, child_changed) = prefix_component_value(child, keyword, prefix);
+        if child_changed {
+          changed = true;
+        }
+        new_args.push(pref_child);
+      }
+      cloned.value = new_args;
+      (ComponentValue::Function(Box::new(cloned)), changed)
+    }
+    ComponentValue::SimpleBlock(block) => {
+      let mut cloned = (*block.clone()).clone();
+      let mut changed = false;
+      let mut new_children: Vec<ComponentValue> = Vec::with_capacity(cloned.value.len());
+      for child in &cloned.value {
+        let (pref_child, child_changed) = prefix_component_value(child, keyword, prefix);
+        if child_changed {
+          changed = true;
+        }
+        new_children.push(pref_child);
+      }
+      cloned.value = new_children;
+      (ComponentValue::SimpleBlock(Box::new(cloned)), changed)
+    }
+    _ => (item.clone(), false),
+  }
+}
+
+fn prefix_function_name(name: &mut FunctionName, keyword: &str, prefix: &str) -> bool {
+  match name {
+    FunctionName::Ident(ident) => {
+      if ident.value.eq_ignore_ascii_case(keyword) {
+        ident.value = format!("{}{}", prefix, keyword).into();
+        ident.raw = None;
+        true
+      } else {
+        false
+      }
+    }
+    FunctionName::DashedIdent(ident) => {
+      if ident.value.eq_ignore_ascii_case(keyword) {
+        ident.value = format!("{}{}", prefix, keyword).into();
+        ident.raw = None;
+        true
+      } else {
+        false
       }
     }
   }

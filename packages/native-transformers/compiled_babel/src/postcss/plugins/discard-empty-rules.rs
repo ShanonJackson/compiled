@@ -1,5 +1,6 @@
 use swc_core::css::ast::{
-  ComponentValue, KeyframeBlock, QualifiedRule, Rule, SimpleBlock, Stylesheet, Token,
+    AtRule, AtRulePrelude, ComponentValue, Declaration, DeclarationName, QualifiedRule,
+    QualifiedRulePrelude, Rule, Stylesheet,
 };
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 
@@ -9,112 +10,153 @@ use super::super::transform::{Plugin, TransformContext};
 pub struct DiscardEmptyRules;
 
 impl Plugin for DiscardEmptyRules {
-  fn name(&self) -> &'static str {
-    "discard-empty-rules"
-  }
+    fn name(&self) -> &'static str {
+        "discard-empty-rules"
+    }
 
-  fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
-    prune_stylesheet(stylesheet);
-  }
+    fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
+        prune_stylesheet(stylesheet);
+    }
 }
 
 pub fn discard_empty_rules() -> DiscardEmptyRules {
-  DiscardEmptyRules
+    DiscardEmptyRules
 }
 
 fn prune_stylesheet(stylesheet: &mut Stylesheet) {
-  stylesheet.rules.retain_mut(|rule| match rule {
-    Rule::QualifiedRule(rule) => !prune_qualified_rule(rule),
-    Rule::AtRule(rule) => {
-      if let Some(block) = &mut rule.block {
-        prune_simple_block(block);
-      }
-
-      true
-    }
-    Rule::ListOfComponentValues(list) => {
-      prune_component_values(&mut list.children);
-      !list.children.is_empty()
-    }
-  });
+    prune_rule_list(&mut stylesheet.rules);
 }
 
-fn prune_qualified_rule(rule: &mut QualifiedRule) -> bool {
-  prune_simple_block(&mut rule.block)
-}
+fn prune_rule_list(rules: &mut Vec<Rule>) {
+    let mut index = 0;
 
-fn prune_simple_block(block: &mut SimpleBlock) -> bool {
-  prune_component_values(&mut block.value)
-}
+    while index < rules.len() {
+        let remove = match &mut rules[index] {
+            Rule::QualifiedRule(rule) => {
+                prune_component_values(&mut rule.block.value);
+                qualified_rule_is_empty(rule)
+            }
+            Rule::AtRule(rule) => {
+                if let Some(block) = &mut rule.block {
+                    prune_component_values(&mut block.value);
+                }
 
-fn prune_keyframe_block(block: &mut KeyframeBlock) -> bool {
-  prune_simple_block(&mut block.block)
-}
+                at_rule_is_empty(rule)
+            }
+            Rule::ListOfComponentValues(list) => {
+                prune_component_values(&mut list.children);
+                list.children.is_empty()
+            }
+        };
 
-fn prune_component_values(values: &mut Vec<ComponentValue>) -> bool {
-  values.retain_mut(|component| match component {
-    ComponentValue::Declaration(declaration) => !declaration_value_is_empty(&declaration.value),
-    ComponentValue::SimpleBlock(block) => !prune_simple_block(block),
-    ComponentValue::QualifiedRule(rule) => !prune_qualified_rule(rule),
-    ComponentValue::KeyframeBlock(block) => !prune_keyframe_block(block),
-    ComponentValue::ListOfComponentValues(list) => {
-      prune_component_values(&mut list.children);
-      !list.children.is_empty()
+        if remove {
+            rules.remove(index);
+        } else {
+            index += 1;
+        }
     }
-    ComponentValue::Function(function) => {
-      prune_component_values(&mut function.value);
-      true
-    }
-    ComponentValue::AtRule(rule) => {
-      if let Some(block) = &mut rule.block {
-        prune_simple_block(block);
-      }
-
-      true
-    }
-    _ => true,
-  });
-
-  values.is_empty()
 }
 
-fn declaration_value_is_empty(values: &[ComponentValue]) -> bool {
-  if values.is_empty() {
-    return true;
-  }
+fn prune_component_values(values: &mut Vec<ComponentValue>) {
+    let mut index = 0;
 
-  if values
-        .iter()
-        .all(|component| matches!(component, ComponentValue::PreservedToken(token) if is_whitespace_token(&token.token)))
-    {
+    while index < values.len() {
+        let remove = match &mut values[index] {
+            ComponentValue::Declaration(declaration) => declaration_is_empty(declaration),
+            ComponentValue::QualifiedRule(rule) => {
+                prune_component_values(&mut rule.block.value);
+                qualified_rule_is_empty(rule)
+            }
+            ComponentValue::AtRule(rule) => {
+                if let Some(block) = &mut rule.block {
+                    prune_component_values(&mut block.value);
+                }
+
+                at_rule_is_empty(rule)
+            }
+            ComponentValue::SimpleBlock(block) => {
+                prune_component_values(&mut block.value);
+                block.value.is_empty()
+            }
+            ComponentValue::KeyframeBlock(block) => {
+                prune_component_values(&mut block.block.value);
+                block.block.value.is_empty()
+            }
+            ComponentValue::Function(function) => {
+                prune_component_values(&mut function.value);
+                function.value.is_empty()
+            }
+            ComponentValue::ListOfComponentValues(list) => {
+                prune_component_values(&mut list.children);
+                list.children.is_empty()
+            }
+            _ => false,
+        };
+
+        if remove {
+            values.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn declaration_is_empty(declaration: &Declaration) -> bool {
+    declaration.value.is_empty() && !matches!(declaration.name, DeclarationName::DashedIdent(_))
+}
+
+fn qualified_rule_is_empty(rule: &QualifiedRule) -> bool {
+    if rule.block.value.is_empty() {
         return true;
     }
 
-  match serialize_component_values(values) {
-    Some(serialized) => {
-      let trimmed = serialized.trim();
-      trimmed.is_empty() || trimmed == "undefined" || trimmed == "null"
-    }
-    None => false,
-  }
+    serialize_qualified_rule_prelude(&rule.prelude).map_or(false, |selector| selector.is_empty())
 }
 
-fn serialize_component_values(values: &[ComponentValue]) -> Option<String> {
-  let mut output = String::new();
-  {
-    let writer = BasicCssWriter::new(&mut output, None, Default::default());
-    let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+fn at_rule_is_empty(rule: &AtRule) -> bool {
+    let params = match serialize_at_rule_prelude(rule.prelude.as_deref()) {
+        Some(serialized) => serialized,
+        None => return false,
+    };
 
-    for component in values {
-      if generator.emit(component).is_err() {
-        return None;
-      }
-    }
-  }
+    let has_block = rule.block.is_some();
+    let block_is_empty = matches!(&rule.block, Some(block) if block.value.is_empty());
+    let params_are_empty = params.is_empty();
 
-  Some(output)
+    block_is_empty || (params_are_empty && !has_block)
 }
 
-fn is_whitespace_token(token: &Token) -> bool {
-  matches!(token, Token::WhiteSpace { .. })
+fn serialize_qualified_rule_prelude(prelude: &QualifiedRulePrelude) -> Option<String> {
+    let mut output = String::new();
+
+    {
+        let writer = BasicCssWriter::new(&mut output, None, Default::default());
+        let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+
+        if generator.emit(prelude).is_err() {
+            return None;
+        }
+    }
+
+    Some(output)
+}
+
+fn serialize_at_rule_prelude(prelude: Option<&AtRulePrelude>) -> Option<String> {
+    match prelude {
+        Some(prelude) => {
+            let mut output = String::new();
+
+            {
+                let writer = BasicCssWriter::new(&mut output, None, Default::default());
+                let mut generator = CodeGenerator::new(writer, CodegenConfig { minify: false });
+
+                if generator.emit(prelude).is_err() {
+                    return None;
+                }
+            }
+
+            Some(output)
+        }
+        None => Some(String::new()),
+    }
 }

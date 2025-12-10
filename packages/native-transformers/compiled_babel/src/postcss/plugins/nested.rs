@@ -81,23 +81,9 @@ pub struct NestedPlugin {
 }
 
 pub fn nested() -> NestedPlugin {
-  let options = NestedOptions::default()
-    .with_additional_bubble(&[
-      "container",
-      "-moz-document",
-      "layer",
-      "else",
-      "when",
-      "starting-style",
-    ])
-    .with_additional_unwrap(&[
-      "color-profile",
-      "counter-style",
-      "font-palette-values",
-      "page",
-      "property",
-    ]);
-  NestedPlugin { options }
+  NestedPlugin {
+    options: NestedOptions::default(),
+  }
 }
 
 pub fn nested_with_options(options: NestedOptions) -> NestedPlugin {
@@ -481,60 +467,14 @@ fn combine_selectors(
   parent: &QualifiedRulePrelude,
   child: &QualifiedRulePrelude,
 ) -> Option<QualifiedRulePrelude> {
-  let debug = std::env::var("COMPILED_CSS_TRACE").is_ok();
-  if debug {
-    let kind = match child {
-      QualifiedRulePrelude::SelectorList(_) => "SelectorList",
-      QualifiedRulePrelude::RelativeSelectorList(_) => "RelativeSelectorList",
-      _ => "Other",
-    };
-    eprintln!("[nested] child prelude kind={}", kind);
-  }
   let parent_selectors = selectors_to_strings(parent);
   if parent_selectors.is_empty() {
     return None;
   }
 
-  let mut child_selectors = selectors_to_strings(child);
+  let child_selectors = selectors_to_strings(child);
   if child_selectors.is_empty() {
     return None;
-  }
-
-  // COMPAT: Guard against duplicated universal selectors that can arise from
-  // nested relative selectors (`*` inside a rule) being serialized as `* *`.
-  if child_selectors.len() > 1
-    && child_selectors
-      .iter()
-      .all(|sel| sel.split_whitespace().all(|piece| piece == "*"))
-  {
-    child_selectors = vec!["*".to_string()];
-  }
-
-  // COMPAT: In some cases SWC emits nested selectors containing only `&` and `*`
-  // in increasingly deep descendant chains (e.g. `& *` and `& * *`) for a single
-  // nested universal selector. Drop the deeper variant when a shallower one with
-  // the same prefix already exists.
-  let mut deduped: indexmap::IndexSet<String> = indexmap::IndexSet::new();
-  for sel in child_selectors {
-    let tokens: Vec<&str> = sel.split_whitespace().collect();
-    let all_amp_or_star = tokens.iter().all(|t| *t == "&" || *t == "*");
-    if all_amp_or_star && tokens.len() > 1 {
-      let mut shorter = tokens.clone();
-      shorter.pop();
-      let shorter_str = shorter.join(" ");
-      if deduped.contains(&shorter_str) {
-        continue;
-      }
-    }
-    deduped.insert(sel);
-  }
-  let child_selectors: Vec<String> = deduped.into_iter().collect();
-
-  if debug {
-    eprintln!(
-      "[nested] combine parent={:?} child={:?}",
-      parent_selectors, child_selectors
-    );
   }
 
   let mut combined: Vec<String> = Vec::new();
@@ -542,18 +482,11 @@ fn combine_selectors(
   for parent_selector in &parent_selectors {
     for child_selector in &child_selectors {
       let trimmed = child_selector.trim();
-
-      // COMPAT: Detect ":pseudo &" using AST, not string heuristics,
-      // and duplicate parent by emitting "&:pseudo &" so later stages
-      // (atomicify) can substitute nesting selectors consistently with Babel.
-      if let Some(pseudo) = first_pseudo_then_nesting(child) {
-        combined.push(format!("&{} &", pseudo));
+      if trimmed.is_empty() {
         continue;
       }
 
       if trimmed.contains('&') {
-        // Mirror postcss-nested selectors(): when child has nesting, replace each '&'
-        // with the parent selector without inserting combinators/spaces.
         let mut out = String::new();
         let mut parts = trimmed.split('&').peekable();
         if let Some(first) = parts.next() {
@@ -566,23 +499,9 @@ fn combine_selectors(
             out.push_str(next);
           }
         }
-        let mut cleaned = out.replace(" &", "&").replace("& ", "&");
-        // Collapse descendant gap when replacement produced ".hash:focus .hash:before"
-        if cleaned.contains(' ') {
-          let tokens: Vec<&str> = cleaned.split_whitespace().collect();
-          if tokens.len() == 2 {
-            let left = tokens[0];
-            let right = tokens[1];
-            let left_base = left.split(':').next().unwrap_or(left);
-            let right_base = right.split(':').next().unwrap_or(right);
-            if left_base == right_base {
-              cleaned = format!("{}{}", left, right);
-            }
-          }
-        }
-        combined.push(cleaned);
+        combined.push(out);
       } else {
-        combined.push(format!("{parent_selector} {}", trimmed));
+        combined.push(format!("{parent_selector} {trimmed}"));
       }
     }
   }
@@ -590,107 +509,17 @@ fn combine_selectors(
   parse_selectors(&combined)
 }
 
-fn first_pseudo_then_nesting(prelude: &QualifiedRulePrelude) -> Option<String> {
-  use swc_core::css::ast::{ComplexSelector, ComplexSelectorChildren, QualifiedRulePrelude as Q};
-
-  fn inspect_complex(selector: &ComplexSelector) -> Option<String> {
-    let mut saw_pseudo: Option<String> = None;
-    for child in &selector.children {
-      if let ComplexSelectorChildren::CompoundSelector(comp) = child {
-        // If we already saw a pseudo and now see a nesting selector, it's a match.
-        if comp.nesting_selector.is_some() {
-          if let Some(pseudo) = saw_pseudo {
-            return Some(pseudo);
-          }
-        }
-        // Record first pseudo on this path (accept all pseudos)
-        if saw_pseudo.is_none() {
-          for subclass in &comp.subclass_selectors {
-            if let swc_core::css::ast::SubclassSelector::PseudoClass(pc) = subclass {
-              let name = pc.name.value.to_string();
-              saw_pseudo = Some(format!(":{}", name));
-              break;
-            }
-          }
-        }
-      }
-    }
-    None
-  }
-
-  match prelude {
-    Q::SelectorList(list) => {
-      for complex in &list.children {
-        if let Some(pseudo) = inspect_complex(complex) {
-          return Some(pseudo);
-        }
-      }
-      None
-    }
-    Q::RelativeSelectorList(list) => {
-      for relative in &list.children {
-        if let Some(pseudo) = inspect_complex(&relative.selector) {
-          return Some(pseudo);
-        }
-      }
-      None
-    }
-    _ => None,
-  }
-}
-
 fn selectors_to_strings(prelude: &QualifiedRulePrelude) -> Vec<String> {
-  fn collapse_redundant_universals(selector: &str) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    for part in selector.split_whitespace() {
-      if part == "*" && out.last().copied() == Some("*") {
-        continue;
-      }
-      out.push(part);
-    }
-    out.join(" ")
-  }
-
   match prelude {
     QualifiedRulePrelude::SelectorList(list) => list
       .children
       .iter()
-      .map(|complex| {
-        let mut selector = serialize_complex_selector(complex);
-        selector = collapse_redundant_universals(&selector);
-        let collapsed = selector
-          .split_whitespace()
-          .all(|piece| piece == "*");
-        if collapsed {
-          selector = "*".to_string();
-        }
-        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
-          eprintln!("[nested] selector (SelectorList)={}", selector);
-        }
-        selector
-      })
+      .map(serialize_complex_selector)
       .collect(),
     QualifiedRulePrelude::RelativeSelectorList(list) => list
       .children
       .iter()
-      .map(|relative| {
-        let mut selector = serialize_complex_selector(&relative.selector);
-        selector = collapse_redundant_universals(&selector);
-        // COMPAT: SWC parses nested selectors inside a rule block as relative selectors.
-        // For simple universal descendants like `*`, this can serialize as repeated
-        // universals (e.g. `"* *"`). The original postcss-nested only prepends the
-        // parent once, so collapse a chain of universals to a single `*` here.
-        let collapsed = selector
-          .split_whitespace()
-          .all(|piece| piece == "*");
-        if collapsed {
-          selector = "*".to_string();
-        }
-        if std::env::var("COMPILED_CSS_TRACE").is_ok() {
-          eprintln!("[nested] selector (RelativeSelectorList)={}", selector);
-        }
-        selector
-      })
+      .map(|relative| serialize_complex_selector(&relative.selector))
       .collect(),
     _ => Vec::new(),
   }

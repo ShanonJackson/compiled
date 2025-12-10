@@ -4,9 +4,10 @@
 pub mod at_rules;
 #[path = "atomicify-rules.rs"]
 pub mod atomicify_rules;
-// colormin is not yet enabled; when parity requires it we can add it back.
-// #[path = "colormin.rs"]
-// pub mod colormin;
+#[path = "calc.rs"]
+pub mod calc;
+#[path = "colormin.rs"]
+pub mod colormin;
 #[path = "colormin_lite.rs"]
 pub mod colormin_lite;
 #[path = "convert-values.rs"]
@@ -19,6 +20,9 @@ pub mod discard_duplicates;
 pub mod discard_empty_rules;
 #[path = "expand-shorthands/mod.rs"]
 pub mod expand_shorthands;
+#[cfg(feature = "postcss_engine")]
+#[path = "expand_shorthands_engine.rs"]
+pub mod expand_shorthands_engine;
 #[path = "extract-stylesheets.rs"]
 pub mod extract_stylesheets;
 #[path = "flatten-multiple-selectors.rs"]
@@ -27,6 +31,8 @@ pub mod flatten_multiple_selectors;
 pub mod increase_specificity;
 #[path = "merge-duplicate-at-rules.rs"]
 pub mod merge_duplicate_at_rules;
+#[path = "minify_gradients.rs"]
+pub mod minify_gradients;
 #[path = "minify-params.rs"]
 pub mod minify_params;
 #[path = "minify-selectors.rs"]
@@ -39,13 +45,20 @@ pub mod normalize_css;
 pub mod normalize_css_engine;
 #[path = "normalize-current-color.rs"]
 pub mod normalize_current_color;
+#[path = "normalize_positions.rs"]
+pub mod normalize_positions;
+#[path = "normalize_string.rs"]
+pub mod normalize_string;
+#[path = "normalize_timing_functions.rs"]
+pub mod normalize_timing_functions;
+#[path = "normalize_unicode.rs"]
+pub mod normalize_unicode;
+#[path = "normalize_url.rs"]
+pub mod normalize_url;
 #[path = "normalize-whitespace.rs"]
 pub mod normalize_whitespace;
-// #[path = "ordered-values.rs"]
-// pub mod ordered_values;
-#[cfg(feature = "postcss_engine")]
-#[path = "expand_shorthands_engine.rs"]
-pub mod expand_shorthands_engine;
+#[path = "ordered-values.rs"]
+pub mod ordered_values;
 #[path = "parent-orphaned-pseudos.rs"]
 pub mod parent_orphaned_pseudos;
 #[path = "reduce-initial/mod.rs"]
@@ -67,19 +80,19 @@ use swc_core::css::ast::Stylesheet;
 /// Placeholder representing yet-to-be-ported cssnano plugins.
 #[derive(Debug, Clone)]
 pub struct CssnanoPlaceholder {
-  name: &'static str,
+    name: &'static str,
 }
 
 impl CssnanoPlaceholder {
-  pub fn new(name: &'static str) -> Self {
-    Self { name }
-  }
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
 }
 
 impl Plugin for CssnanoPlaceholder {
-  fn name(&self) -> &'static str {
-    self.name
-  }
+    fn name(&self) -> &'static str {
+        self.name
+    }
 
-  fn run(&self, _stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {}
+    fn run(&self, _stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {}
 }

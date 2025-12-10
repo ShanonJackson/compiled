@@ -368,10 +368,15 @@ pub fn parse_value_to_components(value: &str) -> Vec<ComponentValue> {
         let value_str = value;
 
         for component in declaration.value.drain(..) {
+          if cursor > value_str.len() {
+            cursor = value_str.len();
+          }
           // Capture leading whitespace between tokens so round-tripping preserves spacing.
           let whitespace_start = cursor;
           while cursor < value_str.len() {
-            let ch = value_str[cursor..].chars().next().unwrap();
+            let Some(ch) = value_str[cursor..].chars().next() else {
+              break;
+            };
             if ch.is_whitespace() {
               cursor += ch.len_utf8();
             } else {
@@ -380,7 +385,9 @@ pub fn parse_value_to_components(value: &str) -> Vec<ComponentValue> {
           }
 
           if cursor > whitespace_start {
-            let whitespace = &value_str[whitespace_start..cursor];
+            let safe_cursor = cursor.min(value_str.len());
+            let safe_start = whitespace_start.min(safe_cursor);
+            let whitespace = &value_str[safe_start..safe_cursor];
             if !whitespace.is_empty() {
               result.push(ComponentValue::PreservedToken(Box::new(TokenAndSpan {
                 span: Span::default(),
@@ -404,10 +411,16 @@ pub fn parse_value_to_components(value: &str) -> Vec<ComponentValue> {
         }
 
         // Trailing whitespace at the end of the value string.
-        let whitespace_start = cursor;
-        while cursor < value_str.len() {
-          let ch = value_str[cursor..].chars().next().unwrap();
-          if ch.is_whitespace() {
+          if cursor > value_str.len() {
+            cursor = value_str.len();
+          }
+
+          let whitespace_start = cursor;
+          while cursor < value_str.len() {
+            let Some(ch) = value_str[cursor..].chars().next() else {
+              break;
+            };
+            if ch.is_whitespace() {
             cursor += ch.len_utf8();
           } else {
             break;

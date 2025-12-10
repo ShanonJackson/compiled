@@ -78,12 +78,7 @@ fn normalize_declaration(declaration: &mut Declaration) {
     return;
   };
 
-  let trimmed = serialized.trim();
-  if trimmed.is_empty() {
-    return;
-  }
-
-  let lower = trimmed.to_ascii_lowercase();
+  let lower = serialized.to_ascii_lowercase();
   if lower == "currentcolor" || lower == "current-color" {
     declaration.value = vec![ComponentValue::Ident(Box::new(Ident {
       span: DUMMY_SP,

@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const workspaceNodeModules = path.join(repoRoot, 'node_modules');
@@ -49,6 +50,46 @@ const BABEL_OPTIONS = {
   ast: false,
   caller: { name: 'compiled-native-transformers-fixtures' },
 };
+
+const pluginUnderTest = (process.env.POSTCSS_PLUGIN_UNDER_TEST || '').trim();
+const safePluginSuffix = pluginUnderTest
+  ? `.${pluginUnderTest.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  : '';
+
+const PLUGIN_SEQUENCE = [
+  'discard-duplicates',
+  'wrap-bare-decls',
+  'discard-empty-rules',
+  'parent-orphaned-pseudos',
+  'postcss-nested',
+  'postcss-minify-selectors',
+  'postcss-minify-params',
+  'postcss-ordered-values',
+  'postcss-convert-values',
+  'postcss-colormin',
+  'normalize-current-color',
+  'postcss-discard-comments',
+  'postcss-normalize-url',
+  'postcss-normalize-string',
+  'postcss-calc',
+  'expand-shorthands',
+  'postcss-reduce-initial',
+  'atomicify-rules',
+  'flatten-multiple-selectors',
+  'discard-duplicates',
+  'increase-specificity',
+  'sort-atomic-style-sheet',
+  'postcss-normalize-whitespace',
+  'extract-stylesheets',
+];
+
+const ALIASED_PLUGINS = [
+  { label: 'autoprefixer', target: 'atomicify-rules', env: { AUTOPREFIXER: 'on' } },
+];
+
+if (pluginUnderTest) {
+  process.env.POSTCSS_PLUGIN_UNDER_TEST = pluginUnderTest;
+}
 
 function splitTopLevelSegments(body) {
   const segments = [];
@@ -343,6 +384,11 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   await fsp.writeFile(tmpFile, tokenized, 'utf8');
 
   const runEnv = { ...process.env };
+  if (pluginUnderTest) {
+    runEnv.POSTCSS_PLUGIN_UNDER_TEST = pluginUnderTest;
+    // Surface the exact value passed to the Rust CLI for debugging plugin isolation.
+    console.log('[fixtures] POSTCSS_PLUGIN_UNDER_TEST for swc:', runEnv.POSTCSS_PLUGIN_UNDER_TEST);
+  }
   if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
     runEnv.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
   }
@@ -425,18 +471,24 @@ async function processFixture(name) {
 
   const startedAt = Date.now();
 
-  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath, cfg);
-  await writeFileIfChanged(path.join(fixtureDir, 'babel-out.jsx'), babelOutputs.code);
+  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath);
   await writeFileIfChanged(
-    path.join(fixtureDir, 'babel-style-rules.json'),
+    path.join(fixtureDir, `babel-out${safePluginSuffix}.jsx`),
+    babelOutputs.code
+  );
+  await writeFileIfChanged(
+    path.join(fixtureDir, `babel-style-rules${safePluginSuffix}.json`),
     JSON.stringify(babelOutputs.styleRules, null, 2)
   );
 
   const swcOutputs = await attemptSwcTransform(inputCode, inputPath, cfg);
   if (swcOutputs.success) {
-    await writeFileIfChanged(path.join(fixtureDir, 'out.jsx'), swcOutputs.code);
     await writeFileIfChanged(
-      path.join(fixtureDir, 'swc-style-rules.json'),
+      path.join(fixtureDir, `out${safePluginSuffix}.jsx`),
+      swcOutputs.code
+    );
+    await writeFileIfChanged(
+      path.join(fixtureDir, `swc-style-rules${safePluginSuffix}.json`),
       JSON.stringify(
         Array.isArray(swcOutputs.styleRules) ? swcOutputs.styleRules : [],
         null,
@@ -448,8 +500,8 @@ async function processFixture(name) {
   }
 
   const [babelCode, swcCode] = await Promise.all([
-    fsp.readFile(path.join(fixtureDir, 'babel-out.jsx'), 'utf8'),
-    fsp.readFile(path.join(fixtureDir, 'out.jsx'), 'utf8'),
+    fsp.readFile(path.join(fixtureDir, `babel-out${safePluginSuffix}.jsx`), 'utf8'),
+    fsp.readFile(path.join(fixtureDir, `out${safePluginSuffix}.jsx`), 'utf8'),
   ]);
   // We don't gate on code equality; style-rules are the primary parity target.
   const codeEqual = true;
@@ -459,8 +511,11 @@ async function processFixture(name) {
   let ruleReport = null;
   try {
     const [babelRulesText, swcRulesText] = await Promise.all([
-      fsp.readFile(path.join(fixtureDir, 'babel-style-rules.json'), 'utf8'),
-      fsp.readFile(path.join(fixtureDir, 'swc-style-rules.json'), 'utf8'),
+      fsp.readFile(
+        path.join(fixtureDir, `babel-style-rules${safePluginSuffix}.json`),
+        'utf8'
+      ),
+      fsp.readFile(path.join(fixtureDir, `swc-style-rules${safePluginSuffix}.json`), 'utf8'),
     ]);
     const babelRules = JSON.parse(babelRulesText || '[]');
     const swcRules = JSON.parse(swcRulesText || '[]');
@@ -505,12 +560,63 @@ async function processFixture(name) {
 }
 
 async function main() {
+  const args = process.argv.slice(2).filter(Boolean);
+  const wantSequence = args.includes('--each-plugin');
+
+  if (wantSequence && !pluginUnderTest) {
+    const forwardedArgs = args.filter((a) => a !== '--each-plugin');
+    const failures = [];
+
+    const runEntry = (entry) =>
+      new Promise((resolve) => {
+        const env = {
+          ...process.env,
+          ...entry.env,
+          POSTCSS_PLUGIN_UNDER_TEST: entry.target,
+        };
+        const child = spawn(
+          process.execPath,
+          [__filename, ...forwardedArgs],
+          {
+            env,
+            stdio: 'inherit',
+          }
+        );
+        child.on('exit', (code) => {
+          if (code !== 0) {
+            failures.push(entry.label || entry.target);
+          }
+          resolve();
+        });
+      });
+
+    const sequence = [
+      ...PLUGIN_SEQUENCE.map((name) => ({ label: name, target: name })),
+      ...ALIASED_PLUGINS,
+    ];
+
+    for (const entry of sequence) {
+      await runEntry(entry);
+    }
+
+    if (failures.length > 0) {
+      console.error(`Plugin sequence failed for: ${failures.join(', ')}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const entries = await fsp.readdir(fixtureRoot, { withFileTypes: true });
   const allFixtures = entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .filter(
+      (e) =>
+        e.isDirectory() &&
+        !e.name.startsWith('.') &&
+        !e.name.startsWith('_') &&
+        e.name !== 'node_modules'
+    )
     .map((e) => e.name);
 
-  const args = process.argv.slice(2).filter(Boolean);
   let fixtures = allFixtures;
   if (args.length > 0) {
     const requested = args
@@ -581,13 +687,15 @@ async function main() {
   if (codeOnlyMismatches.length > 0) {
     console.warn('Code-only differences:');
     for (const r of codeOnlyMismatches) {
-      console.warn(` - ${r.name}: babel-out.jsx vs out.jsx`);
+      console.warn(` - ${r.name}: babel-out${safePluginSuffix}.jsx vs out${safePluginSuffix}.jsx`);
     }
     process.exitCode = 0;
     return;
   }
 
-  console.log('All fixtures match.');
+  console.log(
+    pluginUnderTest ? `All fixtures match for plugin ${pluginUnderTest}.` : 'All fixtures match.'
+  );
 }
 
 main().catch((error) => {

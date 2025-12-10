@@ -1,7 +1,6 @@
-use swc_core::atoms::Atom;
 use swc_core::css::ast::{
-  ComponentValue, Ident, KeyframeBlock, KeyframeSelector, QualifiedRule, QualifiedRulePrelude,
-  RelativeSelectorList, Rule, SelectorList, SimpleBlock, Stylesheet,
+  ComponentValue, KeyframeBlock, QualifiedRule, QualifiedRulePrelude, RelativeSelectorList, Rule,
+  SelectorList, SimpleBlock, Stylesheet,
 };
 
 use super::super::transform::{Plugin, TransformContext};
@@ -135,25 +134,10 @@ fn split_keyframe_block(block: &KeyframeBlock) -> Option<Vec<KeyframeBlock>> {
   for selector in &block.prelude {
     let mut new_block = block.clone();
     new_block.prelude = vec![selector.clone()];
-    normalize_keyframe_selectors(&mut new_block.prelude);
     replacements.push(new_block);
   }
 
   Some(replacements)
-}
-
-fn normalize_keyframe_selectors(selectors: &mut [KeyframeSelector]) {
-  for selector in selectors {
-    if let KeyframeSelector::Percentage(percentage) = selector {
-      if (percentage.value.value - 100.0).abs() < f64::EPSILON {
-        *selector = KeyframeSelector::Ident(Ident {
-          span: percentage.span,
-          value: Atom::from("to"),
-          raw: None,
-        });
-      }
-    }
-  }
 }
 
 fn split_selector_list(rule: &QualifiedRule, list: &SelectorList) -> Option<Vec<QualifiedRule>> {
