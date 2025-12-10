@@ -18,6 +18,30 @@ if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
   process.env.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
 }
 
+const fixturesNodeModules = path.join(
+  repoRoot,
+  'packages',
+  'native-transformers',
+  'tests',
+  'fixtures',
+  '_node_modules'
+);
+
+const nodePathEntries = [fixturesNodeModules, workspaceNodeModules, process.env.NODE_PATH]
+  .filter(Boolean)
+  .join(path.delimiter);
+process.env.NODE_PATH = nodePathEntries;
+require('module').Module._initPaths();
+
+const resolve = require('resolve');
+const originalResolveSync = resolve.sync;
+resolve.sync = function patchedResolveSync(id, opts = {}) {
+  const mergedPaths = [fixturesNodeModules, workspaceNodeModules, ...(opts.paths || [])].filter(
+    Boolean
+  );
+  return originalResolveSync(id, { ...opts, paths: mergedPaths });
+};
+
 const resolveFromRepo = (id) =>
   require.resolve(id, { paths: [workspaceNodeModules, repoRoot] });
 const requireFromRepo = (id) => require(resolveFromRepo(id));
@@ -521,7 +545,13 @@ async function processFixture(name) {
 async function main() {
   const entries = await fsp.readdir(fixtureRoot, { withFileTypes: true });
   const allFixtures = entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .filter(
+      (e) =>
+        e.isDirectory() &&
+        !e.name.startsWith('.') &&
+        !e.name.startsWith('_') &&
+        e.name !== 'node_modules'
+    )
     .map((e) => e.name);
 
   const args = process.argv.slice(2).filter(Boolean);
