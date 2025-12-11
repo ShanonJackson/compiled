@@ -6,8 +6,11 @@ implementation under `packages/native-transformers/compiled_babel/src/postcss/pl
 matches it **1:1** (structure, behaviour, and outputs).
 
 ## Prerequisites
-- Install JS dependencies: `yarn install` (from repo root). This provides Babel,
-  fixture helpers, and any plugin dependencies (e.g. `@atlaskit/tokens`).
+- Install JS dependencies: `yarn install` (from repo root). If the spinner output
+  blows past the terminal limit, you can instead bootstrap the Babel side with
+  `npm install --legacy-peer-deps --registry=https://registry.npmjs.org --no-progress @babel/core`
+  (plus any missing Babel helpers). This provides Babel, fixture helpers, and
+  any plugin dependencies (e.g. `@atlaskit/tokens`).
 - Build the Rust fixture runner: `cargo build --manifest-path packages/native-transformers/Cargo.toml -p fixtures_cli --release`.
 - Ensure the Babel fixture harness can run: `node packages/native-transformers/scripts/update-fixtures.js`.
 

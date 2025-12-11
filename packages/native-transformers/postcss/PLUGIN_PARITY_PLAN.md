@@ -28,7 +28,7 @@ This plan defines how we will validate every PostCSS plugin in the Rust pipeline
 | --- | --- | --- | --- | --- | --- |
 | 1 | `discard-duplicates` | `compiled_babel/src/postcss/plugins/discard-duplicates.rs` | `packages/postcss-plugin-sources/postcss-discard-duplicates/src/index.js` | ✅ Parity verified | ✅ Fixtures match |
 | 2 | `discard-empty-rules` | `compiled_babel/src/postcss/plugins/discard-empty-rules.rs` | `packages/postcss-plugin-sources/postcss-discard-empty/src/index.js` | ✅ Parity verified | ✅ Fixtures match |
-| 3 | `parent-orphaned-pseudos` | `compiled_babel/src/postcss/plugins/parent-orphaned-pseudos.rs` | `packages/css/src/plugins/parent-orphaned-pseudos.ts` | ✅ Parity verified | ⬜ Pending |
+| 3 | `parent-orphaned-pseudos` | `compiled_babel/src/postcss/plugins/parent-orphaned-pseudos.rs` | `packages/css/src/plugins/parent-orphaned-pseudos.ts` | ✅ Parity verified | ⬜ Pending *(fixtures blocked: npm cannot install Babel deps yet)* |
 | 4 | `postcss-nested` (bubble/unwrap config) | `compiled_babel/src/postcss/plugins/nested.rs` | `packages/postcss-plugin-sources/postcss-nested/src/index.js` | ✅ Parity verified | ⬜ Pending |
 | 5 | `normalize-css` (cssnano preset slice) | `compiled_babel/src/postcss/plugins/normalize_css/mod.rs` + submodules (`normalize_css_engine`, `colormin.rs`, `convert-values.rs`, `minify-params.rs`, `minify-selectors.rs`, `normalize-whitespace.rs`, `ordered-values.rs`, `reduce-initial/mod.rs`, etc.) | `packages/postcss-plugin-sources/cssnano-preset-default/src/index.js` plus specific plugins (e.g. `postcss-ordered-values/src/index.js`, `postcss-reduce-initial/src/index.js`, `postcss-convert-values/src/index.js`, `postcss-colormin/src/index.js`, `postcss-minify-params/src/index.js`, `postcss-minify-selectors/src/index.js`, `postcss-normalize-whitespace/src/index.js`) | ✅ Parity verified | ⬜ Pending |
 | 6 | `normalize-current-color` (custom addition) | `compiled_babel/src/postcss/plugins/normalize-current-color.rs` | `packages/css/src/plugins/normalize-current-color.ts` (JS reference stored in repo) | ✅ Parity verified | ⬜ Pending |
@@ -45,6 +45,7 @@ This plan defines how we will validate every PostCSS plugin in the Rust pipeline
 Notes:
 - `normalize-css` expands to the exact cssnano preset plugins filtered by `optimizeCss`; the harness flag must pass through the same `optimizeCss`/`AUTOPREFIXER` options that the fixtures use today.
 - When a plugin is optional in JS (e.g. `flatten-multiple-selectors`, `increase-specificity`, `autoprefixer`), the single-plugin mode should force-enable only that plugin and stub the rest to no-ops so the comparison is meaningful.
+- If fixture runs fail before PostCSS executes because `@babel/core` (or nested helpers such as `@babel/helper-string-parser`) is missing, bootstrap the JS side by installing Babel dependencies from the public registry before re-running `update-fixtures.js`. The `--no-progress` flag helps avoid the spinner output limit in this environment.
 
 ## Immediate next steps
 - Use the wired `POSTCSS_PLUGIN_UNDER_TEST` flag to isolate plugins; the runner now emits suffixed artifacts (`babel-out.<plugin>.jsx`, `out.<plugin>.jsx`, `babel-style-rules.<plugin>.json`, `swc-style-rules.<plugin>.json`).
