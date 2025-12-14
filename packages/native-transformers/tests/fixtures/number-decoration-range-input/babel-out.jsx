@@ -4,7 +4,7 @@ import { ax, ix } from "@compiled/react/runtime";
 import Textfield from '@atlaskit/textfield';
 const textFieldStyle = {
   invalid: "_syaz1tmw",
-  valid: "_syazi7uo"
+  valid: "_syaz1fxt"
 };
 type Props = {
   isValid: boolean;

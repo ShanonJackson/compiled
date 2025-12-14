@@ -14,9 +14,9 @@
   "._c71lzwfg{max-height:2pc}",
   "._k48p1wq8{font-weight:var(--ds-font-weight-medium,500)}",
   "._80omtlke{cursor:pointer}",
-  "._1jhmhvjl:active{outline:var(--ds-border-width-focused,2px) auto var(--ds-border-focused,#4688ec)}",
-  "._y2mvhvjl:focus{outline:var(--ds-border-width-focused,2px) auto var(--ds-border-focused,#4688ec)}",
-  "._1ygbhvjl:focus-visible{outline:var(--ds-border-width-focused,2px) auto var(--ds-border-focused,#4688ec)}",
+  "._1jhm5e4z:active{outline:var(--ds-border-width-focused,2px) auto var(--ds-border-focused,#388bff)}",
+  "._y2mv5e4z:focus{outline:var(--ds-border-width-focused,2px) auto var(--ds-border-focused,#388bff)}",
+  "._1ygb5e4z:focus-visible{outline:var(--ds-border-width-focused,2px) auto var(--ds-border-focused,#388bff)}",
   "._13ro1i6y:active{outline-offset:var(--ds-space-negative-025,-2px)}",
   "._1bg41i6y:focus{outline-offset:var(--ds-space-negative-025,-2px)}",
   "._1ah31i6y:focus-visible{outline-offset:var(--ds-space-negative-025,-2px)}"

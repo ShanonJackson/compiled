@@ -169,22 +169,15 @@ pub fn reduce_initial() -> ReduceInitial {
 
 fn detect_initial_support() -> bool {
   let mut opts = Opts::default();
-  // Prefer explicit config path when provided (e.g., BROWSERSLIST_CONFIG), else rely on cwd.
   if let Ok(cfg) = std::env::var("BROWSERSLIST_CONFIG") {
     opts.config = Some(cfg);
   }
   if let Ok(env_name) = std::env::var("BROWSERSLIST_ENV") {
     opts.env = Some(env_name);
   }
-  opts.path = std::env::current_dir()
-    .ok()
-    .and_then(|p| p.to_str().map(|s| s.to_string()))
-    .or_else(|| Some(env!("CARGO_MANIFEST_DIR").to_string()));
-
-  let forced_modern = std::env::var("BROWSERSLIST_CONFIG").is_ok();
-  if forced_modern {
-    return true;
-  }
+  // Mirror JS plugin: resolve browserslist starting from the plugin's own directory
+  // (equivalent to __dirname in node_modules/postcss-reduce-initial/src).
+  opts.path = Some(env!("CARGO_MANIFEST_DIR").to_string());
 
   let result = execute(&opts);
 

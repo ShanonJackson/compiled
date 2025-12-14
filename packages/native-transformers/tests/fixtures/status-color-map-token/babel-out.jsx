@@ -9,8 +9,8 @@ const STATUS = {
   UNKNOWN: 'UNKNOWN'
 } as const;
 const STATUS_COLOR_MAP = {
-  [STATUS.TODO]: "var(--ds-icon-accent-gray, #7D818A)",
-  [STATUS.IN_PROGRESS]: "var(--ds-icon-accent-blue, #357DE8)",
+  [STATUS.TODO]: "var(--ds-icon-accent-gray, #758195)",
+  [STATUS.IN_PROGRESS]: "var(--ds-icon-accent-blue, #1D7AFC)",
   [STATUS.DONE]: "var(--ds-icon-accent-green, #22A06B)",
   [STATUS.UNKNOWN]: 'unset'
 };

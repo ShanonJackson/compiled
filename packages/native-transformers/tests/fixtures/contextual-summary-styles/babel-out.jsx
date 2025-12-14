@@ -8,6 +8,6 @@ const media = {
   }
 };
 const styles = null;
-export const Component = () => <div className={ax(["_11q7vuon _2rko12b0 _zulpu2gc _4cvr1h6o _1e0c1txw _19pkxy5q _19bvu2gc _1tjq4viv _1alv1bp4 _1lp7vrvc"])}>
+export const Component = () => <div className={ax(["_11q7vuon _2rko12b0 _zulpu2gc _4cvr1h6o _1e0c1txw _19pkxy5q _19bvu2gc _1tjq16l4 _1alv1bp4 _1lp7vrvc"])}>
     <span>Hi</span>
   </div>;

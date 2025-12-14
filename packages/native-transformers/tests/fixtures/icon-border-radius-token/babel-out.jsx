@@ -6,7 +6,7 @@ import { cx } from '@atlaskit/css';
 import { Box } from '@atlaskit/primitives/compiled';
 const styles = {
   card: "_2rko12b0",
-  iconContainer: "_2rkofajl _y3gn1h6o"
+  iconContainer: "_2rko12b0 _y3gn1h6o"
 };
 export const IconContainer = () => <Box xcss={cx(styles.card)}>
 		<Box as="span" xcss={cx(styles.iconContainer)}>

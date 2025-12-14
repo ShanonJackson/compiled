@@ -18,7 +18,7 @@ function Item({
     return <DropdownMenu placement="right-start" shouldRenderToParent isOpen={currentOpenedSubMenu === item} onOpenChange={handleOpenChange} trigger={({
       triggerRef,
       ...triggerProps
-    }) => <DropdownItem {...triggerProps} ref={triggerRef} elemBefore={item.icon} elemAfter={<span color={"var(--ds-icon-subtle, #505258)"}>→</span>}>
+    }) => <DropdownItem {...triggerProps} ref={triggerRef} elemBefore={item.icon} elemAfter={<span color={"var(--ds-icon-subtle, #626F86)"}>→</span>}>
 						<span>{item.title}</span>
 					</DropdownItem>}>
 				<DropdownItemGroup>

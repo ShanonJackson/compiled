@@ -7,7 +7,7 @@ const TableWrapper = ({
   const styles = {};
   selectedRows.forEach(index => {
     styles[`tbody tr:nth-child(${index + 1})`] = {
-      backgroundColor: "var(--ds-background-selected, #E9F2FE)"
+      backgroundColor: "var(--ds-background-selected, #E9F2FF)"
     };
   });
   return <div className={ax(["_kqswh2mm _1cuj1osq _10wbnkob"])}>
