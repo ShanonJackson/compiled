@@ -7,7 +7,7 @@ const anchorStyles = {
   newInteractionStates: "_irr31dpa _1di69yc7"
 };
 const logoContainerStyles = {
-  root: "_18zru2gc _1e0cglyw _p12fnklw _vchh1ntv _10y41txw"
+  root: "_18zru2gc _1e0cglyw _p12fnklw _vchh18uv _10y41txw"
 };
 const LogoRenderer = ({
   logoOrIcon

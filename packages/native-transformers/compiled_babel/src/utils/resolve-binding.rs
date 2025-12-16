@@ -223,6 +223,12 @@ fn ensure_module_resolver(state: &mut TransformState) {
 fn resolve_request(state: &mut TransformState, filename: &str, request: &str) -> Option<String> {
   // COMPAT: Babel resolver option supports custom JS modules; emulate includeSources routing via config.
   if let Some(resolved) = resolve_workspace_request(state, request) {
+    if std::env::var("COMPILED_RESOLVER_DEBUG").is_ok() {
+      eprintln!(
+        "[resolver][workspace] {} -> {} (from {})",
+        request, resolved, filename
+      );
+    }
     return Some(resolved);
   }
 
@@ -235,7 +241,16 @@ fn resolve_request(state: &mut TransformState, filename: &str, request: &str) ->
   resolver
     .resolve(&base, request)
     .ok()
-    .map(|resolution| resolution.into_path_buf().to_string_lossy().into_owned())
+    .map(|resolution| {
+      let path = resolution.into_path_buf().to_string_lossy().into_owned();
+      if std::env::var("COMPILED_RESOLVER_DEBUG").is_ok() {
+        eprintln!(
+          "[resolver][default] {} -> {} (from {})",
+          request, path, filename
+        );
+      }
+      path
+    })
 }
 
 fn resolve_workspace_request(state: &TransformState, request: &str) -> Option<String> {

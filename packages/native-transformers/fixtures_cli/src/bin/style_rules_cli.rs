@@ -2,6 +2,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use swc_core::common::comments::SingleThreadedComments;
 use swc_core::common::{sync::Lrc, FileName, SourceMap};
 use swc_core::ecma::ast::{EsVersion, Program};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsSyntax};
@@ -16,6 +17,8 @@ use compiled_strip_runtime::{transform as strip_transform, TransformConfig as St
 struct Request {
   filename: String,
   source: String,
+  #[serde(rename = "compiledConfig")]
+  compiled_config: Option<String>,
   extract: Option<bool>,
 }
 
@@ -25,11 +28,34 @@ struct Response {
   style_rules: Vec<String>,
 }
 
-fn parse_program(cm: &Lrc<SourceMap>, filename: &str, src: &str) -> Result<Program, String> {
-  let fm = cm.new_source_file(
-    FileName::Real(PathBuf::from(filename)).into(),
-    src.to_string(),
-  );
+fn resolver_compat_from_config(raw: &Option<String>) -> Option<compiled_babel::ResolverCompatOptions> {
+  let text = raw.as_ref()?;
+  let value: serde_json::Value = serde_json::from_str(text).ok()?;
+  let include_sources = value
+    .get("resolverCompat")
+    .and_then(|rc| rc.get("includeSourcesFor"))
+    .and_then(|arr| {
+      arr.as_array().map(|items| {
+        items
+          .iter()
+          .filter_map(|item| item.as_str().map(|s| s.to_string()))
+          .collect::<Vec<String>>()
+      })
+    })
+    .filter(|list| !list.is_empty());
+
+  include_sources.map(|include_sources_for| compiled_babel::ResolverCompatOptions {
+    include_sources_for: Some(include_sources_for),
+  })
+}
+
+fn parse_program(
+  cm: &Lrc<SourceMap>,
+  filename: &str,
+  src: &str,
+) -> Result<(Program, Vec<swc_core::common::comments::Comment>), String> {
+  let fm = cm.new_source_file(FileName::Real(PathBuf::from(filename)).into(), src.to_string());
+  let comments = SingleThreadedComments::default();
   let lexer = Lexer::new(
     Syntax::Typescript(TsSyntax {
       tsx: true,
@@ -37,10 +63,20 @@ fn parse_program(cm: &Lrc<SourceMap>, filename: &str, src: &str) -> Result<Progr
     }),
     EsVersion::Es2022,
     StringInput::from(&*fm),
-    None,
+    Some(&comments),
   );
   let mut parser = Parser::new_from(lexer);
-  parser.parse_program().map_err(|err| format!("{:?}", err))
+  let program = parser.parse_program().map_err(|err| format!("{:?}", err))?;
+
+  let (leading, trailing) = comments.take_all();
+  let mut gathered: Vec<_> = Vec::new();
+  for map in [&leading, &trailing] {
+    for list in map.borrow().values() {
+      gathered.extend(list.clone());
+    }
+  }
+
+  Ok((program, gathered))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,19 +85,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let request: Request = serde_json::from_str(&input)?;
 
   let cm: Lrc<SourceMap> = Default::default();
-  let program = parse_program(&cm, &request.filename, &request.source)?;
+  let (program, mut gathered_comments) =
+    parse_program(&cm, &request.filename, &request.source)?;
 
   let compiled_opts = CompiledOptions {
     cache: Some(CacheBehavior::Enabled(false)),
     import_react: Some(true),
     optimize_css: Some(true),
+    resolver_compat: resolver_compat_from_config(&request.compiled_config),
     extract: Some(request.extract.unwrap_or(true)),
     ..CompiledOptions::default()
   };
 
   let transform_file = TransformFile::with_options(
     cm.clone(),
-    Vec::new(),
+    std::mem::take(&mut gathered_comments),
     TransformFileOptions {
       filename: Some(request.filename.clone()),
       ..Default::default()

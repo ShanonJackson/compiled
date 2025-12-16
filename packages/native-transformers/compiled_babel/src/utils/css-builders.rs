@@ -1,8 +1,8 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
-use swc_core::common::comments::CommentKind;
+use swc_core::common::comments::{Comment, CommentKind};
 use swc_core::common::sync::Lrc;
-use swc_core::common::{SourceMap, SourceMapper, Spanned, SyntaxContext, DUMMY_SP};
+use swc_core::common::{SourceMap, SourceMapper, Spanned, SyntaxContext, Span, DUMMY_SP};
 use swc_core::ecma::ast::{
   ArrayLit, ArrowExpr, BinExpr, BinaryOp, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr,
   Expr, ExprOrSpread, Ident, KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, OptChainBase,
@@ -121,7 +121,50 @@ fn print_pattern(pat: &Pat) -> String {
   String::from_utf8(buffer).expect("pattern to utf8 string")
 }
 
-fn babel_like_code_for_hash(expr: &Expr) -> String {
+fn format_comment(comment: &Comment) -> String {
+  match comment.kind {
+    CommentKind::Line => format!("//{}", comment.text),
+    CommentKind::Block => format!("/*{}*/", comment.text),
+  }
+}
+
+fn comments_within_span(meta: &Metadata, span: Span) -> Vec<String> {
+  let state = meta.state();
+  let all = state
+    .file
+    .comments
+    .iter()
+    .filter(|comment| comment.span.lo >= span.lo() && comment.span.hi <= span.hi())
+    .cloned()
+    .collect::<Vec<Comment>>();
+
+  if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+    if let Some(filename) = &state.filename {
+      if filename.contains(&label) && !all.is_empty() {
+        if let Ok(snippet) = state
+          .file
+          .source_map
+          .span_to_snippet(span)
+          .map(|s| if s.len() > 120 { format!("{}…", &s[..120]) } else { s })
+        {
+          eprintln!("[css-debug] comments span snippet={}", snippet.replace('\n', "\\n"));
+        }
+        eprintln!(
+          "[css-debug] comments within span count={} span=({:?},{:?})",
+          all.len(),
+          span.lo(),
+          span.hi()
+        );
+      }
+    }
+  }
+
+  all.into_iter()
+    .map(|comment| format_comment(&comment))
+    .collect()
+}
+
+fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
   // Aim to mirror Babel generator output for the expression shapes that
   // appear in keyframes hashing. This serializer purposefully does not fall
   // back to SWC codegen to avoid drift from Babel formatting.
@@ -144,42 +187,51 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
     out
   }
 
-  fn print_object_pretty(obj: &ObjectLit, indent: usize) -> String {
+  fn print_object_pretty(obj: &ObjectLit, indent: usize, meta: &Metadata) -> String {
     let pad_inner = " ".repeat(indent + 2);
     let mut entries: Vec<String> = Vec::new();
     for prop in &obj.props {
-      if let PropOrSpread::Prop(p) = prop {
-        if let Prop::KeyValue(kv) = p.as_ref() {
-          let key = match &kv.key {
-            PropName::Ident(i) => i.sym.as_ref().to_string(),
-            PropName::Str(s) => {
-              format!("'{}'", escape_string(s.value.as_ref(), '\''))
-            }
-            PropName::Num(n) => {
-              let mut s = n.value.to_string();
-              if s.ends_with(".0") {
-                s.truncate(s.len() - 2);
+      match prop {
+        PropOrSpread::Prop(p) => match p.as_ref() {
+          Prop::KeyValue(kv) => {
+            let key = match &kv.key {
+              PropName::Ident(i) => i.sym.as_ref().to_string(),
+              PropName::Str(s) => {
+                format!("'{}'", escape_string(s.value.as_ref(), '\''))
               }
-              s
-            }
-            PropName::Computed(c) => print_expr(&c.expr),
-            PropName::BigInt(bi) => bi.value.to_string(),
-          };
-          let value = match &*kv.value {
-            Expr::Object(inner) => {
-              let inner_str = print_object_pretty(inner, indent + 2);
-              format!("{{\n{}\n{}}}", inner_str, pad_inner)
-            }
-            other => print_expr(other),
-          };
-          entries.push(format!("{}{}: {}", pad_inner, key, value));
+              PropName::Num(n) => {
+                let mut s = n.value.to_string();
+                if s.ends_with(".0") {
+                  s.truncate(s.len() - 2);
+                }
+                s
+              }
+              PropName::Computed(c) => print_expr(&c.expr, meta),
+              PropName::BigInt(bi) => bi.value.to_string(),
+            };
+            let value = match &*kv.value {
+              Expr::Object(inner) => {
+                let inner_str = print_object_pretty(inner, indent + 2, meta);
+                format!("{{\n{}\n{}}}", inner_str, pad_inner)
+              }
+              other => print_expr(other, meta),
+            };
+            entries.push(format!("{}{}: {}", pad_inner, key, value));
+          }
+          Prop::Shorthand(ident) => {
+            entries.push(format!("{}{}", pad_inner, ident.sym.as_ref()));
+          }
+          _ => {}
+        },
+        PropOrSpread::Spread(spread) => {
+          entries.push(format!("{}...{}", pad_inner, print_expr(&spread.expr, meta)));
         }
       }
     }
     entries.join(",\n")
   }
 
-  fn print_expr(e: &Expr) -> String {
+  fn print_expr(e: &Expr, meta: &Metadata) -> String {
     match e {
       Expr::Ident(id) => id.sym.as_ref().to_string(),
       Expr::Lit(Lit::Num(n)) => {
@@ -204,26 +256,26 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
         if obj.props.is_empty() {
           "{}".to_string()
         } else {
-          format!("{{\n{}\n}}", print_object_pretty(obj, 0))
+          format!("{{\n{}\n}}", print_object_pretty(obj, 0, meta))
         }
       }
       Expr::Array(arr) => {
         let mut items: Vec<String> = Vec::new();
         for el in &arr.elems {
           if let Some(el) = el {
-            items.push(print_expr(&el.expr));
+            items.push(print_expr(&el.expr, meta));
           }
         }
         format!("[{}]", items.join(", "))
       }
       Expr::Call(call) => {
         let callee = match &call.callee {
-          Callee::Expr(c) => print_expr(c.as_ref()),
+          Callee::Expr(c) => print_expr(c.as_ref(), meta),
           _ => "".to_string(),
         };
         let mut args: Vec<String> = Vec::new();
         for a in &call.args {
-          args.push(print_expr(&a.expr));
+          args.push(print_expr(&a.expr, meta));
         }
         format!("{}({})", callee, args.join(", "))
       }
@@ -232,7 +284,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
         let mut out = String::new();
         match tagged.tag.as_ref() {
           Expr::Ident(id) => out.push_str(id.sym.as_ref()),
-          other => out.push_str(&print_expr(other)),
+          other => out.push_str(&print_expr(other, meta)),
         }
         out.push('`');
         let tpl = &tagged.tpl;
@@ -240,7 +292,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
           out.push_str(quasi.raw.as_ref());
           if i < tpl.exprs.len() {
             out.push_str("${");
-            out.push_str(&print_expr(&tpl.exprs[i]));
+            out.push_str(&print_expr(&tpl.exprs[i], meta));
             out.push('}');
           }
         }
@@ -254,7 +306,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
           out.push_str(quasi.raw.as_ref());
           if i < tpl.exprs.len() {
             out.push_str("${");
-            out.push_str(&print_expr(&tpl.exprs[i]));
+            out.push_str(&print_expr(&tpl.exprs[i], meta));
             out.push('}');
           }
         }
@@ -262,10 +314,10 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
         out
       }
       Expr::Member(member) => {
-        let obj = print_expr(&member.obj);
+        let obj = print_expr(&member.obj, meta);
         match &member.prop {
           MemberProp::Ident(prop) => format!("{}.{}", obj, prop.sym.as_ref()),
-          MemberProp::Computed(c) => format!("{}[{}]", obj, print_expr(&c.expr)),
+          MemberProp::Computed(c) => format!("{}[{}]", obj, print_expr(&c.expr, meta)),
           MemberProp::PrivateName(_) => {
             panic!("unsupported private name in member expression for keyframes hash")
           }
@@ -273,19 +325,19 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
       }
       Expr::TsAs(ts_as) => format!(
         "{} as {}",
-        print_expr(&ts_as.expr),
+        print_expr(&ts_as.expr, meta),
         print_ts_type(&ts_as.type_ann)
       ),
       Expr::TsTypeAssertion(assertion) => format!(
         "<{}> {}",
         print_ts_type(&assertion.type_ann),
-        print_expr(&assertion.expr)
+        print_expr(&assertion.expr, meta)
       ),
       Expr::TsConstAssertion(assertion) => {
-        format!("{} as const", print_expr(&assertion.expr))
+        format!("{} as const", print_expr(&assertion.expr, meta))
       }
-      Expr::TsNonNull(non_null) => format!("{}!", print_expr(&non_null.expr)),
-      Expr::Paren(p) => format!("({})", print_expr(&p.expr)),
+      Expr::TsNonNull(non_null) => format!("{}!", print_expr(&non_null.expr, meta)),
+      Expr::Paren(p) => format!("({})", print_expr(&p.expr, meta)),
       Expr::Unary(un) => {
         let op = match un.op {
           UnaryOp::Minus => "-",
@@ -296,7 +348,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
           UnaryOp::Void => "void ",
           UnaryOp::Delete => "delete ",
         };
-        format!("{}{}", op, print_expr(&un.arg))
+        format!("{}{}", op, print_expr(&un.arg, meta))
       }
       Expr::Bin(bin) => {
         // Basic binary printing with spaces around operator.
@@ -329,35 +381,40 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
         };
         format!(
           "{} {} {}",
-          print_expr(&bin.left),
+          print_expr(&bin.left, meta),
           op,
-          print_expr(&bin.right)
+          print_expr(&bin.right, meta)
         )
       }
       Expr::Cond(cond) => format!(
         "{} ? {} : {}",
-        print_expr(&cond.test),
-        print_expr(&cond.cons),
-        print_expr(&cond.alt)
+        print_expr(&cond.test, meta),
+        print_expr(&cond.cons, meta),
+        print_expr(&cond.alt, meta)
       ),
       Expr::Arrow(arrow) => {
         let params_code = format_arrow_params(arrow);
+        let arrow_comments = comments_within_span(meta, arrow.span());
         let body_code = match arrow.body.as_ref() {
           BlockStmtOrExpr::Expr(body) => {
             let body = strip_parentheses_expr(body);
-            babel_like_code_for_hash(body)
+            babel_like_code_for_hash(body, meta)
           }
           BlockStmtOrExpr::BlockStmt(block) => {
             let stmt = Stmt::Block(block.clone());
             print_statement(&stmt).trim().to_string()
           }
         };
-        format!("{params_code} => {body_code}")
+        if arrow_comments.is_empty() {
+          format!("{params_code} => {body_code}")
+        } else {
+          format!("{params_code} =>\n{}\n{body_code}", arrow_comments.join("\n"))
+        }
       }
       Expr::OptChain(opt) => {
         match opt.base.as_ref() {
           OptChainBase::Member(member) => {
-            let obj = print_expr(&member.obj);
+            let obj = print_expr(&member.obj, meta);
             let accessor = match &member.prop {
               MemberProp::Ident(prop) => {
                 format!("{}{}", if opt.optional { "?." } else { "." }, prop.sym.as_ref())
@@ -365,7 +422,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
               MemberProp::Computed(c) => format!(
                 "{}[{}]",
                 if opt.optional { "?." } else { "." },
-                print_expr(&c.expr)
+                print_expr(&c.expr, meta)
               ),
               MemberProp::PrivateName(_) => {
                 panic!("unsupported private name in optional chain for keyframes hash")
@@ -374,10 +431,10 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
             format!("{obj}{accessor}")
           }
           OptChainBase::Call(call) => {
-            let callee = print_expr(&call.callee);
+            let callee = print_expr(&call.callee, meta);
             let mut args: Vec<String> = Vec::with_capacity(call.args.len());
             for arg in &call.args {
-              args.push(print_expr(&arg.expr));
+              args.push(print_expr(&arg.expr, meta));
             }
             let call_prefix = if opt.optional { "?." } else { "" };
             format!("{callee}{call_prefix}({})", args.join(", "))
@@ -391,7 +448,7 @@ fn babel_like_code_for_hash(expr: &Expr) -> String {
     }
   }
 
-  print_expr(expr)
+  print_expr(expr, meta)
 }
 
 fn format_arrow_params(arrow: &ArrowExpr) -> String {
@@ -538,13 +595,17 @@ fn format_block_like_babel(block: &BlockStmt, meta: &Metadata) -> String {
   out
 }
 
-fn babel_like_expression(expr: &Expr, meta: &Metadata) -> String {
+pub(crate) fn babel_like_expression(expr: &Expr, meta: &Metadata) -> String {
   if let Expr::Arrow(arrow) = expr {
     let params_code = format_arrow_params(arrow);
+    let arrow_comments = comments_within_span(meta, arrow.span());
     match arrow.body.as_ref() {
       BlockStmtOrExpr::Expr(body) => {
-        let body_code = babel_like_code_for_hash(body);
-        return format!("{} => {}", params_code, body_code);
+        let body_code = babel_like_code_for_hash(body, meta);
+        if arrow_comments.is_empty() {
+          return format!("{} => {}", params_code, body_code);
+        }
+        return format!("{} =>\n{}\n{}", params_code, arrow_comments.join("\n"), body_code);
       }
       BlockStmtOrExpr::BlockStmt(block) => {
         let body_code = format_block_like_babel(block, meta);
@@ -553,7 +614,7 @@ fn babel_like_expression(expr: &Expr, meta: &Metadata) -> String {
     }
   }
 
-  babel_like_code_for_hash(expr)
+  babel_like_code_for_hash(expr, meta)
 }
 
 fn strip_parentheses<'a>(mut expr: &'a mut Expr) -> &'a mut Expr {
@@ -1352,8 +1413,8 @@ where
       continue;
     }
 
-    let (mut variable_expression, variable_name) =
-      get_variable_declarator_value_for_parent_expr(node_expression, meta);
+    let (mut variable_expression, _) = get_variable_declarator_value_for_parent_expr(node_expression, meta);
+    let variable_name = babel_like_expression(node_expression, meta);
     normalize_props_usage(&mut variable_expression);
     let Some(next_quasi) = template.quasis.get_mut(index + 1) else {
       panic!("Template literal missing trailing quasi for interpolation");
@@ -1371,10 +1432,27 @@ where
     if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
       if let Some(filename) = &meta.state().filename {
         if filename.contains(&label) {
-          eprintln!(
-            "[css-debug] fixture={label} var_name={} hashed={}",
-            variable_name, name
-          );
+          use std::sync::atomic::{AtomicUsize, Ordering};
+          static LOGGED: AtomicUsize = AtomicUsize::new(0);
+          let limit: usize = std::env::var("DEBUG_CSS_FIXTURE_LIMIT")
+            .ok()
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(50);
+
+          if LOGGED.fetch_add(1, Ordering::Relaxed) < limit {
+            let normalized = babel_like_expression(&variable_expression, meta);
+            let normalized_truncated = if normalized.len() > 200 {
+              format!("{}… (len={})", &normalized[..200], normalized.len())
+            } else {
+              normalized
+            };
+            eprintln!(
+              "[css-debug] fixture={label} var_name={} hashed={} normalized_var_expr={}",
+              variable_name,
+              name,
+              normalized_truncated
+            );
+          }
         }
       }
     }
@@ -2274,10 +2352,37 @@ where
           continue;
         }
 
+        if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+          if let Some(filename) = &updated_meta.state().filename {
+            if filename.contains(&label) {
+              let expr_str = babel_like_expression(&prop_value, &updated_meta);
+              eprintln!(
+                "[css-debug] fixture={label} prop_value before hash={} ",
+                expr_str
+              );
+            }
+          }
+        }
+
         let (mut variable_expression, variable_name) =
           get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
         normalize_props_usage(&mut variable_expression);
         let name = format!("--_{}", hash(&variable_name));
+        if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+          if let Some(filename) = &updated_meta.state().filename {
+            if filename.contains(&label) {
+              let normalized_expr = babel_like_expression(&variable_expression, &updated_meta);
+              let normalized_hash = format!("--_{}", hash(&normalized_expr));
+              eprintln!(
+                "[css-debug] fixture={label} pre_name={} pre_hash={} normalized_expr={} normalized_hash={}",
+                variable_name,
+                name,
+                normalized_expr,
+                normalized_hash
+              );
+            }
+          }
+        }
         if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
           if let Some(filename) = &updated_meta.state().filename {
             if filename.contains(&label) {

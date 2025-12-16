@@ -2264,7 +2264,41 @@ impl StyledVisitor {
     };
 
     if should_normalize {
+      if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+        if let Some(filename) = &self.meta.state().filename {
+          if filename.contains(&label) {
+            let before = crate::utils_css_builders::babel_like_expression(expr, &self.meta);
+            if before.contains("calculateGridTemplateValues") || before.contains("getCardContainerPadding") {
+              let preview = if std::env::var("DEBUG_CSS_FULL").is_ok() {
+                before
+              } else if before.len() > 300 {
+                format!("{}… (len={})", &before[..300], before.len())
+              } else {
+                before
+              };
+              eprintln!("[css-debug] fixture={label} styled expr before normalize={}", preview);
+            }
+          }
+        }
+      }
       normalize_props_usage(expr);
+      if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+        if let Some(filename) = &self.meta.state().filename {
+          if filename.contains(&label) {
+            let after = crate::utils_css_builders::babel_like_expression(expr, &self.meta);
+            if after.contains("calculateGridTemplateValues") || after.contains("getCardContainerPadding") {
+              let preview = if std::env::var("DEBUG_CSS_FULL").is_ok() {
+                after
+              } else if after.len() > 300 {
+                format!("{}… (len={})", &after[..300], after.len())
+              } else {
+                after
+              };
+              eprintln!("[css-debug] fixture={label} styled expr after normalize={}", preview);
+            }
+          }
+        }
+      }
     }
 
     expr.visit_mut_children_with(self);

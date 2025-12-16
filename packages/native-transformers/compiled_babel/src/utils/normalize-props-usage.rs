@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use swc_core::common::{SyntaxContext, DUMMY_SP};
 use swc_core::ecma::ast::{
   ArrayPat, ArrowExpr, BinExpr, BinaryOp, BindingIdent, BlockStmtOrExpr, Expr, FnExpr, Function,
-  Ident, IdentName, MemberExpr, MemberProp, ObjectPatProp, Pat, PropName,
+  Ident, IdentName, KeyValueProp, MemberExpr, MemberProp, ObjectPatProp, Pat, Prop, PropName,
 };
 use swc_core::ecma::atoms::Atom;
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
@@ -295,6 +295,21 @@ impl<'a> ReplaceBindingsVisitor<'a> {
 }
 
 impl<'a> VisitMut for ReplaceBindingsVisitor<'a> {
+  fn visit_mut_prop(&mut self, prop: &mut Prop) {
+    if let Prop::Shorthand(ident) = prop {
+      if let Some(replacement) = self.replace_identifier(ident) {
+        let key = PropName::Ident(ident.clone().into());
+        *prop = Prop::KeyValue(KeyValueProp {
+          key,
+          value: Box::new(replacement),
+        });
+        return;
+      }
+    }
+
+    prop.visit_mut_children_with(self);
+  }
+
   fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
     let shadows = arrow
       .params

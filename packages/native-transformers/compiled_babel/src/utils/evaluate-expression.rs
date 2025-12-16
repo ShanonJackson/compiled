@@ -318,38 +318,26 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
       }
     }
     Expr::Fn(fn_expr) => {
-      if fn_expr.function.params.is_empty() {
-        let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
-        evaluated_value = Some(pair.value);
-        updated_meta = pair.meta;
-      } else if fn_expr.function.body.is_some() {
-        let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
-        evaluated_value = Some(pair.value);
-        updated_meta = pair.meta;
+      let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
+      let has_params = !fn_expr.function.params.is_empty();
+      let should_deopt = has_params && !matches!(pair.value, Expr::Object(_) | Expr::TaggedTpl(_));
+      evaluated_value = Some(if should_deopt {
+        target_expression.clone()
       } else {
-        evaluated_value = Some(target_expression.clone());
-      }
+        pair.value
+      });
+      updated_meta = pair.meta;
     }
     Expr::Arrow(arrow) => {
-      if arrow.params.is_empty() {
-        let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
-        evaluated_value = Some(pair.value);
-        updated_meta = pair.meta;
+      let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
+      let has_params = !arrow.params.is_empty();
+      let should_deopt = has_params && !matches!(pair.value, Expr::Object(_) | Expr::TaggedTpl(_));
+      evaluated_value = Some(if should_deopt {
+        target_expression.clone()
       } else {
-        let body_is_block = matches!(*arrow.body, swc_core::ecma::ast::BlockStmtOrExpr::BlockStmt(_));
-        let body_is_call = match arrow.body.as_ref() {
-          swc_core::ecma::ast::BlockStmtOrExpr::Expr(expr) => matches!(expr.as_ref(), swc_core::ecma::ast::Expr::Call(_)),
-          _ => false,
-        };
-
-        if body_is_block || body_is_call {
-          let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
-          evaluated_value = Some(pair.value);
-          updated_meta = pair.meta;
-        } else {
-          evaluated_value = Some(target_expression.clone());
-        }
-      }
+        pair.value
+      });
+      updated_meta = pair.meta;
     }
     Expr::Call(call) => {
       let pair = traverse_call_expression(call, updated_meta.clone(), evaluate_expression);

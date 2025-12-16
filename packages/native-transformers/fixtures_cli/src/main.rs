@@ -120,6 +120,9 @@ fn main() {
     eprintln!("[cli] entry");
   }
   let debug_rules = std::env::var("COMPILED_CLI_DEBUG_STYLE_RULES").is_ok();
+  if debug_rules {
+    eprintln!("[cli] debug style rules enabled");
+  }
   let mut args = env::args().skip(1);
   let input_path = args.next().expect("usage: fixtures_cli <input_path>");
 

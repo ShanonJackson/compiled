@@ -9,5 +9,5 @@
   "._yv0e16td{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}",
   "._1tke1osq{min-height:100%}",
   "._1tkei63v{min-height:calc(var(--board-scroll-element-height)*1px - 8px)}",
-  "._1bsb1ris{width:-moz-max-content;width:max-content}"
+  "._1bsb1ris{width:max-content}"
 ]

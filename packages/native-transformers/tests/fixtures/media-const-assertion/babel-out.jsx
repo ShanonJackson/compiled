@@ -2,9 +2,9 @@
 import * as React from 'react';
 import { ax, ix } from "@compiled/react/runtime";
 const media = {
-  above: {
+  above: ({
     xs: '@media (min-width: 30rem)'
-  } as const
+  } as const)
 };
 const styles = null;
 export const Component = () => <div className={ax(["_1lv75scu"])}>hi</div>;

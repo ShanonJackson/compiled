@@ -10,7 +10,7 @@
   "._p12f1osq{max-width:100%}",
   "._4cvr1q9y{align-items:baseline}",
   "._1bah1h6o{justify-content:center}",
-  "._gy1p1b66{-moz-column-gap:var(--ds-space-050,4px);column-gap:var(--ds-space-050,4px)}",
+  "._gy1p1b66{column-gap:var(--ds-space-050,4px)}",
   "._c71lzwfg{max-height:2pc}",
   "._k48p1wq8{font-weight:var(--ds-font-weight-medium,500)}",
   "._80omtlke{cursor:pointer}",
