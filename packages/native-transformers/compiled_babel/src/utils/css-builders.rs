@@ -130,11 +130,18 @@ fn format_comment(comment: &Comment) -> String {
 
 fn comments_within_span(meta: &Metadata, span: Span) -> Vec<String> {
   let state = meta.state();
+  let source_map = &state.file.source_map;
+  let span_start = span.lo();
+  let span_end = span.hi();
+  if source_map.try_lookup_char_pos(span_start).is_err() {
+    return Vec::new();
+  }
+
   let all = state
     .file
     .comments
     .iter()
-    .filter(|comment| comment.span.lo >= span.lo() && comment.span.hi <= span.hi())
+    .filter(|comment| comment.span.lo >= span_start && comment.span.hi <= span_end)
     .cloned()
     .collect::<Vec<Comment>>();
 
@@ -158,6 +165,48 @@ fn comments_within_span(meta: &Metadata, span: Span) -> Vec<String> {
       }
     }
   }
+
+  all.into_iter()
+    .map(|comment| format_comment(&comment))
+    .collect()
+}
+
+fn leading_comments_for_span(meta: &Metadata, span: Span) -> Vec<String> {
+  let state = meta.state();
+  let source_map = &state.file.source_map;
+  let span_start = span.lo();
+  let span_line = match source_map.try_lookup_char_pos(span_start) {
+    Ok(loc) => loc.line,
+    Err(_) => return Vec::new(),
+  };
+
+  let all = state
+    .file
+    .comments
+    .iter()
+    .filter(|comment| {
+      // COMPAT: Babel attaches leading comments to the next node and includes them
+      // in generate() output; include comments directly preceding the span to match hashes.
+      if comment.span.hi > span_start {
+        return false;
+      }
+
+      let comment_line = match source_map.try_lookup_char_pos(comment.span.hi) {
+        Ok(loc) => loc.line,
+        Err(_) => return false,
+      };
+      if comment_line != span_line && comment_line + 1 != span_line {
+        return false;
+      }
+
+      let gap = Span::new(comment.span.hi, span_start);
+      match source_map.span_to_snippet(gap) {
+        Ok(snippet) => snippet.trim().is_empty(),
+        Err(_) => false,
+      }
+    })
+    .cloned()
+    .collect::<Vec<Comment>>();
 
   all.into_iter()
     .map(|comment| format_comment(&comment))
@@ -241,7 +290,14 @@ fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
         }
         s
       }
-      Expr::Lit(Lit::Str(s)) => format!("'{}'", escape_string(s.value.as_ref(), '\'')),
+      // COMPAT: Preserve the original raw quote style when available to match Babel generate().
+      Expr::Lit(Lit::Str(s)) => {
+        if let Some(raw) = &s.raw {
+          raw.to_string()
+        } else {
+          format!("\"{}\"", escape_string(s.value.as_ref(), '"'))
+        }
+      }
       Expr::Lit(Lit::Bool(b)) => {
         if b.value {
           "true".to_string()
@@ -386,12 +442,24 @@ fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
           print_expr(&bin.right, meta)
         )
       }
-      Expr::Cond(cond) => format!(
-        "{} ? {} : {}",
-        print_expr(&cond.test, meta),
-        print_expr(&cond.cons, meta),
-        print_expr(&cond.alt, meta)
-      ),
+      Expr::Cond(cond) => {
+        let test = print_expr(&cond.test, meta);
+        let cons = babel_like_expression(&cond.cons, meta);
+        let alt = babel_like_expression(&cond.alt, meta);
+        let cons_trimmed = cons.trim_start();
+        let alt_trimmed = alt.trim_start();
+        let cons_sep = if cons_trimmed.starts_with("//") || cons_trimmed.starts_with("/*") {
+          "\n"
+        } else {
+          " "
+        };
+        let alt_sep = if alt_trimmed.starts_with("//") || alt_trimmed.starts_with("/*") {
+          "\n"
+        } else {
+          " "
+        };
+        format!("{test} ?{cons_sep}{cons} :{alt_sep}{alt}")
+      }
       Expr::Arrow(arrow) => {
         let params_code = format_arrow_params(arrow);
         let arrow_comments = comments_within_span(meta, arrow.span());
@@ -596,25 +664,33 @@ fn format_block_like_babel(block: &BlockStmt, meta: &Metadata) -> String {
 }
 
 pub(crate) fn babel_like_expression(expr: &Expr, meta: &Metadata) -> String {
-  if let Expr::Arrow(arrow) = expr {
+  let expr_code = if let Expr::Arrow(arrow) = expr {
     let params_code = format_arrow_params(arrow);
     let arrow_comments = comments_within_span(meta, arrow.span());
     match arrow.body.as_ref() {
       BlockStmtOrExpr::Expr(body) => {
         let body_code = babel_like_code_for_hash(body, meta);
         if arrow_comments.is_empty() {
-          return format!("{} => {}", params_code, body_code);
+          format!("{params_code} => {body_code}")
+        } else {
+          format!("{params_code} =>\n{}\n{body_code}", arrow_comments.join("\n"))
         }
-        return format!("{} =>\n{}\n{}", params_code, arrow_comments.join("\n"), body_code);
       }
       BlockStmtOrExpr::BlockStmt(block) => {
         let body_code = format_block_like_babel(block, meta);
-        return format!("{} => {}", params_code, body_code);
+        format!("{params_code} => {body_code}")
       }
     }
-  }
+  } else {
+    babel_like_code_for_hash(expr, meta)
+  };
 
-  babel_like_code_for_hash(expr, meta)
+  // COMPAT: Babel's generate() includes leading comments in the code string used for hashing.
+  let expr_comments = leading_comments_for_span(meta, expr.span());
+  if expr_comments.is_empty() {
+    return expr_code;
+  }
+  format!("{}\n{}", expr_comments.join("\n"), expr_code)
 }
 
 fn strip_parentheses<'a>(mut expr: &'a mut Expr) -> &'a mut Expr {
@@ -2873,13 +2949,14 @@ pub fn build_css(node: &Expr, meta: &Metadata) -> CssOutput {
 #[cfg(test)]
 mod tests {
   use super::{
-    assert_no_imported_css_variables, build_css_internal, callback_if_file_included,
-    extract_conditional_expression_with_builder, extract_keyframes_with_builder,
-    extract_logical_expression_with_builder, extract_member_expression_with_builder,
-    extract_template_literal_with_builder, find_binding_identifier,
-    generate_cache_for_css_map_with_builder, get_item_css,
+    assert_no_imported_css_variables, babel_like_expression, build_css_internal,
+    callback_if_file_included, extract_conditional_expression_with_builder,
+    extract_keyframes_with_builder, extract_logical_expression_with_builder,
+    extract_member_expression_with_builder, extract_template_literal_with_builder,
+    find_binding_identifier, generate_cache_for_css_map_with_builder, get_item_css,
     merge_subsequent_unconditional_css_items, print_expression, to_css_declaration, to_css_rule,
   };
+  use swc_core::common::comments::{Comment, CommentKind};
   use crate::types::{
     CompiledImports, Metadata, MetadataContext, PluginOptions, TransformFile, TransformFileOptions,
     TransformState,
@@ -2892,7 +2969,7 @@ mod tests {
   use std::cell::RefCell;
   use std::rc::Rc;
   use swc_core::common::sync::Lrc;
-  use swc_core::common::{FileName, SourceMap, SyntaxContext, DUMMY_SP};
+  use swc_core::common::{BytePos, FileName, SourceMap, Span, SyntaxContext, DUMMY_SP};
   use swc_core::ecma::ast::{
     CallExpr, Callee, Expr, ExprOrSpread, Ident, KeyValueProp, ObjectLit, Prop, PropName,
     PropOrSpread,
@@ -2958,6 +3035,51 @@ mod tests {
     );
     let mut parser = Parser::new_from(lexer);
     *parser.parse_expr().expect("parse expression")
+  }
+
+  #[test]
+  fn babel_like_expression_includes_leading_comments_for_hashing() {
+    let cm: Lrc<SourceMap> = Default::default();
+    let code = "// eslint-disable-next-line test\nfoo.bar";
+    let source_file = cm.new_source_file(FileName::Custom("test.js".into()).into(), code.into());
+    let lexer = Lexer::new(
+      Syntax::Es(Default::default()),
+      Default::default(),
+      StringInput::from(&*source_file),
+      None,
+    );
+    let mut parser = Parser::new_from(lexer);
+    let expr = *parser.parse_expr().expect("parse expression");
+    let comment_text = "// eslint-disable-next-line test";
+    let comment_start = 0usize;
+    let comment_end = comment_start + comment_text.len();
+    let base = source_file.start_pos.0;
+    let file = TransformFile::with_options(
+      cm.clone(),
+      vec![Comment {
+        kind: CommentKind::Line,
+        span: Span::new(
+          BytePos(base + comment_start as u32),
+          BytePos(base + comment_end as u32),
+        ),
+        text: "eslint-disable-next-line test".into(),
+      }],
+      TransformFileOptions {
+        filename: Some("test.js".into()),
+        loc_filename: Some("test.js".into()),
+        ..TransformFileOptions::default()
+      },
+    );
+    let state = Rc::new(RefCell::new(TransformState::new(
+      file,
+      PluginOptions::default(),
+    )));
+    let meta = Metadata::new(state);
+
+    assert_eq!(
+      babel_like_expression(&expr, &meta),
+      "// eslint-disable-next-line test\nfoo.bar"
+    );
   }
 
   fn parse_object_literal(code: &str) -> ObjectLit {

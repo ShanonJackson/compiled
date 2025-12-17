@@ -6,24 +6,60 @@ const path = require('path');
 const os = require('os');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const monorepoRoot = path.resolve(repoRoot, '..', '..', '..');
 const workspaceNodeModules = path.join(repoRoot, 'node_modules');
-// Resolver alignment is enabled by default to mirror the collectors; set
-// COMPILED_FIXTURES_ENABLE_RESOLVER=0 to disable.
-const ENABLE_RESOLVER = false;
+
+const setEnvDefault = (key, value) => {
+  if (!process.env[key] && value) {
+    process.env[key] = value;
+  }
+};
+
+const jiraCompiledConfig = path.join(monorepoRoot, 'jira', '.compiledcssrc');
+const compiledResolverPath = path.join(
+  monorepoRoot,
+  'platform',
+  'build',
+  'monorepo-utils',
+  'resolvers',
+  'compiled-resolver.js'
+);
+const resolverCompatDefault = { includeSourcesFor: ['platform/*', 'post-office/*'] };
+
+if (
+  process.env.COMPILED_FIXTURES_ENABLE_RESOLVER &&
+  process.env.COMPILED_FIXTURES_ENABLE_RESOLVER !== '0' &&
+  fs.existsSync(jiraCompiledConfig) &&
+  fs.existsSync(compiledResolverPath)
+) {
+  setEnvDefault('COMPILED_FIXTURES_CONFIG', jiraCompiledConfig);
+  setEnvDefault('COMPILED_FIXTURES_RESOLVER', compiledResolverPath);
+  setEnvDefault(
+    'COMPILED_FIXTURES_RESOLVER_COMPAT',
+    JSON.stringify(resolverCompatDefault)
+  );
+}
+
+// Resolver alignment mirrors the collectors. Default is off unless we detect Jira's
+// resolver config; set COMPILED_FIXTURES_ENABLE_RESOLVER=1 to enable, 0 to disable.
+const ENABLE_RESOLVER =
+  process.env.COMPILED_FIXTURES_ENABLE_RESOLVER &&
+  process.env.COMPILED_FIXTURES_ENABLE_RESOLVER !== '0';
+
+const compiledConfigPath =
+  process.env.COMPILED_FIXTURES_CONFIG || path.join(repoRoot, '.compiledcssrc');
+const browserslistConfig = process.env.BROWSERSLIST_CONFIG || null;
 // Always align CWD with the standalone workspace.
 process.chdir(repoRoot);
 
-const workspaceBrowserslistConfig = path.join(repoRoot, '.browserslistrc');
-if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
-  process.env.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
+if (ENABLE_RESOLVER && browserslistConfig) {
+  process.env.BROWSERSLIST_CONFIG = browserslistConfig;
 }
 
 const resolveFromRepo = (id) =>
   require.resolve(id, { paths: [workspaceNodeModules, repoRoot] });
 const requireFromRepo = (id) => require(resolveFromRepo(id));
 const babel = requireFromRepo('@babel/core');
-const compiledConfigPath =
-  process.env.COMPILED_FIXTURES_CONFIG || path.join(repoRoot, '.compiledcssrc');
 let cachedCompiledConfig = null;
 let cachedTokensOptions = null;
 
@@ -152,10 +188,33 @@ function loadCompiledConfig() {
   return cachedCompiledConfig;
 }
 
-function getResolverOptions() {
+function resolveResolverValue(resolver, fixtureDir) {
+  if (typeof resolver !== 'string') {
+    return resolver;
+  }
+  if (resolver === 'jira' && fs.existsSync(compiledResolverPath)) {
+    return compiledResolverPath;
+  }
+  if (path.isAbsolute(resolver)) {
+    return resolver;
+  }
+  if (resolver.startsWith('.')) {
+    return path.resolve(fixtureDir || repoRoot, resolver);
+  }
+  try {
+    return resolveFromRepo(resolver);
+  } catch (_e) {
+    return resolver;
+  }
+}
+
+function getResolverOptions(fixtureConfig = {}, fixtureDir) {
   const cfg = loadCompiledConfig();
   const envResolver = process.env.COMPILED_FIXTURES_RESOLVER;
   const envResolverCompat = process.env.COMPILED_FIXTURES_RESOLVER_COMPAT;
+  const fixtureResolver = fixtureConfig.resolver;
+  const fixtureResolverCompat =
+    fixtureConfig.resolverCompat || fixtureConfig.resolver_compat;
 
   const parseCompat = (value) => {
     if (!value) return undefined;
@@ -166,20 +225,37 @@ function getResolverOptions() {
     }
   };
 
-  let resolver = envResolver || (cfg && typeof cfg === 'object' ? cfg.resolver : undefined);
-  if (resolver) {
-    try {
-      resolver = resolveFromRepo(resolver);
-    } catch (_e) {
-      // leave resolver as-is when it cannot be resolved locally
-    }
-  }
+  let resolver =
+    fixtureResolver || envResolver || (cfg && typeof cfg === 'object' ? cfg.resolver : undefined);
+  resolver = resolveResolverValue(resolver, fixtureDir);
 
   const resolverCompat =
+    fixtureResolverCompat ||
     parseCompat(envResolverCompat) ||
-    (cfg && typeof cfg === 'object' ? cfg.resolverCompat : undefined);
+    (cfg && typeof cfg === 'object'
+      ? cfg.resolverCompat || cfg.resolver_compat
+      : undefined);
 
   return { resolver, resolverCompat };
+}
+
+function withBrowserslistConfig(configPath, fn) {
+  const hadValue = Object.prototype.hasOwnProperty.call(process.env, 'BROWSERSLIST_CONFIG');
+  const previous = process.env.BROWSERSLIST_CONFIG;
+  if (configPath) {
+    process.env.BROWSERSLIST_CONFIG = configPath;
+  } else if (hadValue) {
+    delete process.env.BROWSERSLIST_CONFIG;
+  }
+  try {
+    return fn();
+  } finally {
+    if (hadValue) {
+      process.env.BROWSERSLIST_CONFIG = previous;
+    } else {
+      delete process.env.BROWSERSLIST_CONFIG;
+    }
+  }
 }
 
 function getTokensPrepassOptions() {
@@ -267,31 +343,40 @@ async function writeFileIfChanged(filePath, content) {
   }
 }
 
-async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
+async function generateBabelOutputs(
+  fixtureDir,
+  inputCode,
+  inputPath,
+  fixtureConfig,
+  resolverOptions,
+  browserslistConfigOverride
+) {
   const label = path.basename(fixtureDir);
   const t0 = Date.now();
-  const cfg = await readFixtureConfig(fixtureDir);
   const tokenized = applyTokensPrepass(inputCode, inputPath);
-  const { resolver } = ENABLE_RESOLVER ? getResolverOptions() : {};
+  const { resolver } = resolverOptions || {};
   const compiledOptions = {
     cache: false,
     optimizeCss: true,
     importReact: true,
-    extract: typeof cfg.extract === 'boolean' ? cfg.extract : true,
-    ...(cfg.classNameCompressionMap
-      ? { classNameCompressionMap: cfg.classNameCompressionMap }
+    extract:
+      typeof fixtureConfig.extract === 'boolean' ? fixtureConfig.extract : true,
+    ...(fixtureConfig.classNameCompressionMap
+      ? { classNameCompressionMap: fixtureConfig.classNameCompressionMap }
       : {}),
     ...(resolver ? { resolver } : {}),
   };
 
-  const result = babel.transformSync(tokenized, {
-    ...BABEL_OPTIONS,
-    filename: inputPath,
-    plugins: [
-      [resolveFromRepo('@compiled/babel-plugin'), compiledOptions],
-      [resolveFromRepo('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
-    ],
-  });
+  const result = withBrowserslistConfig(browserslistConfigOverride, () =>
+    babel.transformSync(tokenized, {
+      ...BABEL_OPTIONS,
+      filename: inputPath,
+      plugins: [
+        [resolveFromRepo('@compiled/babel-plugin'), compiledOptions],
+        [resolveFromRepo('@compiled/babel-plugin-strip-runtime'), { compiledRequireExclude: true }],
+      ],
+    })
+  );
 
   if (!result || typeof result.code !== 'string') {
     throw new Error(`Failed to transform fixture at ${fixtureDir}`);
@@ -304,7 +389,13 @@ async function generateBabelOutputs(fixtureDir, inputCode, inputPath) {
   };
 }
 
-async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
+async function attemptSwcTransform(
+  inputCode,
+  inputPath,
+  fixtureConfig = {},
+  resolverOptions,
+  browserslistConfigOverride
+) {
   const label = path.basename(path.dirname(inputPath));
   const { existsSync } = require('fs');
   const { spawnSync } = require('child_process');
@@ -343,10 +434,10 @@ async function attemptSwcTransform(inputCode, inputPath, fixtureConfig = {}) {
   await fsp.writeFile(tmpFile, tokenized, 'utf8');
 
   const runEnv = { ...process.env };
-  if (ENABLE_RESOLVER && fs.existsSync(workspaceBrowserslistConfig)) {
-    runEnv.BROWSERSLIST_CONFIG = workspaceBrowserslistConfig;
+  if (browserslistConfigOverride) {
+    runEnv.BROWSERSLIST_CONFIG = browserslistConfigOverride;
   }
-  const { resolver, resolverCompat } = ENABLE_RESOLVER ? getResolverOptions() : {};
+  const { resolver, resolverCompat } = resolverOptions || {};
   if (resolver) {
     runEnv.COMPILED_FIXTURES_RESOLVER =
       typeof resolver === 'string' ? resolver : JSON.stringify(resolver);
@@ -422,17 +513,40 @@ async function processFixture(name) {
   const inputCode = await fsp.readFile(inputPath, 'utf8');
 
   const cfg = await readFixtureConfig(fixtureDir);
+  const fixtureResolverEnabled =
+    cfg.enableResolver ||
+    cfg.resolver ||
+    cfg.resolverCompat ||
+    cfg.resolver_compat ||
+    cfg.browserslistConfig;
+  const useResolver = ENABLE_RESOLVER || fixtureResolverEnabled;
+  const resolverOptions = useResolver ? getResolverOptions(cfg, fixtureDir) : null;
+  const fixtureBrowserslistConfig =
+    cfg.browserslistConfig || (useResolver ? browserslistConfig : null);
 
   const startedAt = Date.now();
 
-  const babelOutputs = await generateBabelOutputs(fixtureDir, inputCode, inputPath, cfg);
+  const babelOutputs = await generateBabelOutputs(
+    fixtureDir,
+    inputCode,
+    inputPath,
+    cfg,
+    resolverOptions,
+    fixtureBrowserslistConfig
+  );
   await writeFileIfChanged(path.join(fixtureDir, 'babel-out.jsx'), babelOutputs.code);
   await writeFileIfChanged(
     path.join(fixtureDir, 'babel-style-rules.json'),
     JSON.stringify(babelOutputs.styleRules, null, 2)
   );
 
-  const swcOutputs = await attemptSwcTransform(inputCode, inputPath, cfg);
+  const swcOutputs = await attemptSwcTransform(
+    inputCode,
+    inputPath,
+    cfg,
+    resolverOptions,
+    fixtureBrowserslistConfig
+  );
   if (swcOutputs.success) {
     await writeFileIfChanged(path.join(fixtureDir, 'out.jsx'), swcOutputs.code);
     await writeFileIfChanged(

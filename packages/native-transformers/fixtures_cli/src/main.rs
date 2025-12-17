@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json;
+use swc_core::common::comments::{Comment, SingleThreadedComments};
 use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast::EsVersion;
 use swc_core::ecma::ast::Program;
@@ -48,11 +49,13 @@ fn parse_program(
   cm: &swc_core::common::sync::Lrc<SourceMap>,
   filename: &str,
   src: &str,
-) -> Program {
+) -> (Program, Vec<Comment>) {
   let fm = cm.new_source_file(
     FileName::Real(PathBuf::from(filename)).into(),
     src.to_string(),
   );
+  // COMPAT: Preserve comments so hashing matches Babel's generate() output.
+  let comments = SingleThreadedComments::default();
   let lexer = Lexer::new(
     Syntax::Typescript(TsSyntax {
       tsx: true,
@@ -60,10 +63,28 @@ fn parse_program(
     }),
     EsVersion::Es2022,
     StringInput::from(&*fm),
-    None,
+    Some(&comments),
   );
   let mut parser = Parser::new_from(lexer);
-  parser.parse_program().expect("failed to parse program")
+  let program = parser.parse_program().expect("failed to parse program");
+  let mut collected: Vec<Comment> = Vec::new();
+  let (leading, trailing) = comments.take_all();
+
+  {
+    let mut leading = leading.borrow_mut();
+    for (_, mut list) in leading.drain() {
+      collected.append(&mut list);
+    }
+  }
+
+  {
+    let mut trailing = trailing.borrow_mut();
+    for (_, mut list) in trailing.drain() {
+      collected.append(&mut list);
+    }
+  }
+
+  (program, collected)
 }
 
 fn print_program(cm: &swc_core::common::sync::Lrc<SourceMap>, program: &Program) -> String {
@@ -145,7 +166,7 @@ fn main() {
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] parse begin");
   }
-  let program = parse_program(&cm, &input_path, &input_code);
+  let (program, comments) = parse_program(&cm, &input_path, &input_code);
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {
     eprintln!("[cli] parse done");
   }
@@ -165,7 +186,7 @@ fn main() {
   };
   let tf = TransformFile::with_options(
     cm.clone(),
-    Vec::new(),
+    comments,
     TransformFileOptions {
       filename: Some(input_path.clone()),
       ..Default::default()
