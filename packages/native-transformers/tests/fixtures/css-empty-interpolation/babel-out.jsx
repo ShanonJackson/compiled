@@ -15,7 +15,7 @@ const Component = forwardRef(({
     other,
     ...__cmpldp
   } = __cmplp;
-  return <C {...__cmpldp} style={__cmpls} ref={__cmplr} className={ax(["_ca0qidpf _u5f3i2wt _n3tdidpf _19bvi2wt _kqswh2mm", __cmplp.flag && "_4t3i19bv", __cmplp.other && "_4bfu18uv _1hmsglyw _ajmmnqa1 _bfhk32ev", __cmplp.className])} />;
+  return <C {...__cmpldp} style={__cmpls} ref={__cmplr} className={ax(["_ca0qidpf _u5f3i2wt _n3tdidpf _19bvi2wt _kqswh2mm", __cmplp.flag && "_4t3i19bv", __cmplp.other && "_4bfu1r31 _1hmsglyw _ajmmnqa1 _bfhk32ev", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   Component.displayName = 'Component';

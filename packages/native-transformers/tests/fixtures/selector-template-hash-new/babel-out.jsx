@@ -4,8 +4,8 @@ import { ax, ix } from "@compiled/react/runtime";
 const styles = {
   padding: "_1yt414ue",
   rows: "_2z05kxnq",
-  textColor: "_4bfu18uv",
-  textColorImportant: "_4bfu1r81",
+  textColor: "_4bfu1r31",
+  textColorImportant: "_4bfu1snc",
   columnsA: "_yv0e105t",
   columnsB: "_yv0es54b",
   paddingLeft: "_19bv1f4h",

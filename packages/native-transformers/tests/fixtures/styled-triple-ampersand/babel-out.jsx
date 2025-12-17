@@ -11,7 +11,7 @@ const LinkStyled = forwardRef(({
   if (__cmplp.innerRef) {
     throw new Error("Please use 'ref' instead of 'innerRef'.");
   }
-  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_4bfu18uv _1hms8stv _ajmmnqa1 _1r5p1kw7", __cmplp.className])} />;
+  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_4bfu1r31 _1hms8stv _ajmmnqa1 _1r5p1kw7", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   LinkStyled.displayName = 'LinkStyled';

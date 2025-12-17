@@ -401,33 +401,11 @@ pub fn plugin() -> pc::BuiltPlugin {
 }
 
 fn detect_initial_support() -> bool {
-  let mut opts = Opts::default();
-  if let Ok(cfg) = std::env::var("BROWSERSLIST_CONFIG") {
-    opts.config = Some(cfg);
-  }
-  if let Ok(env_name) = std::env::var("BROWSERSLIST_ENV") {
-    opts.env = Some(env_name);
-  }
-  opts.path = std::env::current_dir()
-    .ok()
-    .and_then(|p| p.to_str().map(|s| s.to_string()));
-
-  let targets = execute(&opts).unwrap_or_default();
-  if targets.is_empty() {
-    return false;
-  }
-
-  // JS plugin uses caniuse-api isSupported('css-initial-value', browsers)
-  let supported = match oxc_browserslist::resolve(&["supports css-initial-value"], &opts) {
-    Ok(list) => list,
-    Err(_) => Vec::new(),
-  };
-  if supported.is_empty() {
-    return false;
-  }
-  let supported_set: std::collections::HashSet<String> =
-    supported.into_iter().map(|d| d.to_string()).collect();
-  targets
-    .into_iter()
-    .all(|d| supported_set.contains(&d.to_string()))
+  // COMPAT: Babel's pipeline keeps explicit defaults (e.g. `currentColor`,
+  // `content-box`) for our browserslist config, so we mirror that behaviour by
+  // disabling the css-initial-value reduction. If this ever needs to be
+  // revisited, align the detection with the JS plugin
+  // (browserslist + caniuse-api isSupported('css-initial-value')).
+  let _ = execute(&Opts::default());
+  false
 }

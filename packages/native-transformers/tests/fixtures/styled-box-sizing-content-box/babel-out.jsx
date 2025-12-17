@@ -10,7 +10,7 @@ export const Component = forwardRef(({
   if (__cmplp.innerRef) {
     throw new Error("Please use 'ref' instead of 'innerRef'.");
   }
-  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_vchh18uv", __cmplp.className])} />;
+  return <C {...__cmplp} style={__cmpls} ref={__cmplr} className={ax(["_vchh1ntv", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   Component.displayName = 'Component';

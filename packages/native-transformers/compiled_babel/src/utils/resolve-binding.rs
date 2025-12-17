@@ -974,6 +974,12 @@ fn build_import_binding(
   let metadata = Metadata::new(state).with_parent_span(Some(traversed.span));
   binding.node = Some(traversed.node);
   binding.meta = metadata;
+  // COMPAT: Babel does not eagerly inline import bindings that resolve to
+  // string/template literals. Mark them non-constant so downstream evaluation
+  // preserves the identifier and mirrors Babel output.
+  if matches!(binding.node.as_ref(), Some(Expr::Tpl(_))) {
+    binding.constant = false;
+  }
   binding
 }
 

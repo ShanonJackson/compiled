@@ -6,6 +6,7 @@ use swc_core::ecma::ast::{
 
 use crate::types::Metadata;
 use crate::utils_evaluate_expression::evaluate_expression;
+use crate::utils_resolve_binding::resolve_binding;
 
 /// Converts a template literal into a string by evaluating each embedded expression and
 /// concatenating it with the surrounding quasi values. Mirrors the behaviour of the Babel helper
@@ -211,11 +212,27 @@ pub(crate) fn expression_type(expr: &Expr) -> &'static str {
 pub(crate) fn expression_to_string(expression: &Expr, meta: Metadata) -> String {
   match expression {
     Expr::Lit(lit) => literal_to_string(lit),
-    Expr::Ident(_) | Expr::Member(_) => {
+    Expr::Ident(ident) => {
       let pair = evaluate_expression(expression, meta.clone());
       if pair.value == *expression {
-        // If we couldn't resolve the identifier/member, leave the key empty to match
+        if let Some(binding) = resolve_binding(ident.sym.as_ref(), meta.clone(), evaluate_expression)
+        {
+          if let Some(node) = binding.node {
+            if node != *expression {
+              return expression_to_string(&node, binding.meta);
+            }
+          }
+        }
+        // If we couldn't resolve the identifier, leave the key empty to match
         // Babel's non-panicking behaviour when objectPropertyToString can't evaluate.
+        return String::new();
+      }
+
+      expression_to_string(&pair.value, pair.meta)
+    }
+    Expr::Member(_) => {
+      let pair = evaluate_expression(expression, meta.clone());
+      if pair.value == *expression {
         return String::new();
       }
 

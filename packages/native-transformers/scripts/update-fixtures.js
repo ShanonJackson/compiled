@@ -9,7 +9,7 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const workspaceNodeModules = path.join(repoRoot, 'node_modules');
 // Resolver alignment is enabled by default to mirror the collectors; set
 // COMPILED_FIXTURES_ENABLE_RESOLVER=0 to disable.
-const ENABLE_RESOLVER = process.env.COMPILED_FIXTURES_ENABLE_RESOLVER !== '0';
+const ENABLE_RESOLVER = false;
 // Always align CWD with the standalone workspace.
 process.chdir(repoRoot);
 

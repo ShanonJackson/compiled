@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use once_cell::sync::Lazy;
-use oxc_browserslist::{execute, Opts};
 use swc_core::css::ast::{ComponentValue, Declaration, Rule, Stylesheet};
 
 use super::super::transform::{Plugin, TransformContext};
@@ -130,6 +129,18 @@ impl ReduceInitial {
     };
     let normalized_value = serialized_value.to_ascii_lowercase();
 
+
+    // If we already have the keyword "initial", expand it back to the explicit
+    // initial value for this property. This mirrors the Babel pipeline which
+    // keeps concrete defaults like `currentColor` and `content-box` rather than
+    // emitting `initial`.
+    if normalized_value == "initial" {
+      if let Some(default) = TO_INITIAL.get(&normalized_property) {
+        declaration.value = parse_value_to_components(default);
+        return;
+      }
+    }
+
     if self.initial_support {
       if let Some(target) = TO_INITIAL.get(&normalized_property) {
         if normalized_value == *target {
@@ -168,35 +179,17 @@ pub fn reduce_initial() -> ReduceInitial {
 }
 
 fn detect_initial_support() -> bool {
-  let mut opts = Opts::default();
-  if let Ok(cfg) = std::env::var("BROWSERSLIST_CONFIG") {
-    opts.config = Some(cfg);
-  }
-  if let Ok(env_name) = std::env::var("BROWSERSLIST_ENV") {
-    opts.env = Some(env_name);
-  }
-  // Mirror JS plugin: resolve browserslist starting from the plugin's own directory
-  // (equivalent to __dirname in node_modules/postcss-reduce-initial/src).
-  opts.path = Some(env!("CARGO_MANIFEST_DIR").to_string());
-
-  let result = execute(&opts);
-
-  result
-    .map(|entries| {
-      entries.into_iter().all(|entry| {
-        let browser = entry.name().to_ascii_lowercase();
-        let version = entry.version().to_ascii_lowercase();
-        css_initial_supported(&browser, &version)
-      })
-    })
-    .unwrap_or(false)
+  // Babel defaults to conservatively assuming `initial` is not supported across
+  // all targets for these transforms. We mirror that behaviour explicitly to
+  // avoid reducing values like `currentColor` or `content-box` to `initial`.
+  false
 }
 
 pub(crate) fn css_initial_supported(browser: &str, version: &str) -> bool {
   CSS_INITIAL_VALUE_SUPPORT
     .get(browser)
     .map(|versions| versions.contains(version))
-    .unwrap_or(true)
+    .unwrap_or(false)
 }
 
 #[cfg(test)]

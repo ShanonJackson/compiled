@@ -19,7 +19,7 @@ const GridCard = forwardRef(({
     secondary,
     ...__cmpldp
   } = __cmplp;
-  return <C {...__cmpldp} style={__cmpls} ref={__cmplr} className={ax(["_1yt4v47k _1ii7pazf _yyhy4co5 _1e0c11p5 _2z05kxnq _yv0es54b _4t3i1ejb _4bfu1r81", __cmplp.dense && "_19bv1f4h _u5f31y44", __cmplp.initialDirection && "_yyhydpws _2lx2vrvc _2z051341 _yv0ed9e1", __cmplp.initialDecoration && "_4bfu18uv", __cmplp.importantDecoration && "_4bfu1r81", __cmplp.rowDirection && "_2lx2vrvc", __cmplp.secondary && "_1ii7pazf _yyhy4co5 _19bv1f4h", __cmplp.className])} />;
+  return <C {...__cmpldp} style={__cmpls} ref={__cmplr} className={ax(["_1yt4v47k _1ii7pazf _yyhy4co5 _1e0c11p5 _2z05kxnq _yv0es54b _4t3i1ejb _4bfu1snc", __cmplp.dense && "_19bv1f4h _u5f31y44", __cmplp.initialDirection && "_yyhydpws _2lx2vrvc _2z051341 _yv0ed9e1", __cmplp.initialDecoration && "_4bfu18uv", __cmplp.importantDecoration && "_4bfu1r81", __cmplp.rowDirection && "_2lx2vrvc", __cmplp.secondary && "_1ii7pazf _yyhy4co5 _19bv1f4h", __cmplp.className])} />;
 });
 if (process.env.NODE_ENV !== 'production') {
   GridCard.displayName = 'GridCard';

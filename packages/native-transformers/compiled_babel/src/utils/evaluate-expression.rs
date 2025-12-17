@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use swc_atoms::Atom;
 use swc_core::common::{Span, Spanned, SyntaxContext};
 use swc_core::ecma::ast::{BinExpr, Expr, Lit, Number, Str, Tpl};
 use swc_core::ecma::utils::{ExprCtx, ExprExt, Value};
@@ -159,6 +158,12 @@ fn evaluate_binary_expression(bin: &BinExpr) -> Option<Expr> {
 }
 
 fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
+  if matches!(expr, Expr::Tpl(_)) {
+    // Template literals are handled separately to mirror Babel's conservative
+    // `path.evaluate` behaviour and to avoid cross-file inlining.
+    return None;
+  }
+
   if references_mutated_identifiers(expr, meta) {
     return None;
   }
@@ -258,24 +263,46 @@ fn try_static_evaluate(expr: &Expr, meta: &Metadata) -> Option<Expr> {
   }
 }
 
-fn try_evaluate_template_literal(
+/// Collapse a template literal into a single string literal when all
+/// interpolations resolve to literals within the same file. This mirrors the
+/// narrow static folding Babel performs via `path.evaluate` while avoiding
+/// cross-file inlining of imported bindings.
+fn try_evaluate_literal_template(
   tpl: &Tpl,
   meta: Metadata,
   evaluate_expression: EvaluateExpression,
 ) -> Option<ResultPair> {
-  let mut current_meta = meta;
-  let mut result = String::new();
+  let mut acc = String::new();
 
   for (index, quasi) in tpl.quasis.iter().enumerate() {
-    result.push_str(quasi.raw.as_ref());
+    acc.push_str(quasi.raw.as_ref());
 
     if let Some(expr) = tpl.exprs.get(index) {
-      let pair = evaluate_expression(expr, current_meta.clone());
-      current_meta = pair.meta.clone();
+      let pair = (evaluate_expression)(expr, meta.clone());
+
+      // Only inline when the expression resolved to a literal without crossing
+      // file boundaries. This aligns with Babel's `path.evaluate`, which
+      // refrains from folding when identifiers come from imported bindings.
+      let same_state = std::rc::Rc::ptr_eq(&meta.state, &pair.meta.state);
+      if !same_state {
+        return None;
+      }
+
+      let same_file = pair
+        .meta
+        .state()
+        .filename
+        .as_ref()
+        .map(|filename| meta.state().filename.as_ref() == Some(filename))
+        .unwrap_or(false);
+
+      if !same_file {
+        return None;
+      }
 
       match pair.value {
-        Expr::Lit(Lit::Str(str_lit)) => result.push_str(str_lit.value.as_ref()),
-        Expr::Lit(Lit::Num(num_lit)) => result.push_str(&num_lit.value.to_string()),
+        Expr::Lit(Lit::Str(str_lit)) => acc.push_str(str_lit.value.as_ref()),
+        Expr::Lit(Lit::Num(num_lit)) => acc.push_str(&num_lit.value.to_string()),
         _ => return None,
       }
     }
@@ -283,13 +310,12 @@ fn try_evaluate_template_literal(
 
   let literal = Expr::Lit(Lit::Str(Str {
     span: tpl.span,
-    value: Atom::from(result),
+    value: acc.into(),
     raw: None,
   }));
 
-  Some(create_result_pair(literal, current_meta))
+  Some(create_result_pair(literal, meta))
 }
-
 /// Mirrors the Babel `evaluateExpression` helper by recursively resolving and
 /// evaluating expressions into literal forms where possible while preserving the
 /// metadata threaded through each traversal.
@@ -308,14 +334,6 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
       let pair = traverse_member_expression(member, updated_meta.clone(), evaluate_expression);
       evaluated_value = Some(pair.value);
       updated_meta = pair.meta;
-    }
-    Expr::Tpl(tpl) => {
-      if let Some(pair) =
-        try_evaluate_template_literal(tpl, updated_meta.clone(), evaluate_expression)
-      {
-        evaluated_value = Some(pair.value);
-        updated_meta = pair.meta;
-      }
     }
     Expr::Fn(fn_expr) => {
       let pair = traverse_function(target_expression, updated_meta.clone(), evaluate_expression);
@@ -343,6 +361,14 @@ pub fn evaluate_expression(expression: &Expr, meta: Metadata) -> ResultPair {
       let pair = traverse_call_expression(call, updated_meta.clone(), evaluate_expression);
       evaluated_value = Some(pair.value);
       updated_meta = pair.meta;
+    }
+    Expr::Tpl(tpl) => {
+      if let Some(pair) =
+        try_evaluate_literal_template(tpl, updated_meta.clone(), evaluate_expression)
+      {
+        evaluated_value = Some(pair.value);
+        updated_meta = pair.meta;
+      }
     }
     Expr::Bin(bin) => {
       let pair = traverse_binary_expression(bin, updated_meta.clone(), evaluate_expression);

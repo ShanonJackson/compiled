@@ -3,7 +3,7 @@ import { ax, ix } from "@compiled/react/runtime";
 import React from 'react';
 import { Pressable, Text } from '@atlaskit/primitives/compiled';
 const styles = {
-  trigger: "_4bfu18uv _1hms8stv _ajmmnqa1 _2rko12b0 _bfhk18uv _1bsb1ns9 _ca0qze3t _u5f3ze3t _n3tdze3t _19bvze3t _9oik18uv _1bnxglyw _jf4cnqa1"
+  trigger: "_4bfu1r31 _1hms8stv _ajmmnqa1 _2rko12b0 _bfhk1j28 _1bsb1ns9 _ca0qze3t _u5f3ze3t _n3tdze3t _19bvze3t _9oik1r31 _1bnxglyw _jf4cnqa1"
 };
 export const Example = () => <Pressable xcss={styles.trigger}>
 		<Text size="large" weight="bold" color="color.text">
