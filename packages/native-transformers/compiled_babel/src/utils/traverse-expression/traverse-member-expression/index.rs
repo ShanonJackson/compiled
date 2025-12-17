@@ -112,9 +112,20 @@ pub(crate) fn traverse_member_expression_with_arguments(
   call_arguments: Option<&[ExprOrSpread]>,
   evaluate_expression: EvaluateExpression,
 ) -> ResultPair {
-  if let MemberProp::Computed(comp) = &expression.prop {
-    if !matches!(&*comp.expr, Expr::Lit(_)) {
-      return create_result_pair(Expr::Member(expression.clone()), meta);
+  // Deopt when any segment in the member chain uses a computed (non-literal)
+  // property, mirroring Babel which leaves these unresolved and therefore
+  // preserves runtime lookups like `containerBackgrounds[props.type].default`.
+  let mut cursor: &MemberExpr = expression;
+  loop {
+    if let MemberProp::Computed(comp) = &cursor.prop {
+      if !matches!(&*comp.expr, Expr::Lit(_)) {
+        return create_result_pair(Expr::Member(expression.clone()), meta);
+      }
+    }
+
+    match cursor.obj.as_ref() {
+      Expr::Member(inner) => cursor = inner,
+      _ => break,
     }
   }
 
