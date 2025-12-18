@@ -123,7 +123,14 @@ fn print_pattern(pat: &Pat) -> String {
 
 fn format_comment(comment: &Comment) -> String {
   match comment.kind {
-    CommentKind::Line => format!("//{}", comment.text),
+    CommentKind::Line => {
+      let text = comment.text.as_ref();
+      if text.is_empty() || text.starts_with(char::is_whitespace) {
+        format!("//{}", text)
+      } else {
+        format!("// {}", text)
+      }
+    }
     CommentKind::Block => format!("/*{}*/", comment.text),
   }
 }
@@ -281,7 +288,7 @@ fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
   }
 
   fn print_expr(e: &Expr, meta: &Metadata) -> String {
-    match e {
+    let mut code = match e {
       Expr::Ident(id) => id.sym.as_ref().to_string(),
       Expr::Lit(Lit::Num(n)) => {
         let mut s = n.value.to_string();
@@ -325,6 +332,46 @@ fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
         format!("[{}]", items.join(", "))
       }
       Expr::Call(call) => {
+        let call_span = call.span();
+        if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+          if let Some(filename) = &meta.state().filename {
+            if filename.contains(&label) {
+              if call_span == DUMMY_SP {
+                eprintln!("[css-debug] call span is DUMMY_SP");
+              } else {
+                eprintln!(
+                  "[css-debug] call span=({:?},{:?})",
+                  call_span.lo(),
+                  call_span.hi()
+                );
+              }
+            }
+          }
+        }
+        if let Ok(snippet) = meta.state().file.source_map.span_to_snippet(call.span()) {
+          let mut lines: Vec<String> = snippet
+            .lines()
+            .map(|line| line.trim_start().to_string())
+            .collect();
+          if let Some(last_line) = lines.last_mut() {
+            *last_line = last_line.trim_end_matches(',').to_string();
+          }
+          if let Some(last) = lines.last() {
+            if last.trim() == ")" {
+              lines.pop();
+              if let Some(prev) = lines.last_mut() {
+                if prev.ends_with(',') {
+                  prev.pop();
+                }
+                prev.push(')');
+              } else {
+                lines.push(")");
+              }
+            }
+          }
+          let normalized = lines.join("\n");
+          return normalized;
+        }
         let callee = match &call.callee {
           Callee::Expr(c) => print_expr(c.as_ref(), meta),
           _ => "".to_string(),
@@ -333,7 +380,81 @@ fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
         for a in &call.args {
           args.push(print_expr(&a.expr, meta));
         }
-        format!("{}({})", callee, args.join(", "))
+        let call_span = call.span();
+        let arg_spans: Vec<(u32, u32)> = call
+          .args
+          .iter()
+          .map(|arg| {
+            let span = arg.expr.span();
+            (span.lo().0, span.hi().0)
+          })
+          .collect();
+        let mut inline_comments: Vec<(u32, String)> = meta
+          .state()
+          .file
+          .comments
+          .iter()
+          .filter(|comment| {
+            let lo = comment.span.lo.0;
+            let hi = comment.span.hi.0;
+            if lo < call_span.lo().0 || hi > call_span.hi().0 {
+              return false;
+            }
+
+            for (arg_lo, arg_hi) in &arg_spans {
+              if lo >= *arg_lo && hi <= *arg_hi {
+                return false;
+              }
+            }
+
+            true
+          })
+          .cloned()
+          .map(|comment| (comment.span.lo.0, format_comment(&comment)))
+          .collect();
+        if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
+          if let Some(filename) = &meta.state().filename {
+            if filename.contains(&label) {
+              if let Callee::Expr(expr) = &call.callee {
+                if let Expr::Ident(ident) = expr.as_ref() {
+                  if ident.sym == *"getConicGradient" {
+                    let span = call.span();
+                    eprintln!(
+                      "[css-debug] call comments callee={} count={} call_span=({:?},{:?})",
+                      ident.sym,
+                      inline_comments.len(),
+                      span.lo(),
+                      span.hi()
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+        if !inline_comments.is_empty() {
+          inline_comments.sort_by_key(|(pos, _)| *pos);
+          let comments_block = inline_comments
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<String>>()
+            .join("\n");
+          if !args.is_empty() {
+            args[0] = format!("{comments_block}\n{}", args[0]);
+          } else {
+            args.push(comments_block);
+          }
+        }
+        let has_multiline_args = args
+          .iter()
+          .any(|arg| arg.starts_with("//") || arg.starts_with("/*") || arg.contains('\n'));
+        let separator = if has_multiline_args { ",\n" } else { ", " };
+        let args_code = args.join(separator);
+        if has_multiline_args && !args_code.is_empty() {
+          format!("{callee}(\n{args_code})")
+        } else {
+          format!("{callee}({args_code})")
+        }
       }
       Expr::TaggedTpl(tagged) => {
         // Print tag identifier and raw template contents preserving quasis
@@ -513,6 +634,13 @@ fn babel_like_code_for_hash(expr: &Expr, meta: &Metadata) -> String {
         "unsupported expression in keyframes hash serialization: {:?}",
         other
       ),
+    };
+
+    let leading = leading_comments_for_span(meta, e.span());
+    if leading.is_empty() {
+      code
+    } else {
+      format!("{}\n{}", leading.join("\n"), code)
     }
   }
 
@@ -1522,11 +1650,21 @@ where
             } else {
               normalized
             };
+            let span_snippet = meta
+              .state()
+              .file
+              .source_map
+              .span_to_snippet(node_expression.span())
+              .unwrap_or_else(|_| "<span err>".to_string());
+            let span = node_expression.span();
             eprintln!(
-              "[css-debug] fixture={label} var_name={} hashed={} normalized_var_expr={}",
+              "[css-debug] fixture={label} var_name={} hashed={} normalized_var_expr={} span=({:?},{:?}) snippet={}",
               variable_name,
               name,
-              normalized_truncated
+              normalized_truncated,
+              span.lo(),
+              span.hi(),
+              span_snippet.replace('\n', "\\n")
             );
           }
         }
@@ -2044,6 +2182,7 @@ where
             get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
           normalize_props_usage(&mut variable_expression);
 
+          let variable_name = babel_like_expression(&variable_expression, meta);
           let name = format!("--_{}", hash(&variable_name));
 
           variables.push(Variable {
@@ -2443,6 +2582,7 @@ where
         let (mut variable_expression, variable_name) =
           get_variable_declarator_value_for_parent_expr(&prop_value, &updated_meta);
         normalize_props_usage(&mut variable_expression);
+        let variable_name = babel_like_expression(&variable_expression, meta);
         let name = format!("--_{}", hash(&variable_name));
         if let Ok(label) = std::env::var("DEBUG_CSS_FIXTURE") {
           if let Some(filename) = &updated_meta.state().filename {

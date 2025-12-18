@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use indexmap::IndexSet;
 use swc_core::common::{input::StringInput, FileName, SourceMap};
-use swc_core::css::ast::Stylesheet;
+use swc_core::css::ast::{ComponentValue, Rule, Stylesheet};
 use swc_core::css::codegen::{writer::basic::BasicCssWriter, CodeGenerator, CodegenConfig, Emit};
 use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
@@ -18,6 +18,9 @@ use super::plugins::{
   increase_specificity::increase_specificity, nested::nested, normalize_css::normalize_css,
   normalize_whitespace::normalize_whitespace, parent_orphaned_pseudos::parent_orphaned_pseudos,
   sort_atomic_style_sheet::sort_atomic_style_sheet,
+};
+use super::plugins::expand_shorthands::types::{
+  declaration_property_name, serialize_component_values,
 };
 
 /// Options equivalent to `packages/css/src/transform.ts`.
@@ -37,6 +40,65 @@ pub struct TransformCssOptions {
 pub struct TransformCssResult {
   pub sheets: Vec<String>,
   pub class_names: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct DebugTransparent;
+
+impl Plugin for DebugTransparent {
+  fn name(&self) -> &'static str {
+    "debug-transparent"
+  }
+
+  fn run(&self, stylesheet: &mut Stylesheet, _ctx: &mut TransformContext<'_>) {
+    eprintln!("[debug-transparent] start scan");
+    fn visit_components(values: &mut [ComponentValue]) {
+      for value in values {
+        match value {
+          ComponentValue::Declaration(decl) => {
+            let prop = declaration_property_name(&decl.name);
+            if let Some(val) = serialize_component_values(&decl.value) {
+              if prop.eq_ignore_ascii_case("background-color") {
+                eprintln!("[debug-transparent] bg prop {} => {}", prop, val);
+              } else {
+                let lower = val.to_ascii_lowercase();
+                if lower.contains("transparent")
+                  || lower.contains("#0000")
+                  || lower.contains("rgba(0,0,0,0)")
+                  || lower.contains("rgba(0 0 0 / 0)")
+                {
+                  eprintln!("[debug-transparent] {} => {}", prop, val);
+                }
+              }
+            }
+          }
+          ComponentValue::QualifiedRule(rule) => visit_components(&mut rule.block.value),
+          ComponentValue::AtRule(at) => {
+            if let Some(block) = &mut at.block {
+              visit_components(&mut block.value);
+            }
+          }
+          ComponentValue::SimpleBlock(block) => visit_components(&mut block.value),
+          ComponentValue::ListOfComponentValues(list) => visit_components(&mut list.children),
+          ComponentValue::Function(fun) => visit_components(&mut fun.value),
+          ComponentValue::KeyframeBlock(block) => visit_components(&mut block.block.value),
+          _ => {}
+        }
+      }
+    }
+
+    for rule in &mut stylesheet.rules {
+      match rule {
+        Rule::QualifiedRule(q) => visit_components(&mut q.block.value),
+        Rule::AtRule(a) => {
+          if let Some(block) = &mut a.block {
+            visit_components(&mut block.value);
+          }
+        }
+        Rule::ListOfComponentValues(list) => visit_components(&mut list.children),
+      }
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -265,17 +327,10 @@ pub(crate) fn transform_css_via_swc_pipeline(
   for plugin in normalize_css(&options) {
     pipeline.push(plugin);
   }
-  // COMPAT: Run minimal color minification before hashing so value-based
-  // class name hashes match Babel (which normalizes colors pre-atomicify).
-  pipeline.push(Box::new(super::plugins::colormin_lite::colormin_lite()));
-  pipeline.push(Box::new(expand_shorthands()));
-  if options.optimize_css.unwrap_or(true) {
-    // COMPAT: Re-run reduce-initial after shorthands are expanded so properties
-    // like text-decoration-color are normalized with the final values.
-    pipeline.push(Box::new(
-      super::plugins::reduce_initial::reduce_initial(),
-    ));
+  if std::env::var("COMPILED_DEBUG_TRANSPARENT").is_ok() {
+    pipeline.push(Box::new(DebugTransparent));
   }
+  pipeline.push(Box::new(expand_shorthands()));
   pipeline.push(Box::new(atomicify_rules()));
 
   if flatten_multiple_selectors_option {

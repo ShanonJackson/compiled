@@ -393,6 +393,18 @@ fn build_processor(options: &TransformCssOptions, collector: &AtomicCollector) -
   }
   {
     use super::plugins::normalize_css_engine as nce;
+    plugins.push(nce::normalize_positions::plugin());
+  }
+  {
+    use super::plugins::normalize_css_engine as nce;
+    plugins.push(nce::normalize_timing_functions::plugin());
+  }
+  {
+    use super::plugins::normalize_css_engine as nce;
+    plugins.push(nce::minify_gradients::plugin());
+  }
+  {
+    use super::plugins::normalize_css_engine as nce;
     plugins.push(nce::calc::plugin());
   }
   if std::env::var("COMPILED_CLI_TRACE").is_ok() {

@@ -401,11 +401,15 @@ pub fn plugin() -> pc::BuiltPlugin {
 }
 
 fn detect_initial_support() -> bool {
-  // COMPAT: Babel's pipeline keeps explicit defaults (e.g. `currentColor`,
-  // `content-box`) for our browserslist config, so we mirror that behaviour by
-  // disabling the css-initial-value reduction. If this ever needs to be
-  // revisited, align the detection with the JS plugin
-  // (browserslist + caniuse-api isSupported('css-initial-value')).
-  let _ = execute(&Opts::default());
+  // Align with the JS pipeline: only reduce to `initial` when running with an
+  // explicit browserslist configuration (mirroring cssnano's detection via
+  // browserslist + caniuse-api). Without a config, keep explicit defaults like
+  // `transparent` and `currentColor`.
+  if let Ok(val) = std::env::var("BROWSERSLIST_CONFIG") {
+    if !val.is_empty() {
+      let _ = execute(&Opts::default());
+      return true;
+    }
+  }
   false
 }

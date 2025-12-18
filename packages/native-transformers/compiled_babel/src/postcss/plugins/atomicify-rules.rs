@@ -11,6 +11,7 @@ use swc_core::css::parser::{parse_string_input, parser::ParserConfig};
 
 use super::super::transform::{Plugin, TransformContext};
 use crate::utils_hash::hash;
+use crate::postcss::plugins::expand_shorthands::types::declaration_property_name;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AtomicifyRules;
@@ -228,9 +229,21 @@ fn atomicify_declaration(
   ctx: &mut TransformContext<'_>,
   at_rule_label: Option<&str>,
 ) -> QualifiedRule {
-  let selector_text = build_atomic_selector(declaration, selectors, options, ctx, at_rule_label);
+  let normalized_decl = declaration.clone();
+
+  let selector_text =
+    build_atomic_selector(&normalized_decl, selectors, options, ctx, at_rule_label);
+  if std::env::var("COMPILED_ATOMICIFY_DEBUG").is_ok() {
+    if let Some(value) = serialize_component_values(&normalized_decl.value) {
+      let name = declaration_property_name(&normalized_decl.name);
+      eprintln!(
+        "[atomicify] selector='{}' prop={} value={}",
+        selector_text, name, value
+      );
+    }
+  }
   let mut rule = parse_selector_as_rule(&selector_text);
-  rule.block.value = vec![ComponentValue::Declaration(Box::new(declaration.clone()))];
+  rule.block.value = vec![ComponentValue::Declaration(Box::new(normalized_decl))];
   rule
 }
 

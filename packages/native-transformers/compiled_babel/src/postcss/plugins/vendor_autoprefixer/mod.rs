@@ -459,9 +459,13 @@ impl Plugin for VendorAutoprefixer {
 }
 
 pub fn resolve_browserslist_targets() -> Vec<String> {
-  // Use oxc_browserslist to resolve defaults (no repo-specific options requested)
   let mut out = Vec::new();
-  let opts = oxc_browserslist::Opts::default();
+  let mut opts = oxc_browserslist::Opts::default();
+  if let Ok(cfg) = std::env::var("BROWSERSLIST_CONFIG") {
+    if !cfg.is_empty() {
+      opts.config = Some(cfg);
+    }
+  }
   match oxc_browserslist::execute(&opts) {
     Ok(list) => {
       for item in list {

@@ -127,7 +127,28 @@ impl ReduceInitial {
     let Some(serialized_value) = serialize_component_values(&declaration.value) else {
       return;
     };
-    let normalized_value = serialized_value.to_ascii_lowercase();
+    if std::env::var("COMPILED_REDUCE_INITIAL_DEBUG").is_ok()
+      && normalized_property == "background-color"
+    {
+      eprintln!(
+        "[reduce_initial] prop={} value={}",
+        normalized_property, serialized_value
+      );
+    }
+    let mut normalized_value = serialized_value.to_ascii_lowercase();
+
+    // COMPAT: Earlier normalization (e.g. color minification) can rewrite
+    // `transparent` to equivalent zero-alpha colors such as `#0000`. Treat
+    // those forms as `transparent` so initial reduction remains effective.
+    if normalized_value == "#0000"
+      || normalized_value == "#00000000"
+      || normalized_value == "rgba(0,0,0,0)"
+      || normalized_value == "rgba(0 0 0 / 0)"
+      || normalized_value == "hsla(0,0%,0%,0)"
+      || normalized_value == "hsla(0 0% 0% / 0)"
+    {
+      normalized_value = "transparent".to_string();
+    }
 
 
     // If we already have the keyword "initial", expand it back to the explicit
@@ -179,9 +200,14 @@ pub fn reduce_initial() -> ReduceInitial {
 }
 
 fn detect_initial_support() -> bool {
-  // Babel defaults to conservatively assuming `initial` is not supported across
-  // all targets for these transforms. We mirror that behaviour explicitly to
-  // avoid reducing values like `currentColor` or `content-box` to `initial`.
+  // Align with the JS pipeline: only reduce to `initial` when running with an
+  // explicit browserslist configuration (mirroring cssnano's detection via
+  // browserslist + caniuse-api). Without a config, keep explicit defaults.
+  if let Ok(val) = std::env::var("BROWSERSLIST_CONFIG") {
+    if !val.is_empty() {
+      return true;
+    }
+  }
   false
 }
 
