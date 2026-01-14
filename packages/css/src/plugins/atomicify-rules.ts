@@ -39,7 +39,6 @@ const atomicClassName = (node: Declaration, opts: PluginOpts) => {
   const selectors = opts.selectors ? opts.selectors.join('') : '';
   const prefix = opts.classHashPrefix ?? '';
   const group = hash(`${prefix}${opts.atRule}${selectors}${node.prop}`).slice(0, 4);
-
   const value = node.important ? node.value + node.important : node.value;
   const valueHash = hash(value).slice(0, 4);
 
@@ -101,13 +100,10 @@ const buildAtomicSelector = (node: Declaration, opts: PluginOpts) => {
 
     const compressedClassName =
       classNameCompressionMap && classNameCompressionMap[fullClassName.slice(1)];
+    const appliedClassName = compressedClassName ?? fullClassName;
 
-    if (compressedClassName) {
-      // Use compressed class name if compressedClassName is available
-      selectors.push(replaceNestingSelector(normalizedSelector, compressedClassName));
-    } else {
-      selectors.push(replaceNestingSelector(normalizedSelector, fullClassName));
-    }
+    const replacedSelector = replaceNestingSelector(normalizedSelector, appliedClassName);
+    selectors.push(replacedSelector);
 
     if (opts.callback) {
       opts.callback(fullClassName);

@@ -1,0 +1,11 @@
+[
+  "._4t3ipxbi{height:var(--ds-space-200,1pc)}",
+  "._gx371q9c [data-component-selector=jira-issue-field-inline-edit-read-view-container]{white-space:nowrap}",
+  "._1bt61i6y [data-component-selector=jira-issue-field-inline-edit-read-view-container]{margin-left:var(--ds-space-negative-025,-2px)}",
+  "._1bb7idpf [data-component-selector=jira-issue-field-inline-edit-read-view-container]{margin-bottom:0}",
+  "._wv4j6up6 [data-component-selector=jira-issue-field-inline-edit-read-view-container]{margin-top:calc(var(--ds-space-negative-100, -8px)*.125)}",
+  "._1nf9idpf [data-component-selector=jira-issue-field-inline-edit-read-view-container]{margin-right:0}",
+  "._1dbovuon:not(:has([data-component-selector=jira-issue-field-original-estimate-read-view-container],[data-component-selector=jira-issue-field-inline-edit-read-view-container])){z-index:var(--ds-surface,#fff)}",
+  "._lcxvglyw{pointer-events:none}",
+  "._g51qdabe:not(:has([data-component-selector=jira-issue-field-original-estimate-read-view-container],[data-component-selector=jira-issue-field-inline-edit-read-view-container])){margin-right:calc(var(--ds-space-600, 3pc) + var(--ds-space-100, 8px))}"
+]

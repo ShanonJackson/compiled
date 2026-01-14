@@ -1,0 +1,15 @@
+[
+  "._4cvr1h6o{align-items:center}",
+  "._yv0e1oe0{grid-template-columns:var(--_szi7k6)}",
+  "._umaiuhbd{grid-auto-rows:var(--_13i0unl)}",
+  "._4t3i1b40{height:var(--_12p36mt)}",
+  "._fiawglyw:empty{display:none}",
+  "@container cardContainer (max-width: 75px){._ek32idpf{width:0}._6xcf15vq{overflow-x:hidden}._wkiw15vq{overflow-y:hidden}._14xd15vq{visibility:hidden}}",
+  "._1e0c1txw{display:flex}",
+  "._1e0c11p5{display:grid}",
+  "._zulp81bl{gap:0 8px}",
+  "._zulp1cud{gap:4px 8px}",
+  "._1bsb1ris{width:max-content}",
+  "._1bsb1osq{width:100%}",
+  "._130bglyw>div:nth-of-type(1n+4){display:none}"
+]

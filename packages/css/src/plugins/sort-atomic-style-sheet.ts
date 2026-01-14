@@ -111,7 +111,6 @@ export const sortAtomicStyleSheet = (config: {
         }
         sortAtRulePseudoSelectors(node);
       }
-
       root.nodes = [...catchAll, ...rules, ...atRules.map((atRule) => atRule.node)];
     },
   };

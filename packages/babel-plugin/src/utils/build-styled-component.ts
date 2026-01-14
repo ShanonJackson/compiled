@@ -262,7 +262,6 @@ export const buildStyledComponent = (tag: Tag, cssOutput: CSSOutput, meta: Metad
     ],
     ...conditionalCssOutput.classNames,
   ];
-
   return styledTemplate(
     {
       classNames,

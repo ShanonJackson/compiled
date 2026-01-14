@@ -81,7 +81,12 @@ const transformCssItem = (
       };
 
     default:
-      const css = transformCss(getItemCss(item), meta.state.opts);
+      const rawCss = getItemCss(item);
+      if (process.env.COMPILED_CSS_TRACE) {
+        // eslint-disable-next-line no-console
+        console.log('[babel][transform-css-item] css', rawCss);
+      }
+      const css = transformCss(rawCss, meta.state.opts);
       const className = compressClassNamesForRuntime(
         css.classNames,
         meta.state.opts.classNameCompressionMap

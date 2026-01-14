@@ -6,6 +6,10 @@
 pub mod plugins;
 pub mod sort;
 pub mod transform;
+pub mod metrics;
+
+#[cfg(feature = "postcss_engine")]
+pub mod postcss_pipeline;
 pub mod utils;
 pub mod value_parser;
 

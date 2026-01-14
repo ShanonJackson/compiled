@@ -1,12 +1,26 @@
 'use strict';
 
 const path = require('path');
-const { loadBinding } = require('@swc/core/node');
 
 let binding;
 
 function getBinding() {
   if (!binding) {
+    let loadBinding;
+    try {
+      // Preferred entrypoint when available
+      ({ loadBinding } = require('@swc/core/node'));
+    } catch (e1) {
+      try {
+        // Older builds exposed a lib/node file
+        ({ loadBinding } = require('@swc/core/lib/node'));
+      } catch (e2) {
+        throw new Error(
+          "Unable to load SWC binding loader '@swc/core/node'. For fixtures, prefer using the native CLI (fixtures_cli)."
+        );
+      }
+    }
+
     try {
       binding = loadBinding(path.join(__dirname, 'native'), '@compiled', 'compiled_babel');
     } catch (error) {
@@ -16,12 +30,40 @@ function getBinding() {
       throw error;
     }
   }
-
   return binding;
 }
 
-exports.transform = function transform(program, options) {
-  return getBinding().transform(program, options);
+function unique(list) {
+  const result = [];
+
+  for (const value of list) {
+    if (!result.includes(value)) {
+      result.push(value);
+    }
+  }
+
+  return result;
+}
+
+exports.transform = function transform(program, config) {
+  const normalizedConfig = config || {};
+  const { options: rawOptions, ...restConfig } = normalizedConfig;
+  const { onIncludedFiles, ...options } = rawOptions || {};
+
+  const result = getBinding().transform(program, {
+    ...restConfig,
+    options,
+  });
+
+  if (typeof onIncludedFiles === 'function') {
+    const included = result?.metadata?.includedFiles || [];
+
+    if (included.length > 0) {
+      onIncludedFiles(unique(included));
+    }
+  }
+
+  return result;
 };
 
 exports.load = getBinding;

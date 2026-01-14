@@ -101,6 +101,12 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -303,22 +309,34 @@ dependencies = [
  "once_cell",
  "oxc-browserslist",
  "oxc_resolver",
+ "percent-encoding",
+ "postcss",
  "regex",
+ "ryu-js",
  "serde",
  "serde_json",
  "swc_atoms",
  "swc_core",
+ "swc_ecma_codegen",
+ "swc_ecma_parser",
+ "tempfile",
+ "url",
 ]
 
 [[package]]
 name = "compiled_strip_runtime"
 version = "0.1.0"
 dependencies = [
+ "compiled_babel",
  "insta",
  "oxc_resolver",
  "serde",
  "serde_json",
  "swc_core",
+ "swc_ecma_codegen",
+ "swc_ecma_parser",
+ "tempfile",
+ "urlencoding",
 ]
 
 [[package]]
@@ -533,6 +551,19 @@ name = "find-msvc-tools"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52051878f80a721bb68ebfbc930e07b65ba72f2da88968ea5c06fd6ca3d3a127"
+
+[[package]]
+name = "fixtures_cli"
+version = "0.1.0"
+dependencies = [
+ "compiled_babel",
+ "compiled_strip_runtime",
+ "serde",
+ "serde_json",
+ "swc_core",
+ "swc_ecma_codegen",
+ "swc_ecma_parser",
+]
 
 [[package]]
 name = "flate2"
@@ -1228,6 +1259,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1280,6 +1317,21 @@ name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
+
+[[package]]
+name = "postcss"
+version = "8.4.31"
+dependencies = [
+ "base64 0.21.7",
+ "once_cell",
+ "pathdiff",
+ "percent-encoding",
+ "regex",
+ "serde",
+ "serde_json",
+ "sourcemap",
+ "url",
+]
 
 [[package]]
 name = "potential_utf"
@@ -1820,6 +1872,8 @@ dependencies = [
  "swc_css_parser",
  "swc_css_visit",
  "swc_ecma_ast",
+ "swc_ecma_codegen",
+ "swc_ecma_parser",
  "swc_ecma_transforms_base",
  "swc_ecma_transforms_testing",
  "swc_ecma_utils",
@@ -2066,7 +2120,7 @@ checksum = "297e4f7638cfc0d6088ad637ec717b9ffbf7555a913963344cd1f3ce2864a660"
 dependencies = [
  "ansi_term",
  "anyhow",
- "base64",
+ "base64 0.22.1",
  "hex",
  "serde",
  "serde_json",
@@ -2557,6 +2611,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8_iter"

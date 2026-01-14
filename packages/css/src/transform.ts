@@ -63,7 +63,9 @@ export const transformCss = (
       expandShorthands(),
       atomicifyRules({
         classNameCompressionMap: opts.classNameCompressionMap,
-        callback: (className: string) => classNames.push(className),
+        callback: (className: string) => {
+          classNames.push(className);
+        },
         classHashPrefix: opts.classHashPrefix,
       }),
       ...(flattenMultipleSelectorsOption ? [flattenMultipleSelectors(), discardDuplicates()] : []),

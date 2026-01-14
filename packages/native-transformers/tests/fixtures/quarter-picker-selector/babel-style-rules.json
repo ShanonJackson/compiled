@@ -1,0 +1,23 @@
+[
+  "._12apidpf >*{flex-grow:0}",
+  "._hxt6idpf >button{flex-grow:0}",
+  "._7rs5idpf >*{flex-shrink:0}",
+  "._cs56idpf >button{flex-shrink:0}",
+  "._osiy1ssb >*{flex-basis:50%}",
+  "._1yp31ssb >button{flex-basis:50%}",
+  "._1mizidpf >*{margin-top:0}",
+  "._1v09idpf >button{margin-top:0}",
+  "._d4l7idpf >*{margin-right:0}",
+  "._1ilridpf >button{margin-right:0}",
+  "._8jx714y2 >*{margin-bottom:5px}",
+  "._2gv614y2 >button{margin-bottom:5px}",
+  "._1ko9idpf >*{margin-left:0}",
+  "._15h6idpf >button{margin-left:0}",
+  "._wvzr1nzx >*{height:105px}",
+  "._t74o1nzx >button{height:105px}",
+  "._1u1q1nzx >:disabled{height:105px}",
+  "._1p4f1nzx >:hover{height:105px}",
+  "._r6ob1nzx >button:disabled{height:105px}",
+  "._1kne1nzx >button:hover{height:105px}",
+  "._925w1h6o >button>span{align-self:center}"
+]

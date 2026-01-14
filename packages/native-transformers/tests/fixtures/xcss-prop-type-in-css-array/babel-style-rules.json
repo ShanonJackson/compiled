@@ -1,0 +1,9 @@
+[
+  "._1e0c11p5{display:grid}",
+  "._1tke1kxc{min-height:100vh}",
+  "._1lmcq9em{grid-template-areas:\"banner\" \"top-bar\" \"main\" \"aside\"}",
+  "._yv0ei47z{grid-template-columns:minmax(0,1fr)}",
+  "._2z0516ab{grid-template-rows:auto auto 1fr auto}",
+  "._1ciragmp >:not([data-layout-slot]){display:none!important}",
+  "@media (min-width:64rem){._12fkuz0r{grid-template-areas:\"banner banner banner\" \"top-bar top-bar top-bar\" \"side-nav main aside\"}._12qzrxre{grid-template-rows:auto auto 3fr}._1rqt70if{grid-template-columns:auto minmax(0,1fr) auto}}"
+]

@@ -1,12 +1,6 @@
-.DS_Store
-.idea
-.parcel-cache
-.tmp
+# Ignore native Node addon binaries
+*.node
 
-coverage
-dist
-node_modules
-storybook-static
-
-*.log
-*.tsbuildinfo
+# Ignore node_modules in all packages/workspaces
+node_modules/
+**/node_modules/

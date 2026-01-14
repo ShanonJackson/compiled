@@ -1,0 +1,3 @@
+[
+  "._rhradabe:not(:has([data-component-selector=jira-issue-field-inline-edit-read-view-container],[data-component-selector=jira-issue-field-inline-edit-read-view-container])){margin-right:calc(var(--ds-space-600, 3pc) + var(--ds-space-100, 8px))}"
+]
