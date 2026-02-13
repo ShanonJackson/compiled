@@ -1,1 +1,3 @@
 /target
+/bench/fixtures/
+/bench/node_modules/
