@@ -10,6 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "postcss": "^8.4.31"
+    "postcss": "^8.4.31",
+    "postcss-selector-parser": "^7.1.1"
   }
 }

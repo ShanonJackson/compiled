@@ -12,3 +12,7 @@ thiserror = "2"
 [[bin]]
 name = "bench_rust"
 path = "bench/bench_rust.rs"
+
+[[bin]]
+name = "verify_rust"
+path = "bench/verify_rust.rs"
