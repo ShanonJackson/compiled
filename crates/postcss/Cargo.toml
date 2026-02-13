@@ -1,0 +1,10 @@
+[package]
+name = "compiled-postcss"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust port of PostCSS 8.4.31 — byte-identical CSS parsing and stringification"
+
+[dependencies]
+memchr = "2"
+smallvec = "1"
+thiserror = "2"
